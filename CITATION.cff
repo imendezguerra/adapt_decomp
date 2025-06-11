@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Mendez Guerra"
+  given-names: "Irene"
+  orcid: "https://orcid.org/0000-0001-7361-4618"
+- family-names: "Barsakcioglu"
+  given-names: "Deren Y."
+  orcid: "https://orcid.org/0000-0002-3115-4577"
+- family-names: "Farina"
+  given-names: "Dario"
+  orcid: "https://orcid.org/0000-0002-7883-2697"
+title: "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
+version: 1.0
+doi: 10.1088/1741-2552/ad5ebf
+url: "https://github.com/imendezguerra/dyn_decomp"
+preferred-citation:
+  type: article
+  authors:
+  - family-names: "Mendez Guerra"
+    given-names: "Irene"
+    orcid: "https://orcid.org/0000-0001-7361-4618"
+  - family-names: "Barsakcioglu"
+    given-names: "Deren Y."
+    orcid: "https://orcid.org/0000-0002-3115-4577"
+  - family-names: "Farina"
+    given-names: "Dario"
+    orcid: "https://orcid.org/0000-0002-7883-2697"
+  doi: 10.1088/1741-2552/ad5ebf
+  title: "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
+  doi: 10.1088/1741-2552/ad5ebf
+  journal: "Journal of Neural Engineering"
+  year: 2024
+  issue: 4
+  volume: 21

@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["adapt_decomp"]
+
+[project]
+name = "adapt_decomp"
+version = "0.1.0"
+description = "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
+authors = [{ name = "Irene Mendez Guerra", email = "irene.mendez17@imperial.ac.uk" }]
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+dependencies = [
+    "h5py",
+    "matplotlib",
+    "numpy<2.0.0",
+    "scipy",
+    "seaborn",
+    "ipykernel",
+    "torch",                   # pip version (CPU by default)
+    "wandb",             
+]

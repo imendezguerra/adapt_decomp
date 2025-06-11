@@ -1,0 +1,15 @@
+name: adapt_decomp
+channels:
+  - defaults
+dependencies:
+  - python=3.12.3
+  - h5py
+  - matplotlib
+  - numpy<2.0.0
+  - scipy
+  - seaborn
+  - ipykernel
+  - pip
+  - pip:
+    - torch
+    - wandb
