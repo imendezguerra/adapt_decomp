@@ -43,7 +43,7 @@ Please note that the `environment.yml` only installs the `cpu` version of `pytor
 
 The code has been tested in MacOs, Windows, and Linux. 
 
-## Tutorial
+## Tutorial
 To learn how to use the dynamic decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/main/tutorials/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. Please note that the model requires a precalibrated decomposition model including extension factor, whitening, separation vectors, spike and baseline centroids, emg during calibration as well as the resulting IPTs and spikes. The model uses the last three variables to compute the whitening and separation vector losses based on the median squared error between the Kullback–Leibler divergence of the whitened covariance and the kurtosis of the sources between the adaptive and calibration conditions. To execute the code, download this [example contraction](https://imperiallondon-my.sharepoint.com/:f:/g/personal/im4417_ic_ac_uk/EkJvoEffPmdEnkoHeRItVt8BWyQd6kztbrszu6njnfHM0Q?e=wbbuZF) and save it in the repository directory under `data\example` folders.
 
 ## Package structure 
