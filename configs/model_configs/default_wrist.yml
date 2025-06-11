@@ -1,0 +1,36 @@
+ # General parameters
+fs: 2048
+device: null
+
+# Preprocessing parameters
+lowcut: 20.0
+highcut: 500.0
+powerline: True
+powerline_freq: 50.0
+
+# Decomposition parameters
+ext_fact: 10
+
+# Decomposition adaptation
+batch_ms: 100
+adapt_wh: True
+adapt_sv: True
+adapt_sd: True
+compute_loss: True
+
+# Learning rates
+wh_learning_rate: 1.0e-3
+sv_learning_rate: 5.0e-4
+
+# Source separation parameters
+sv_epochs: 1
+sv_tol: 1.0e-4
+contrast_fun: logcosh
+
+# Whitening parameters
+cov_alpha: 0.1
+
+# Spike detection parameters
+spike_height_mult: 3
+spike_prev_weight: 5
+spike_dist_ms: 10

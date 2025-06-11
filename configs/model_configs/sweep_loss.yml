@@ -1,0 +1,16 @@
+method: "bayes"  # Bayesian optimization for efficient searching
+metric:
+  name: "total_loss"
+  goal: "minimize"
+parameters:
+  wh_learning_rate:
+    min: 1.0e-5
+    max: 1.0e-2
+  sv_learning_rate:
+    min: 1.0e-5
+    max: 1.0e-2
+early_terminate: # Early stopping configuration
+  type: hyperband
+  min_iter: 5
+  max_iter: 50
+  s: 2

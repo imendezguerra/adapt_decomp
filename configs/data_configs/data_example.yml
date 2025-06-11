@@ -1,0 +1,6 @@
+name: 'data_example'                          # Data name
+path_decomp: 'data/example/decomp_sim.mat'    # Path to the calibrated decomposition model
+path_emg: 'data/example/data_sim.hdf5'        # Path to the EMG for decomposition adaptation
+path_gt: 'data/example/data_sim.hdf5'         # Path to the ground truth data (if available)
+loader: 'load_example'                        # Loader function to use for loading the data       
+preprocess: False                             # Whether to preprocess the data
