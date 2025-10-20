@@ -27,6 +27,7 @@ class Config:
     adapt_sv: bool = True       # Flag to adapt the separation vectors
     adapt_sd: bool = True       # Flag to adapt the spike detection
     compute_loss: bool = True   # Flag to compute the loss during the decomposition
+    save_params: bool = False   # Flag to save the decomposition parameters during adaptation
     
     # Learning rates
     wh_learning_rate: float = 7e-3  # NeuroMotion: 7e−3 | Wrist: 1e−3 | Forearm: 2e−3

@@ -8,6 +8,7 @@ from typing import Tuple, Optional
 from scipy import signal
 from adapt_decomp.config import Config
 from adapt_decomp.data_structures import Data, Decomposition
+from adapt_decomp.io import H5PraramsBatchWriter
 
 class AdaptDecomp():
     """Class implementing the decomposition model with and without adaptation"""
@@ -25,6 +26,7 @@ class AdaptDecomp():
             preprocess: Optional[bool] = True,
             config: Optional[Config] = Config(),
             store_init: Optional[bool] = False,
+            save_path: Optional[str] = None,
     ) -> None:
         """Initialise the decomposition model
         
@@ -41,6 +43,7 @@ class AdaptDecomp():
             config (Config, optional): Configuration parameters. Defaults to Config.
             store_init (bool, optional): Whether to store the initialisation parameters. 
             Defaults to False.
+            save_path (str, optional): Path to save decomposition parameters. Defaults to None.
         Returns:
             None
         """
@@ -55,6 +58,7 @@ class AdaptDecomp():
     
         self.decomp = Decomposition(whitening, sep_vectors, base_centr, spikes_centr, emg_calib, ipts_calib, spikes_calib, self.config)
         self.data = Data(emg, preprocess, config)
+        self.save_path = save_path
     
     def init_exe_time(self, batches:int) -> None:
         """Initialise the execution time variables"""
@@ -375,16 +379,36 @@ class AdaptDecomp():
         self.init_losses(len(dataset))
         self.init_exe_time(len(dataset))
 
+        # Initialise saver if required
+        if self.config.save_params and self.save_path is not None:
+            self.saver = H5PraramsBatchWriter(
+                path = self.save_path,
+                wh_shape = self.decomp.whitening.shape,
+                sv_shape = self.decomp.sep_vectors.shape,
+                sd_shape = self.decomp.spikes_centr.shape,
+                batches = len(dataset),
+                dtype = 'float32',
+                )
+
         # Run the decomposition per batch of data
         for i, (emg_batch, idx_labels) in enumerate(dataset):
             i = torch.tensor(i, device=self.config.device)
             emg_batch, idx_labels = self._check_batch(emg_batch, idx_labels)
+            if self.config.save_params:
+                self.saver._append({
+                    'whitening': self.decomp.whitening.cpu().numpy(),
+                    'sep_vectors': self.decomp.sep_vectors.cpu().numpy(),
+                    'base_centr': self.decomp.base_centr,
+                    'spikes_centr': self.decomp.spikes_centr,
+                })
             spikes, ipts = self.run_decomp(emg_batch, i)
             self.spikes[idx_labels, :] = spikes
             self.ipts[idx_labels, :] = ipts
 
         # Format the outputs
         outputs = self.fortmat_outputs()
+        if self.config.save_params:
+            self.saver._save(outputs)
         return outputs
     
     def run_optimisation(self,
