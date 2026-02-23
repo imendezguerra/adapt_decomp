@@ -12,7 +12,7 @@ version = "0.1.0"
 description = "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
 authors = [{ name = "Irene Mendez Guerra", email = "irene.mendez17@imperial.ac.uk" }]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 
 dependencies = [
