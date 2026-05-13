@@ -185,19 +185,17 @@ class Decomposition:
         self.wh_cov_est = 0.5 * (self.wh_cov_est + self.wh_cov_est.T)
 
         # Compute the mean and std of the KL divergence during calibration
-        calib_dataset = DataLoader(wh_emg_calib, batch_size=self.batch_size, shuffle=False, drop_last=True)
+        # Replicate batching of the fifo buffer
+        n_batches = np.floor((wh_emg_calib.shape[0] - self.fifo_samples) / self.batch_size).astype(int) - 1
+        kl_div_calib = torch.zeros(n_batches, dtype=torch.float32, device=self.device)
 
-        wh_cov_calib = self.wh_cov_est.clone().cpu()
-        I_calib = torch.eye(self.n)
-        kl_div_calib = torch.zeros(len(calib_dataset), dtype=torch.float32, device=self.device)
-
-        for i, wh_emg_batch in enumerate(calib_dataset):
-            i = torch.tensor(i, device=self.device)
+        for i in range(n_batches):
+            start = i * self.batch_size
+            wh_emg_batch = wh_emg_calib[start: start + self.fifo_samples]
 
             # Compute the covariance matrix with Tikhonov regularisation to keep it PD
-            wh_cov_batch = torch.cov(wh_emg_batch.T)
-            wh_cov_calib = (1 - self.cov_alpha) * wh_cov_calib + self.cov_alpha * wh_cov_batch
-            wh_cov_calib = wh_cov_calib + self.cov_reg_eps * I_calib
+            wh_cov_calib = torch.cov(wh_emg_batch.T)
+            wh_cov_calib = 0.5 * (wh_cov_calib + wh_cov_calib.T)
 
             # Compute kl divergence for the calibration
             logdet_wh_cov_calib = torch.linalg.slogdet(wh_cov_calib)[1]
