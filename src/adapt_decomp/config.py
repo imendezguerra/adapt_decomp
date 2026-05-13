@@ -40,6 +40,7 @@ class Config:
 
     # Whitening parameters
     cov_alpha: float = 0.1        # Regularisation parameter for the covariance matrix
+    cov_reg_eps: float = 1e-6     # Tikhonov regularisation to keep covariance matrix PD
 
     # Spike detection paramteters
     spike_height_mult: int = 3    # Multiplier for the spike centroid for maximum height allowed

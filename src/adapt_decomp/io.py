@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Tuple, Literal, Union
 from torch.utils.data import Dataset
 
-class H5PraramsBatchWriter:
+class H5ParamsBatchWriter:
     """Class to store adaptive deocomposition parameters in HDF5 format per batch."""
     
     def __init__(self, 
@@ -71,7 +71,7 @@ class H5PraramsBatchWriter:
                 data[key] = f[key][:]
         return data
 
-class H5PraramsDataset(Dataset):
+class H5ParamsDataset(Dataset):
     """Class to load adaptive decomposition parameters from HDF5 format"""
     
     def __init__(self, path:str) -> None:

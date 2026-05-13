@@ -24,7 +24,7 @@ class Data(Dataset):
     def __init__(self,
         emg: torch.Tensor,
         preprocess: Optional[bool] = True,
-        config: Optional[Config] = Config
+        config: Optional[Config] = None
         ) -> None:
         """Initialise the data structure
 
@@ -37,6 +37,9 @@ class Data(Dataset):
         Returns:
             None
         """
+
+        if config is None:
+            config = Config()
 
         # Preprocess the EMG data
         if preprocess:
@@ -75,7 +78,7 @@ class Data(Dataset):
         """
 
         # Filter the EMG data
-        emg = bandpass_filter(emg.numpy(), config.fs, cutoff=[config.lowcut, config.highcut], filtfilt=False)
+        emg = bandpass_filter(emg.cpu().numpy(), config.fs, cutoff=[config.lowcut, config.highcut], filtfilt=False)
 
         # Remove powerline noise
         if config.powerline:
@@ -111,7 +114,7 @@ class Decomposition:
         emg_calib: torch.Tensor,
         ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
-        config: Optional[Config] = Config,
+        config: Optional[Config] = None,
         ) -> None:
         """Initialise the decomposition model
         
@@ -130,11 +133,15 @@ class Decomposition:
             None
         """
 
+        if config is None:
+            config = Config()
+
         # Initialise config parameters
         self.device = config.device
         self.ext_fact = config.ext_fact
         self.batch_size = config.batch_size
         self.cov_alpha = config.cov_alpha
+        self.cov_reg_eps = config.cov_reg_eps
         self.contrast_fun = config.contrast_fun
 
         # Initialise parameters from precalibrated decomposition
@@ -165,32 +172,35 @@ class Decomposition:
 
         # Compute the covariance matrix
         wh_emg_calib = emg_ext @ self.whitening.cpu().T
-        self.wh_cov_est = torch.cov(wh_emg_calib.T).to(self.device)
-
-        # Compute the mean and std of the KL divergence during calibration
         self.n = self.whitening.shape[0]
         self.I = torch.eye(self.n, dtype=torch.float32, device=self.device)
+        self.wh_cov_est = torch.cov(wh_emg_calib.T).to(self.device) + self.cov_reg_eps * self.I
+
+        # Compute the mean and std of the KL divergence during calibration
         calib_dataset = DataLoader(wh_emg_calib, batch_size=self.batch_size, shuffle=False, drop_last=True)
 
         wh_cov_calib = self.wh_cov_est.clone().cpu()
+        I_calib = torch.eye(self.n)
         kl_div_calib = torch.zeros(len(calib_dataset), dtype=torch.float32, device=self.device)
 
         for i, wh_emg_batch in enumerate(calib_dataset):
             i = torch.tensor(i, device=self.device)
 
-            # Compute the covariance matrix
+            # Compute the covariance matrix with Tikhonov regularisation to keep it PD
             wh_cov_batch = torch.cov(wh_emg_batch.T)
             wh_cov_calib = (1 - self.cov_alpha) * wh_cov_calib + self.cov_alpha * wh_cov_batch
+            wh_cov_calib = wh_cov_calib + self.cov_reg_eps * I_calib
 
-            # Compute kl divergence for the calibration
+            # Compute kl divergence for the calibration
             logdet_wh_cov_calib = torch.linalg.slogdet(wh_cov_calib)[1]
             trace_cov_calib = torch.trace(wh_cov_calib)
 
             kl_div_calib[i] = 0.5 * (trace_cov_calib - self.n - logdet_wh_cov_calib)
 
-        # Compute the mean and std of the KL divergence
-        self.kl_div_calib_mean = torch.mean(kl_div_calib[1:-1]).to(self.device)
-        self.kl_div_calib_std = torch.std(kl_div_calib[1:-1]).to(self.device)
+        # Compute the mean and std of the KL divergence; fall back to full tensor if too few batches
+        kl_slice = kl_div_calib[1:-1] if len(kl_div_calib) > 2 else kl_div_calib
+        self.kl_div_calib_mean = torch.mean(kl_slice).to(self.device)
+        self.kl_div_calib_std = torch.std(kl_slice).to(self.device)
 
     def init_sv_update(self) -> None:
         """Initialise the separation vector update"""

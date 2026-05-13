@@ -8,7 +8,7 @@ from typing import Tuple, Optional
 from scipy import signal
 from adapt_decomp.config import Config
 from adapt_decomp.data_structures import Data, Decomposition
-from adapt_decomp.io import H5PraramsBatchWriter
+from adapt_decomp.io import H5ParamsBatchWriter
 
 class AdaptDecomp():
     """Class implementing the decomposition model with and without adaptation"""
@@ -25,7 +25,6 @@ class AdaptDecomp():
             spikes_calib: torch.Tensor,
             preprocess: Optional[bool] = True,
             config: Optional[Config] = Config(),
-            store_init: Optional[bool] = False,
             save_path: Optional[str] = None,
     ) -> None:
         """Initialise the decomposition model
@@ -41,8 +40,6 @@ class AdaptDecomp():
             spikes_calib (torch.Tensor): Spike matrix from calibration with shape (samples, sources)
             preprocess (bool, optional): Whether to preprocess the data. Defaults to True.
             config (Config, optional): Configuration parameters. Defaults to Config.
-            store_init (bool, optional): Whether to store the initialisation parameters. 
-            Defaults to False.
             save_path (str, optional): Path to save decomposition parameters. Defaults to None.
         Returns:
             None
@@ -53,13 +50,30 @@ class AdaptDecomp():
         if self.config.device is None:
             if torch.cuda.is_available():
                 self.config.device = "cuda"
+            elif torch.backends.mps.is_available():
+                self.config.device = "mps"
             else:
                 self.config.device = "cpu"
     
         self.decomp = Decomposition(whitening, sep_vectors, base_centr, spikes_centr, emg_calib, ipts_calib, spikes_calib, self.config)
         self.data = Data(emg, preprocess, config)
         self.save_path = save_path
+
+        # Store originals so run_optimisation can reset between trials
+        self._sep_vectors_orig  = sep_vectors.to(dtype=torch.float32).clone()
+        self._whitening_orig    = whitening.to(dtype=torch.float32).clone()
+        self._base_centr_orig   = base_centr.cpu().numpy().copy()
+        self._spikes_centr_orig = spikes_centr.cpu().numpy().copy()
     
+    def _reset_params(self) -> None:
+        """Reset decomposition parameters to calibration originals for a fresh optimisation trial."""
+        self.decomp.sep_vectors  = self._sep_vectors_orig.clone().to(device=self.config.device)
+        self.decomp.whitening    = self._whitening_orig.clone().to(device=self.config.device)
+        self.decomp.base_centr   = self._base_centr_orig.copy()
+        self.decomp.spikes_centr = self._spikes_centr_orig.copy()
+        self.decomp.init_sd_update()
+        self.decomp.init_wh_update()
+
     def init_exe_time(self, batches:int) -> None:
         """Initialise the execution time variables"""
         self.time_sv_ms = torch.zeros(batches, dtype=torch.float32)
@@ -78,7 +92,7 @@ class AdaptDecomp():
         self.sv_loss = torch.zeros((batches, self.units), dtype=torch.float32, device=self.config.device)
         self.total_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
 
-    def fortmat_outputs(self) -> None:
+    def format_outputs(self) -> None:
         """Format the outputs"""
         outputs = {
             'spikes': self.spikes.detach().cpu().clone(),
@@ -93,7 +107,7 @@ class AdaptDecomp():
         }
         return outputs
 
-    def run_decomp(self, emg_batch: torch.Tensor, batch_idx = Optional[int]) -> None:
+    def run_decomp(self, emg_batch: torch.Tensor, batch_idx: Optional[int] = None) -> None:
         """Apply decomposition
         
         Args:
@@ -104,6 +118,9 @@ class AdaptDecomp():
             ipts (torch.Tensor): Innervated pulse trains or projected sources
                 with shape (samples, sources)
         """
+
+        # Center signals
+        emg_batch -= emg_batch.mean(0, keepdim=True)
 
         # Whitening
         t0 = time.time()
@@ -145,7 +162,7 @@ class AdaptDecomp():
             kl_div_est = self._kl_divergence()
             wh_loss = self._wh_loss(kl_div_est)
             self.wh_loss[batch_idx] = wh_loss.item()
-            self.total_loss[batch_idx] += wh_loss.item() if ~torch.isnan(wh_loss) else 1e10
+            self.total_loss[batch_idx] += wh_loss.item() if torch.isfinite(wh_loss) else 1e10
 
         # Update the whitening matrix
         if self.config.adapt_wh:
@@ -162,6 +179,7 @@ class AdaptDecomp():
         """Recursive update of the covariance matrix"""
         curr_cov_est = torch.cov(emg_batch)
         self.decomp.wh_cov_est = (1 - self.config.cov_alpha) * self.decomp.wh_cov_est + self.config.cov_alpha * curr_cov_est
+        self.decomp.wh_cov_est = self.decomp.wh_cov_est + self.config.cov_reg_eps * self.decomp.I
     
     def _kl_divergence(self) -> torch.Tensor:
         """Calculate the Kullback-Leibler divergence"""
@@ -172,7 +190,8 @@ class AdaptDecomp():
     
     def _wh_loss(self, kl_div_est: torch.Tensor) -> torch.Tensor:
         """Calculate the whitening loss"""
-        return ((kl_div_est - self.decomp.kl_div_calib_mean)/self.decomp.kl_div_calib_std) ** 2
+        std = self.decomp.kl_div_calib_std.clamp(min=1e-8)
+        return ((kl_div_est - self.decomp.kl_div_calib_mean) / std) ** 2
     
     def _update_whitening(self) -> None:
         """Update the whitening matrix based on the covariance matrix"""
@@ -223,7 +242,8 @@ class AdaptDecomp():
     
     def _sv_loss(self, contrast_est: torch.Tensor) -> torch.Tensor:
         """Calculate the separation vector loss"""
-        return ((contrast_est - self.decomp.contrast_calib_mean)/self.decomp.contrast_calib_std) ** 2
+        std = self.decomp.contrast_calib_std.clamp(min=1e-8)
+        return ((contrast_est - self.decomp.contrast_calib_mean) / std) ** 2
     
     def _apply_sep_vectors(self, emg_wh: torch.Tensor) -> torch.Tensor:
         """Apply the separation vectors to the data"""
@@ -263,9 +283,10 @@ class AdaptDecomp():
                 lim = torch.abs(torch.abs((sep_vectors_new[unit] * self.decomp.sep_vectors[unit]).sum()) - 1)
                 self.decomp.sep_vectors[unit] = sep_vectors_new[unit]
 
-                # Orthonormalise after convergence or all the epochs
+                # Orthonormalise after convergence or all the epochs
                 if lim < self.config.sv_tol or i == self.config.sv_epochs - 1:
                     sep_vectors_new[unit] = self._orthonormalise(sep_vectors_new[unit], sep_vectors_new, unit)
+                    self.decomp.sep_vectors[unit] = sep_vectors_new[unit]
                     break
 
     def _orthonormalise(self, w: torch.Tensor, W: torch.Tensor, j: int) -> torch.Tensor:
@@ -316,7 +337,8 @@ class AdaptDecomp():
             # Update centroids
             if self.config.adapt_sd:
                 spike_new_weight = peak_labels.sum()
-
+                base_new_weight = (~peak_labels).sum()
+    
                 if np.any(peak_labels):
                     spike_cent_new = np.mean( peak_vals[peak_labels==1] )
                     self.decomp.spikes_centr[unit] = self._weighted_average(
@@ -330,7 +352,7 @@ class AdaptDecomp():
                     self.decomp.base_centr[unit] = self._weighted_average(
                         base_cent_new,
                         self.decomp.base_centr[unit],
-                        spike_new_weight,
+                        base_new_weight,
                         self.config.spike_prev_weight,
                         )
 
@@ -381,7 +403,7 @@ class AdaptDecomp():
 
         # Initialise saver if required
         if self.config.save_params and self.save_path is not None:
-            self.saver = H5PraramsBatchWriter(
+            self.saver = H5ParamsBatchWriter(
                 path = self.save_path,
                 wh_shape = self.decomp.whitening.shape,
                 sv_shape = self.decomp.sep_vectors.shape,
@@ -406,7 +428,7 @@ class AdaptDecomp():
             self.ipts[idx_labels, :] = ipts
 
         # Format the outputs
-        outputs = self.fortmat_outputs()
+        outputs = self.format_outputs()
         if self.config.save_params:
             self.saver._save(outputs)
         return outputs
@@ -440,24 +462,24 @@ class AdaptDecomp():
         if sv_lr is not None:
             self.config.sv_learning_rate = sv_lr
 
-        # Reset the decomposition parameters and outputs
-        self.decomp._reset_params()
-        self.decomp.init_outputs(
+        # Reset the decomposition parameters and outputs
+        self._reset_params()
+        self.init_outputs(
             samples = self.data.emg_ext.shape[0],
             units = self.decomp.sep_vectors.shape[0],
         )
 
         # Initialise the dataset, losses, and execution time
         dataset = DataLoader(self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False)
-        self.decomp.init_losses(len(dataset))
-        self.decomp.init_exe_time(len(dataset))
+        self.init_losses(len(dataset))
+        self.init_exe_time(len(dataset))
 
         # Run the decomposition per batch of data
         for i, (emg_batch, idx_labels) in enumerate(dataset):
             emg_batch, idx_labels = self._check_batch(emg_batch, idx_labels)
             spikes, ipts = self.run_decomp(emg_batch, i)
-            self.decomp.spikes[idx_labels, :] = spikes
-            self.decomp.ipts[idx_labels, :] = ipts
+            self.spikes[idx_labels, :] = spikes
+            self.ipts[idx_labels, :] = ipts
 
         # Compute the total loss
         tot_loss = 0
@@ -470,13 +492,13 @@ class AdaptDecomp():
     
     def _compute_total_wh_loss(self) -> float:
         """Compute the total whitening loss"""
-        tot_wh_loss = -self.decomp.wh_loss.median()
-        if torch.any(torch.isnan(self.decomp.wh_loss)):
+        tot_wh_loss = -self.wh_loss.median()
+        if torch.any(torch.isnan(self.wh_loss)):
             tot_wh_loss = -1e10
         return tot_wh_loss
 
     def _compute_total_sv_loss(self) -> float:
         """Compute the total separation vector loss"""
-        # Use the nanmedian to ignore the nan values (no spikes in the batch)
-        tot_sv_loss = -self.decomp.sv_loss.nanmedian()
+        # Use the nanmedian to ignore the nan values (no spikes in the batch)
+        tot_sv_loss = -self.sv_loss.nanmedian()
         return tot_sv_loss
