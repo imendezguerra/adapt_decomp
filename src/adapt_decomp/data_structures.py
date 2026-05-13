@@ -170,11 +170,19 @@ class Decomposition:
         # Extend the EMG data
         emg_ext = _extend_data_v(self.emg_calib, self.ext_fact)
 
-        # Compute the covariance matrix
+        # Build a fifo buffer with the last samples = extended_chs * 2 to make the covariance full rank
+        self.fifo_samples = emg_ext.shape[1] * 2
+        self.fifo_cov = emg_ext[-self.fifo_samples:]
+
+        # Whiten data
         wh_emg_calib = emg_ext @ self.whitening.cpu().T
+
+        # Compute the covariance matrix
         self.n = self.whitening.shape[0]
         self.I = torch.eye(self.n, dtype=torch.float32, device=self.device)
-        self.wh_cov_est = torch.cov(wh_emg_calib.T).to(self.device) + self.cov_reg_eps * self.I
+        self.wh_cov_est = torch.cov(wh_emg_calib.T).to(self.device)
+        # Make symmetric for stability
+        self.wh_cov_est = 0.5 * (self.wh_cov_est + self.wh_cov_est.T)
 
         # Compute the mean and std of the KL divergence during calibration
         calib_dataset = DataLoader(wh_emg_calib, batch_size=self.batch_size, shuffle=False, drop_last=True)

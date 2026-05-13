@@ -64,6 +64,7 @@ class AdaptDecomp():
         self._whitening_orig    = whitening.to(dtype=torch.float32).clone()
         self._base_centr_orig   = base_centr.cpu().numpy().copy()
         self._spikes_centr_orig = spikes_centr.cpu().numpy().copy()
+
     
     def _reset_params(self) -> None:
         """Reset decomposition parameters to calibration originals for a fresh optimisation trial."""
@@ -149,12 +150,15 @@ class AdaptDecomp():
             emg_wh (torch.Tensor): Whitened EMG batch with shape (samples, channels)
         """
 
-        # Apply whitening
-        emg_wh = self._apply_whitening(emg_batch)
-
         # Update the covariance matrix
         if self.config.adapt_wh or self.config.compute_loss:
-            self._recursive_update_wh_cov(emg_wh)
+            # Update fifo buffer
+            self._update_fifo_cov(emg_batch)
+            # Compute online covariance estimate
+            self._compute_cov_from_fifo()
+
+        # Apply whitening
+        emg_wh = self._apply_whitening(emg_batch)
 
         # Compute loss
         if self.config.compute_loss:       
@@ -175,12 +179,19 @@ class AdaptDecomp():
         emg_wh = self.decomp.whitening @ emg_batch.T
         return emg_wh
 
-    def _recursive_update_wh_cov(self, emg_batch: torch.Tensor) -> None:
-        """Recursive update of the covariance matrix"""
-        curr_cov_est = torch.cov(emg_batch)
-        self.decomp.wh_cov_est = (1 - self.config.cov_alpha) * self.decomp.wh_cov_est + self.config.cov_alpha * curr_cov_est
-        self.decomp.wh_cov_est = self.decomp.wh_cov_est + self.config.cov_reg_eps * self.decomp.I
-    
+    def _compute_cov_from_fifo(self) -> None:
+        """Compute whitened covariance from fifo"""
+        Y = self._apply_whitening(self.decomp.fifo_cov)
+        Y = Y - Y.mean(dim=1, keepdim=True)
+        self.decomp.wh_cov_est = (Y @ Y.T) / (self.decomp.fifo_samples - 1)
+        self.decomp.wh_cov_est = 0.5 * (self.decomp.wh_cov_est + self.decomp.wh_cov_est.T)
+
+    def _update_fifo_cov(self, emg_batch: torch.Tensor) -> None:
+        """Add new batch to fifo buffer for covariance estimation."""
+        self.decomp.fifo_cov = torch.cat([self.decomp.fifo_cov, emg_batch], dim=0)
+        if self.decomp.fifo_cov.shape[0] > self.decomp.fifo_samples:
+            self.decomp.fifo_cov = self.decomp.fifo_cov[-self.decomp.fifo_samples:]
+
     def _kl_divergence(self) -> torch.Tensor:
         """Calculate the Kullback-Leibler divergence"""
         logdet_wh_cov_est = torch.linalg.slogdet(self.decomp.wh_cov_est)[1]
@@ -196,6 +207,7 @@ class AdaptDecomp():
     def _update_whitening(self) -> None:
         """Update the whitening matrix based on the covariance matrix"""
         grad_wh = self.decomp.wh_cov_est - self.decomp.I
+        grad_wh = 0.5 * (grad_wh + grad_wh.T)
         self.decomp.whitening -= self.config.wh_learning_rate * grad_wh @ self.decomp.whitening
 
     def source_sep(self, emg_wh: torch.Tensor, batch_idx: Optional[int]) -> torch.Tensor:
@@ -338,7 +350,7 @@ class AdaptDecomp():
             if self.config.adapt_sd:
                 spike_new_weight = peak_labels.sum()
                 base_new_weight = (~peak_labels).sum()
-    
+
                 if np.any(peak_labels):
                     spike_cent_new = np.mean( peak_vals[peak_labels==1] )
                     self.decomp.spikes_centr[unit] = self._weighted_average(
