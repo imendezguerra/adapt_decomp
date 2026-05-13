@@ -4,6 +4,28 @@ import numpy as np
 from typing import Union, Optional, Tuple, List
 from scipy import signal
 import itertools
+import torch
+
+def stable_cov(X: torch.Tensor, rowvar:bool=False, rho: Optional[float]=None, I: Optional[torch.tensor]=None):
+    # Compute covariance in [samples, feats]
+    if rowvar:
+        feats, samples = X.shape 
+        X = X - X.mean(dim=1, keepdim=True)
+        C = (X @ X.T) / (samples - 1)
+    else:
+        samples, feats = X.shape 
+        X = X - X.mean(dim=0, keepdim=True)
+        C = (X.T @ X) / (samples - 1)
+
+    # Make symmetric
+    C = 0.5 * (C + C.T)
+
+    # Shrinkage towards identity
+    if rho is not None:
+        if I is None:
+            I = torch.eye(feats, device=C.device, dtype=C.dtype)
+        C = (1 - rho) * C + rho * I
+    return C
 
 def firings_to_spikes(firings, ipts, matlab_index=False):
     """

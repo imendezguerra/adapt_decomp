@@ -28,7 +28,7 @@ sv_tol: 1.0e-4
 contrast_fun: logcosh
 
 # Whitening parameters
-cov_alpha: 0.1
+cov_reg_eps: 1e-6
 
 # Spike detection parameters
 spike_height_mult: 3

@@ -9,6 +9,7 @@ from scipy import signal
 from adapt_decomp.config import Config
 from adapt_decomp.data_structures import Data, Decomposition
 from adapt_decomp.io import H5ParamsBatchWriter
+from adapt_decomp.utils import stable_cov
 
 class AdaptDecomp():
     """Class implementing the decomposition model with and without adaptation"""
@@ -182,9 +183,7 @@ class AdaptDecomp():
     def _compute_cov_from_fifo(self) -> None:
         """Compute whitened covariance from fifo"""
         Y = self._apply_whitening(self.decomp.fifo_cov)
-        Y = Y - Y.mean(dim=1, keepdim=True)
-        self.decomp.wh_cov_est = (Y @ Y.T) / (self.decomp.fifo_samples - 1)
-        self.decomp.wh_cov_est = 0.5 * (self.decomp.wh_cov_est + self.decomp.wh_cov_est.T)
+        self.decomp.wh_cov_est = stable_cov(Y, rowvar=True, rho=self.config.cov_reg_eps, I=self.decomp.I)
 
     def _update_fifo_cov(self, emg_batch: torch.Tensor) -> None:
         """Add new batch to fifo buffer for covariance estimation."""

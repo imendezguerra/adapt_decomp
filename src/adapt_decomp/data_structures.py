@@ -6,6 +6,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from adapt_decomp.preprocessing import bandpass_filter, remove_powerline
 from adapt_decomp.config import Config
+from adapt_decomp.utils import stable_cov
 
 def _extend_data_v(data, ext_fact, device=None):
     if device is None:
@@ -140,7 +141,6 @@ class Decomposition:
         self.device = config.device
         self.ext_fact = config.ext_fact
         self.batch_size = config.batch_size
-        self.cov_alpha = config.cov_alpha
         self.cov_reg_eps = config.cov_reg_eps
         self.contrast_fun = config.contrast_fun
 
@@ -168,21 +168,19 @@ class Decomposition:
         """Initialise the whitening update"""
 
         # Extend the EMG data
-        emg_ext = _extend_data_v(self.emg_calib, self.ext_fact)
+        emg_ext = _extend_data_v(self.emg_calib, self.ext_fact).to(device=self.device)
 
         # Build a fifo buffer with the last samples = extended_chs * 2 to make the covariance full rank
         self.fifo_samples = emg_ext.shape[1] * 2
         self.fifo_cov = emg_ext[-self.fifo_samples:]
 
         # Whiten data
-        wh_emg_calib = emg_ext @ self.whitening.cpu().T
+        wh_emg_calib = emg_ext @ self.whitening.T
 
         # Compute the covariance matrix
         self.n = self.whitening.shape[0]
         self.I = torch.eye(self.n, dtype=torch.float32, device=self.device)
-        self.wh_cov_est = torch.cov(wh_emg_calib.T).to(self.device)
-        # Make symmetric for stability
-        self.wh_cov_est = 0.5 * (self.wh_cov_est + self.wh_cov_est.T)
+        self.wh_cov_est = stable_cov(wh_emg_calib, I=self.I, rho=self.cov_reg_eps).to(self.device)
 
         # Compute the mean and std of the KL divergence during calibration
         # Replicate batching of the fifo buffer
@@ -194,8 +192,7 @@ class Decomposition:
             wh_emg_batch = wh_emg_calib[start: start + self.fifo_samples]
 
             # Compute the covariance matrix with Tikhonov regularisation to keep it PD
-            wh_cov_calib = torch.cov(wh_emg_batch.T)
-            wh_cov_calib = 0.5 * (wh_cov_calib + wh_cov_calib.T)
+            wh_cov_calib = stable_cov(wh_emg_batch, I=self.I, rho=self.cov_reg_eps)
 
             # Compute kl divergence for the calibration
             logdet_wh_cov_calib = torch.linalg.slogdet(wh_cov_calib)[1]
