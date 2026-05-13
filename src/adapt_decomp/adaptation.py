@@ -207,6 +207,7 @@ class AdaptDecomp():
         """Update the whitening matrix based on the covariance matrix"""
         grad_wh = self.decomp.wh_cov_est - self.decomp.I
         grad_wh = 0.5 * (grad_wh + grad_wh.T)
+        grad_wh = grad_wh / grad_wh.norm()
         self.decomp.whitening -= self.config.wh_learning_rate * grad_wh @ self.decomp.whitening
 
     def source_sep(self, emg_wh: torch.Tensor, batch_idx: Optional[int]) -> torch.Tensor:

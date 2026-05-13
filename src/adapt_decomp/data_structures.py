@@ -169,6 +169,7 @@ class Decomposition:
 
         # Extend the EMG data
         emg_ext = _extend_data_v(self.emg_calib, self.ext_fact).to(device=self.device)
+        emg_ext -= emg_ext.mean(0, keepdim=True)
 
         # Build a fifo buffer with the last samples = extended_chs * 2 to make the covariance full rank
         self.fifo_samples = emg_ext.shape[1] * 2
