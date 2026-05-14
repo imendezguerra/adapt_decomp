@@ -40,6 +40,8 @@ class Config:
 
     # Whitening parameters
     cov_reg_eps: float = 1e-6     # Tikhonov regularisation to keep covariance matrix PD
+    wh_error_clamp: float = 1e3   # max |K(R_z) - K(R_calib)| allowed in whitening update
+    sv_error_clamp: float = 10.0  # max |κ_current - κ_calib| per unit allowed in SV update
 
     # Spike detection paramteters
     spike_height_mult: int = 3    # Multiplier for the spike centroid for maximum height allowed

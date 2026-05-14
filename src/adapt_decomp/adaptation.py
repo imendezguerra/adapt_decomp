@@ -162,7 +162,7 @@ class AdaptDecomp():
         emg_wh = self._apply_whitening(emg_batch)
 
         # Compute loss
-        if self.config.compute_loss:       
+        if self.config.adapt_wh or self.config.compute_loss:
             # Calculate the Kullback-Leibler divergence wrt the identity matrix
             kl_div_est = self._kl_divergence()
             wh_loss = self._wh_loss(kl_div_est)
@@ -171,7 +171,7 @@ class AdaptDecomp():
 
         # Update the whitening matrix
         if self.config.adapt_wh:
-            self._update_whitening()
+            self._update_whitening(kl_div_est)
 
         return emg_wh
     
@@ -203,12 +203,19 @@ class AdaptDecomp():
         std = self.decomp.kl_div_calib_std.clamp(min=1e-8)
         return ((kl_div_est - self.decomp.kl_div_calib_mean) / std) ** 2
     
-    def _update_whitening(self) -> None:
-        """Update the whitening matrix based on the covariance matrix"""
+    def _update_whitening(self, kl_div_est: torch.Tensor) -> None:
+        """Update the whitening matrix based on the covariance matrix
+
+        Implements paper Eq. 20:
+            V_t = V_{t-1} - eta1 * [K(R_z_t) - K(R_calib)] * [R_z_t - I] * V_{t-1}
+        The KL error term provides automatic step-size scaling: near-zero when the
+        whitening is already good, larger when it has drifted from calibration.
+        """
+        kl_error = kl_div_est - self.decomp.kl_div_calib_mean
+        kl_error = torch.clamp(kl_error, -self.config.wh_error_clamp, self.config.wh_error_clamp)
         grad_wh = self.decomp.wh_cov_est - self.decomp.I
-        grad_wh = 0.5 * (grad_wh + grad_wh.T)
-        grad_wh = grad_wh / grad_wh.norm()
-        self.decomp.whitening -= self.config.wh_learning_rate * grad_wh @ self.decomp.whitening
+        grad_wh = 0.5 * (grad_wh + grad_wh.T)   # enforce symmetry to prevent numerical drift
+        self.decomp.whitening -= self.config.wh_learning_rate * kl_error * grad_wh @ self.decomp.whitening
 
     def source_sep(self, emg_wh: torch.Tensor, batch_idx: Optional[int]) -> torch.Tensor:
         """Apply source separation
@@ -223,33 +230,34 @@ class AdaptDecomp():
         
         ipts = self._apply_sep_vectors(emg_wh)
 
+        contrast_est = None
         if self.config.compute_loss or self.config.adapt_sv:
-            # Get current spikes for the loss and the adaptation
+            # Get current spikes without updating centroids
             self.config.adapt_sd = False
             spikes = self.spike_det(ipts)
             self.config.adapt_sd = True
 
-        if self.config.compute_loss:
-            # Get the mean spike height
-            ipts_spikes = (ipts * spikes).sum(0) / (spikes.sum(0) + 1e-6)
-
-            # Calculate the separation contrast
+            # Compute mean contrast over spike times — must match how contrast_calib_mean
+            # was computed in init_sv_update() (mean of g(ipt) over spike times, not
+            # g(mean(ipt))).  Using ipts * spikes zeros non-spike samples; since
+            # log(cosh(0))=0 and 0^3/6=0 those contribute nothing to the sum.
+            n_spikes = spikes.float().sum(0)                      # (units,)
+            ipts_masked = ipts * spikes.float()                   # (samples, units)
             if self.config.contrast_fun == 'logcosh':
-                contrast_est = torch.log(torch.cosh(ipts_spikes))
+                contrast_est = torch.log(torch.cosh(ipts_masked)).sum(0) / (n_spikes + 1e-6)
             elif self.config.contrast_fun == 'cube':
-                contrast_est = ipts_spikes ** 3 / 6
+                contrast_est = (ipts_masked ** 3 / 6).sum(0) / (n_spikes + 1e-6)
+            contrast_est[n_spikes == 0] = float('nan')
 
-            # Remove the zeros (batch with no spikes)
-            contrast_est[contrast_est == 0] = torch.nan
-
+        if self.config.compute_loss:
             sv_loss = self._sv_loss(contrast_est)
             self.sv_loss[batch_idx] = sv_loss
             self.total_loss[batch_idx] += sv_loss.nansum()
-            
+
         if self.config.adapt_sv:
             # Update the separation vectors based on the current spike thresholds
-            self._update_sep_vectors(emg_wh, ipts, spikes)
-            
+            self._update_sep_vectors(emg_wh, ipts, spikes, contrast_est)
+
         return ipts
     
     def _sv_loss(self, contrast_est: torch.Tensor) -> torch.Tensor:
@@ -262,20 +270,48 @@ class AdaptDecomp():
         ipts = self.decomp.sep_vectors @ emg_wh
         return ipts.T
 
-    def _update_sep_vectors(self, emg_wh: torch.Tensor, ipts: torch.Tensor, spikes: torch.Tensor) -> None:
-        """Update the separation vectors"""
+    def _update_sep_vectors(
+            self,
+            emg_wh: torch.Tensor,
+            ipts: torch.Tensor,
+            spikes: torch.Tensor,
+            contrast_est: Optional[torch.Tensor] = None,
+    ) -> None:
+        """Update the separation vectors
+
+        Implements paper Eq. 26:
+            b_t = b_{t-1} - gamma * [kappa_current - kappa_calib] * E{z g'(b^T z)}
+        The kurtosis error term scales the update proportionally to how far each
+        source has drifted from its calibration kurtosis, providing per-unit
+        automatic step-size control.
+        """
         sep_vectors_new = self.decomp.sep_vectors.clone()
-        
+
         for unit in range(self.units):
 
-            # Get the indices of the spikes
-            idxs = torch.nonzero(spikes[:,unit], as_tuple=True)[0]
+            # Get the indices of the spikes
+            idxs = torch.nonzero(spikes[:, unit], as_tuple=True)[0]
             if len(idxs) == 0:
                 continue
-            
-            # Get the corresponding ipts
+
+            # Compute kurtosis error and adaptive learning rate (paper Eq. 26)
+            # Sign: -gamma*(kappa_current - kappa_calib); when kurtosis dropped
+            # (error<0) the scale is positive -> increases kurtosis; at calibration
+            # (error≈0) update is near-zero; when overshooting (error>0) it regularises back.
+            if (
+                contrast_est is not None
+                and not torch.isnan(contrast_est[unit])
+            ):
+                kurtosis_error = contrast_est[unit] - self.decomp.contrast_calib_mean[unit]
+                kurtosis_error = torch.clamp(
+                    kurtosis_error, -self.config.sv_error_clamp, self.config.sv_error_clamp
+                )
+                adaptive_lr = -self.config.sv_learning_rate * kurtosis_error
+            else:
+                adaptive_lr = self.config.sv_learning_rate
+
+            # Get the corresponding ipts at spike times
             ipts_spikes_unit = ipts[idxs, unit]
-            # ipts_spikes_unit /= (self.decomp.ipts[:,unit].max() + 1)
 
             # Compute first derivative of the contrast function
             if self.config.contrast_fun == 'logcosh':
@@ -283,21 +319,25 @@ class AdaptDecomp():
             elif self.config.contrast_fun == 'cube':
                 g = ipts_spikes_unit ** 2 / 2
 
-            # Compute the gradient
+            # Compute the gradient E{z g'(b^T z)} at spike times
             sep_vectors_grad = (emg_wh[:, idxs] * g).mean(1)
-            
+
             for i in range(self.config.sv_epochs):
-                # Update weights and normalise them
-                sep_vectors_new[unit] += self.config.sv_learning_rate * sep_vectors_grad
+                # Update weights and normalise them
+                sep_vectors_new[unit] += adaptive_lr * sep_vectors_grad
                 sep_vectors_new[unit] = self._normalise(sep_vectors_new[unit])
-                
+
                 # Check convergence
-                lim = torch.abs(torch.abs((sep_vectors_new[unit] * self.decomp.sep_vectors[unit]).sum()) - 1)
+                lim = torch.abs(
+                    torch.abs((sep_vectors_new[unit] * self.decomp.sep_vectors[unit]).sum()) - 1
+                )
                 self.decomp.sep_vectors[unit] = sep_vectors_new[unit]
 
                 # Orthonormalise after convergence or all the epochs
                 if lim < self.config.sv_tol or i == self.config.sv_epochs - 1:
-                    sep_vectors_new[unit] = self._orthonormalise(sep_vectors_new[unit], sep_vectors_new, unit)
+                    sep_vectors_new[unit] = self._orthonormalise(
+                        sep_vectors_new[unit], sep_vectors_new, unit
+                    )
                     self.decomp.sep_vectors[unit] = sep_vectors_new[unit]
                     break
 
