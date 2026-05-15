@@ -39,6 +39,7 @@ def firings_to_spikes(firings, ipts, matlab_index=False):
 
     return spikes
 
+
 def _check_mu_format(data: np.ndarray) -> np.ndarray:
     """Check data is 2D and return it.
 
@@ -56,7 +57,8 @@ def _check_mu_format(data: np.ndarray) -> np.ndarray:
 
 def get_discharge_rate(
         spike_train: np.ndarray,
-        timestamps: Union[list, np.ndarray]
+        timestamps: Union[list, np.ndarray],
+        discard_isi: Optional[float] = 0.25,
         ) -> np.ndarray:
     """Compute the discharge rate of motor units.
 
@@ -66,7 +68,8 @@ def get_discharge_rate(
             units.
         timestamps (Union[list, np.ndarray]): Array of timestamps corresponding
             to the spike train.
-
+        discard_isi (Optional[float], defalut: 0.25): Duration of silent period
+            to discard in s.
     Returns:
         np.ndarray: Array of discharge rates for each motor unit.
     """
@@ -99,7 +102,10 @@ def get_discharge_rate(
         # motor unit discharge rate). This is 4 Hz according to "Negro F (2016)
         # Multi-channel intramuscular and surface EMG decomposition by
         # convolutive blind source separation."
-        silent_period = np.sum(isi[isi > 0.25])
+        if discard_isi:
+            silent_period = np.sum(isi[isi > discard_isi])
+        else:
+            silent_period = 0
 
         # Calculate the actual active period of the motor unit
         active_period = total_period - silent_period
@@ -164,7 +170,8 @@ def get_inst_discharge_rate(
 
 def get_coefficient_of_variation(
         spike_train: np.ndarray,
-        timestamps: Union[list, np.ndarray]
+        timestamps: Union[list, np.ndarray],
+        discard_isi: Optional[float] = 0.25,
         ) -> np.ndarray:
     """
     Calculate the coefficient of variation (CoV) for each motor unit in a spike
@@ -176,6 +183,8 @@ def get_coefficient_of_variation(
             units.
         timestamps (Union[list, np.ndarray]): Array of timestamps
             corresponding to each time point in the spike train.
+        discard_isi (Optional[float], defaults to 0.25): Interspike intervals 
+            greater than value in s are discarded as considered silent period.
 
     Returns:
         np.ndarray: Array of CoV values for each motor unit, scaled by 100.
@@ -184,8 +193,7 @@ def get_coefficient_of_variation(
         - The CoV is calculated as the standard deviation of the interspike
           intervals divided by the mean interspike interval.
         - Interspike intervals greater than 0.25 s (or discharge rate less than
-          4 Hz) and intervals less than 0.02 s (or discharge rate greater than
-          50 Hz) are discarded, based on "Negro F (2016). Multi-channel
+          4 Hz) are discarded, based on "Negro F (2016). Multi-channel
           intramuscular and surface EMG decomposition by convolutive blind
           source separation."
     """
@@ -201,15 +209,16 @@ def get_coefficient_of_variation(
 
         times_spikes = timestamps[spike_train[:, unit]]
         isi = np.diff(times_spikes)
-        isi = isi[isi < 0.25]
+        if discard_isi is not None:
+            isi = isi[isi < discard_isi]
         cov[unit] = np.std(isi) / np.mean(isi)
 
-    return cov * 100
+    return cov
 
 
 def get_pulse_to_noise_ratio(
     spike_train: np.ndarray,
-    ips: np.ndarray,
+    ipts: np.ndarray,
     ext_fact: int = 8
     ) -> np.ndarray:
     """Compute the pulse-to-noise ratio (PNR) for each motor unit.
@@ -218,7 +227,7 @@ def get_pulse_to_noise_ratio(
     spike_train (np.ndarray): Binary spike train matrix of shape (n, m),
         where n is the number of time points and m is the number of motor
         units.
-    ips (np.ndarray): Innervated pulse trains (IPTs) with shape (n, m),
+    ipts (np.ndarray): Innervated pulse trains (IPTs) with shape (n, m),
         where n is the number of time points and m is the number of motor
         units.
     ext_fact (int, optional): Extension factor to discard initial spikes.
@@ -240,13 +249,13 @@ def get_pulse_to_noise_ratio(
 
     # Get number of motor units and initialise PNR
     spike_train = _check_mu_format(spike_train.astype(bool))
-    ips = _check_mu_format(ips)
+    ipts = _check_mu_format(ipts)
     units = spike_train.shape[-1]
     pnr = np.zeros(units)
     pnr[:] = np.nan
 
     # Square IPTs
-    ipts2 = ips ** 2
+    ipts2 = ipts ** 2
 
     for unit in range(units):
         # Get the spikes and baseline indexes, discarding the extension factor
@@ -289,7 +298,7 @@ def get_silhouette_measure(
     spike_train: np.ndarray,
     ipts: np.ndarray,
     ext_fact: int = 8
-) -> np.ndarray:
+    ) -> np.ndarray:
     """Compute the silhouette measure for each motor unit.
 
     Args:
@@ -367,13 +376,52 @@ def get_silhouette_measure(
 
     return sil
 
+
+def find_reliable_units(
+    dr: np.ndarray,
+    cov: np.ndarray,
+    sil: np.ndarray,
+    pnr: np.ndarray,
+    dr_low_thr: Optional[float] = 5,
+    dr_upp_thr: Optional[float] = 35,
+    cov_thr: Optional[float] = 0.35,
+    sil_thr: Optional[float] = 0.9,
+    pnr_thr: Optional[float] = 30
+    ) -> np.ndarray:
+    """
+    Find reliable motor units based on specified thresholds.
+
+    Args:
+        dr (np.ndarray): Array of discharge rates for each motor unit.
+        cov (np.ndarray): Array of coefficient of variation for each motor unit.
+        sil (np.ndarray): Array of silhouette measures for each motor unit.
+        pnr (np.ndarray): Array of pulse-to-noise ratios for each motor unit.
+        dr_low_thr (float, optional): Lower threshold for discharge rate. Defaults to 3.
+        dr_upp_thr (float, optional): Upper threshold for discharge rate. Defaults to 40.
+        cov_thr (float, optional): Threshold for coefficient of variation. Defaults to 40.
+        sil_thr (float, optional): Threshold for silhouette measure. Defaults to 0.9.
+        pnr_thr (float, optional): Threshold for pulse-to-noise ratio. Defaults to 30.
+
+    Returns:
+        np.ndarray: Boolean array indicating which motor units are reliable.
+    """
+    aux = np.vstack((
+        dr >= dr_low_thr,
+        dr <= dr_upp_thr,
+        cov <= cov_thr,
+        sil >= sil_thr,
+        pnr >= pnr_thr
+    ))
+    reliable_units = np.all(aux, axis=0)
+    return reliable_units
+
 def rate_of_agreement_paired(
     spike_trains_ref: np.ndarray,
     spike_trains_test: np.ndarray,
     fs: Optional[int] = 2048,
     tol_spike_ms: Optional[int] = 1,
     tol_train_ms: Optional[int] = 40
-) -> Tuple[np.ndarray, List[Tuple[int, int]], np.ndarray]:
+    ) -> Tuple[np.ndarray, List[Tuple[int, int]], np.ndarray]:
     """Compute the rate of agreement between two sets of paired spike trains.
 
     Args:
@@ -496,7 +544,7 @@ def rate_of_agreement(
     fs: Optional[int] = 2048,
     tol_spike_ms: Optional[int] = 1,
     tol_train_ms: Optional[int] = 40,
-) -> Tuple[np.ndarray, List[Tuple[int, int]], np.ndarray]:
+    ) -> Tuple[np.ndarray, List[Tuple[int, int]], np.ndarray]:
     """Compute the rate of agreement between two sets of spike trains.
 
     Args:

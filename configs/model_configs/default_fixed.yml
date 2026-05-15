@@ -34,3 +34,22 @@ cov_reg_eps: 1e-6
 spike_height_mult: 3
 spike_prev_weight: 5
 spike_dist_ms: 10
+
+# Adaptation hyperparameters
+wh_mode: kl_to_identity   # "kl_to_identity" or "kl_to_cal" (adapt_wh/adapt_sv are False so trust-region unused)
+shrinkage: 1.0e-3
+eps: 1.0e-7
+max_rel_delta_v: 5.0e-3
+max_rel_delta_b: 1.0e-3
+min_spikes_for_update: 1
+orthonormalization: qr
+contrast_scope: batch_based
+peak_power: 2.0
+strict_peaks: true
+use_abs_for_detection: true
+fifo_length: 0
+source_fifo_batches: 2
+centroid_momentum: 0.95
+min_spikes_for_centroid: 1
+min_base_peaks_for_centroid: 3
+debug: false
