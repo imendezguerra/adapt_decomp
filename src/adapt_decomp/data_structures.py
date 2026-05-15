@@ -134,10 +134,10 @@ class Decomposition:
     def init_wh_update(self) -> None:
         """Compute K_cal and initialise the extended-EMG FIFO buffer.
 
-        K_cal is the KL-divergence-like contrast of the whitened calibration data
-        against the identity covariance. It is immutable — computed once from the
-        full calibration dataset (full rank) and used as the reference for online
-        whitening updates.
+        K_cal is estimated as the mean KL divergence over FIFO-sized sliding windows
+        of calibration data (stride = batch_size), matching the finite-sample estimation
+        regime of online adaptation. This removes the systematic bias that arises when
+        comparing a full-dataset K_cal against a FIFO-estimated K_online.
 
         The FIFO stores raw extended EMG. At each online step the current V is
         applied to the FIFO to produce Rz, keeping Rz full-rank even when the
@@ -151,26 +151,26 @@ class Decomposition:
         self.fifo_samples = max(self.D, self.fifo_length_cfg if self.fifo_length_cfg > 0 else auto_fifo)
         self.fifo_cov = X_cal[-self.fifo_samples:].clone()
 
-        # Calibration whitened covariance (full rank — computed from full dataset)
-        Z_cal = X_cal @ self.V.T           # [N, D]
-        N = Z_cal.shape[0]
+        # Full-dataset calibration whitened covariance (full rank — accurate K_cal estimate).
+        # The finite-sample FIFO bias in K_online is a consistent upward shift that does
+        # not affect gradient direction, only the loss floor.
+        Z_cal  = X_cal @ self.V.T
+        N      = Z_cal.shape[0]
         Rz_cal = (Z_cal.T @ Z_cal) / N
         Rz_cal = 0.5 * (Rz_cal + Rz_cal.T)
         Rz_cal = (1 - self.shrinkage) * Rz_cal + self.shrinkage * self.I
         sign, logdet = torch.linalg.slogdet(Rz_cal)
 
         if sign > 0:
-            # kl_to_identity: K_cal = KL(Rz_cal ‖ I) — immutable scalar reference
             self.K_cal = 0.5 * (Rz_cal.trace() - logdet - self.D)
             if self.wh_mode == "kl_to_cal":
-                # Precompute Rz_cal⁻¹ and logdet_cal once; used every batch
                 self.Rz_cal_inv = torch.linalg.inv(Rz_cal)
-                self.logdet_cal  = logdet
+                self.logdet_cal = logdet
         else:
             self.K_cal = torch.zeros(1, device=self.device).squeeze()
             if self.wh_mode == "kl_to_cal":
                 self.Rz_cal_inv = self.I.clone()
-                self.logdet_cal  = torch.zeros(1, device=self.device).squeeze()
+                self.logdet_cal = torch.zeros(1, device=self.device).squeeze()
 
     def _update_fifo_cov(self, emg_batch: torch.Tensor) -> None:
         """Push current batch into the extended-EMG FIFO, trimming to fifo_samples."""

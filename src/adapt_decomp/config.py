@@ -42,9 +42,13 @@ class Config:
     shrinkage: float = 1e-3         # Tikhonov shrinkage on per-FIFO covariance
     eps: float = 1e-7               # Numerical stability floor
 
-    # Trust-region step bounds — the sole rate controls for V and B.
+    # Learning rates — scale the gradient before the trust-region clip.
+    eta_v: float = 1e-4             # Whitening step size per unit of KL error
+    eta_b: float = 1e-5             # Source step size per unit of contrast error
+
+    # Trust-region safety clips — hard ceiling on any single update.
     # V moves at most max_rel_delta_v * ||V|| per batch (Frobenius norm).
-    # Each B row moves at most max_rel_delta_b * ||b_j|| per batch.
+    # B moves at most max_rel_delta_b * ||B|| per batch (global Frobenius norm).
     max_rel_delta_v: float = 5e-3
     max_rel_delta_b: float = 1e-3
 

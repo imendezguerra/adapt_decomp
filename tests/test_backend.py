@@ -277,7 +277,7 @@ def test_no_B_update_no_spikes():
 
     B_new, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
     )
     # active should all be False → grad_B = 0 → delta_B = 0
     assert torch.all(~diag["active"])
@@ -302,7 +302,7 @@ def test_only_active_sources_get_delta_B():
 
     _, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
     )
     # Sources 1 and 3: inactive → zero delta
     assert diag["delta_B_norm"][1].item() == pytest.approx(0.0, abs=1e-7)
@@ -393,7 +393,7 @@ def test_debug_mode_returns_diagnostics():
 
     _, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
     )
     required_keys = {
         "kappa", "contrast_error",
@@ -458,12 +458,12 @@ def test_contrast_scope_batch_vs_spike():
 
     _, diag_batch = update_B_spike_gated(
         B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=0.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=0.0, min_spikes_for_update=1,
         contrast_scope="batch_based",
     )
     _, diag_spike = update_B_spike_gated(
         B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=0.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=0.0, min_spikes_for_update=1,
         contrast_scope="spike_based",
     )
     # kappa values should differ when the subsets differ
@@ -486,7 +486,7 @@ def test_B_update_requires_at_least_one_spike():
 
     B_new, _ = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
     )
     # delta_B = 0, so B_new = orth(B_orig) = B_orig (already orthonormal)
     assert_close(B_new, B_orig, atol=1e-5, rtol=0)

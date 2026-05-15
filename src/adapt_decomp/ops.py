@@ -197,6 +197,7 @@ def update_B_spike_gated(
     Y: torch.Tensor,
     kappa_cal: torch.Tensor,
     spike_mask: torch.Tensor,
+    eta_b: float,
     max_rel_delta_b: float,
     min_spikes_for_update: int,
     orthonormalization: str = "qr",
@@ -206,8 +207,8 @@ def update_B_spike_gated(
     """Spike-gated separation matrix update with retained contrast error.
 
     Gradient uses tanh(Y) — the exact derivative of log_cosh.
-    Step size is controlled solely by max_rel_delta_b via clip_rowwise_delta:
-    each row of B moves by at most max_rel_delta_b * ||b_j|| per batch.
+    eta_b scales the step in the normal operating regime; clip_global_delta
+    enforces a hard ceiling on ||ΔB||_F for pathological batches.
     contrast_scope:
         "batch_based" — kappa = log_cosh(Y).mean(dim=0) over all N samples
         "spike_based" — kappa = log_cosh(Y[spike_mask]).mean per source (spike times only)
@@ -236,8 +237,8 @@ def update_B_spike_gated(
     grad_B = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
     grad_B = grad_B * active[:, None]
 
-    delta_B = -e_b_raw[:, None] * grad_B
-    delta_B = clip_rowwise_delta(delta_B, B, max_rel_delta_b, eps)
+    delta_B = -eta_b * e_b_raw[:, None] * grad_B
+    delta_B = clip_global_delta(delta_B, B, max_rel_delta_b, eps)
 
     B_new = B + delta_B
     B_new = orthonormalize_rows(B_new, method=orthonormalization)

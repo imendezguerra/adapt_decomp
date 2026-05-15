@@ -160,6 +160,7 @@ class AdaptDecomp:
                 Y=Y,
                 kappa_cal=self.decomp.kappa_cal,
                 spike_mask=spike_mask,
+                eta_b=self.config.eta_b,
                 max_rel_delta_b=self.config.max_rel_delta_b,
                 min_spikes_for_update=self.config.min_spikes_for_update,
                 orthonormalization=self.config.orthonormalization,
@@ -237,7 +238,7 @@ class AdaptDecomp:
                 logdet_A  = logdet - decomp.logdet_cal   # logdet(A) = logdet(Rz) - logdet(Rz_cal)
                 K_online  = 0.5 * (A.trace() - logdet_A - decomp.D)   # KL(Rz ‖ Rz_cal)
                 K_ref     = torch.zeros(1, device=decomp.V.device, dtype=decomp.V.dtype).squeeze()
-                e_v_raw   = K_online          # already zero when Rz = Rz_cal
+                e_v_raw   = K_online          # zero when Rz = Rz_cal exactly
                 direction = A - decomp.I      # = Rz_cal⁻¹ Rz − I
 
             if cfg.compute_loss:
@@ -245,7 +246,7 @@ class AdaptDecomp:
                 self.total_loss[batch_idx] += e_v_raw.item() ** 2
 
             if cfg.adapt_wh:
-                delta_V = -e_v_raw * (direction @ decomp.V)
+                delta_V = -cfg.eta_v * e_v_raw * (direction @ decomp.V)
                 delta_V = clip_global_delta(delta_V, decomp.V, cfg.max_rel_delta_v, cfg.eps)
                 decomp.V = decomp.V + delta_V
 

@@ -36,9 +36,11 @@ spike_prev_weight: 5
 spike_dist_ms: 10
 
 # Adaptation hyperparameters
-wh_mode: kl_to_identity   # "kl_to_identity" or "kl_to_cal" (adapt_wh/adapt_sv are False so trust-region unused)
+wh_mode: kl_to_identity   # "kl_to_identity" or "kl_to_cal" (adapt_wh/adapt_sv are False so unused)
 shrinkage: 1.0e-3
 eps: 1.0e-7
+eta_v: 1.0e-4
+eta_b: 1.0e-5
 max_rel_delta_v: 5.0e-3
 max_rel_delta_b: 1.0e-3
 min_spikes_for_update: 1
