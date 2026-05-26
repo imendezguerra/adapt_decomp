@@ -104,7 +104,6 @@ class Decomposition:
         self.fifo_length_cfg = config.fifo_length
         self.source_fifo_batches = config.source_fifo_batches
         self.wh_mode = config.wh_mode
-        self.wh_trace_renorm = config.wh_trace_renorm
         self.max_sigma_batches = config.max_sigma_batches
         self.peak_power = config.peak_power
         self.use_abs_for_detection = config.use_abs_for_detection
@@ -165,7 +164,7 @@ class Decomposition:
         # For the default config (kl_to_identity + wh_trace_renorm=False) both outputs
         # are unused: K_cal is overridden by the sigma loop mean below, and trace_cal is
         # never read. Skipping saves the two dominant [N_cal, D]@[D, D] matmuls (~40% of init).
-        needs_full_rz = (self.wh_mode == "kl_to_cal") or self.wh_trace_renorm
+        needs_full_rz = self.wh_mode == "kl_to_cal"
         if needs_full_rz:
             Z_cal  = X_cal @ self.V.T
             N      = Z_cal.shape[0]

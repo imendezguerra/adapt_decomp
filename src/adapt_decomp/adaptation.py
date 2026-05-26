@@ -77,7 +77,6 @@ class AdaptDecomp:
         self.decomp.shrinkage = self.config.shrinkage
         self.decomp.contrast_scope = self.config.contrast_scope
         self.decomp.wh_mode = self.config.wh_mode
-        self.decomp.wh_trace_renorm = self.config.wh_trace_renorm
         self.decomp.batch_size = self.config.batch_size
 
         self.decomp.V = self._V_orig.clone().to(device=self.config.device)
@@ -220,7 +219,6 @@ class AdaptDecomp:
                     Y=Y_curr,
                     kappa_cal=self.decomp.kappa_cal,
                     spike_mask=trusted_spike_mask,
-                    eta_b=self.config.eta_b,
                     max_rel_delta_b=self.config.max_rel_delta_b,
                     min_spikes_for_update=self.config.min_spikes_for_update,
                     orthonormalization=self.config.orthonormalization,
@@ -324,25 +322,14 @@ class AdaptDecomp:
                 self.total_loss[batch_idx] += e_v.item() ** 2
 
             if cfg.adapt_wh:
-                delta_V_raw = -cfg.eta_v * e_v * (direction @ decomp.V)
+                delta_V_raw = -e_v * (direction @ decomp.V)
                 delta_V = clip_global_delta(delta_V_raw, decomp.V, cfg.max_rel_delta_v, cfg.eps)
                 decomp.V = decomp.V + delta_V
 
                 if cfg.wh_b_coupling:
                     raw_norm = torch.linalg.norm(delta_V_raw)
                     clip_scale = torch.linalg.norm(delta_V) / (raw_norm + cfg.eps)
-                    coupling_matrix = (clip_scale * cfg.eta_v * e_v * direction).detach()
-
-                # Scale-preserving renormalisation: rescale V so tr(Rz) = tr(Rz_cal).
-                # Uses pre-update Rz as a one-step-lagged estimate of the post-update trace,
-                # which is correct to first order since delta_V is trust-region bounded.
-                # This prevents the unbounded norm growth from the +η·e_v·V component of
-                # the natural-gradient update without restricting orientation adaptation.
-                if cfg.wh_trace_renorm:
-                    trace_online = Rz.trace()
-                    if trace_online > cfg.eps:
-                        scale = (decomp.trace_cal / trace_online).sqrt()
-                        decomp.V = decomp.V * scale
+                    coupling_matrix = (clip_scale * e_v * direction).detach()
 
                 if cfg.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
@@ -538,10 +525,10 @@ class AdaptDecomp:
             trace_ratios = self.wh_trace / self.decomp.trace_cal
             agg = trace_ratios.median() if self.config.trace_check_mode == "median" else trace_ratios[-1]
             if not (0.1 < agg.item() < 50.0):
-                return 1e10 if self.config.optim_loss == "legacy" else (1e10, 1e10, 1e10)
+                return 1e10 if self.config.optim_loss == "single_obj" else (1e10, 1e10, 1e10)
 
         wh = self._compute_total_wh_loss()
-        if self.config.optim_loss == "legacy":
+        if self.config.optim_loss == "single_obj":
             return wh + self._compute_total_sv_loss() + self._compute_total_centroid_loss()
         return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
 

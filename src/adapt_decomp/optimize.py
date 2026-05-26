@@ -43,7 +43,7 @@ def optimize_adapt_decomp(
     param_space format::
 
         {
-            "eta_v":             ("log_float", 1e-6, 1e-2),
+            "max_rel_delta_v":   ("log_float", 1e-4, 5e-2),
             "centroid_momentum": ("float",     0.8,  0.99),
             "batch_ms":          ("int",       50,   200),
             "wh_mode":           ("categorical", ["kl_to_identity", "kl_to_cal"]),

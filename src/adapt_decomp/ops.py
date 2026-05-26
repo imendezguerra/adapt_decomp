@@ -63,13 +63,33 @@ def orthonormalize_rows_qr(B: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
+def orthonormalize_rows_gram_schmidt(B: torch.Tensor) -> torch.Tensor:
+    """Classical Gram-Schmidt row orthonormalization.
+
+    B: [M, D] — returns matrix with orthonormal rows.
+    Sequentially projects each row onto the complement of all prior rows.
+    Less numerically stable than QR for large M; prefer QR in production.
+    """
+    M = B.shape[0]
+    Q = torch.empty_like(B)
+    for i in range(M):
+        v = B[i].clone()
+        for j in range(i):
+            v = v - (v @ Q[j]) * Q[j]
+        Q[i] = v / torch.linalg.norm(v).clamp_min(1e-8)
+    return Q
+
+
+@torch.no_grad()
 def orthonormalize_rows(
     B: torch.Tensor,
-    method: Literal["qr", "none"] = "qr",
+    method: Literal["qr", "gram_schmidt", "none"] = "qr",
 ) -> torch.Tensor:
     """Dispatcher for row orthonormalization. Use 'none' for ablations only."""
     if method == "qr":
         return orthonormalize_rows_qr(B)
+    if method == "gram_schmidt":
+        return orthonormalize_rows_gram_schmidt(B)
     if method == "none":
         return B
     raise ValueError(f"Unknown orthonormalization method: {method!r}")
@@ -198,7 +218,6 @@ def update_B_spike_gated(
     Y: torch.Tensor,
     kappa_cal: torch.Tensor,
     spike_mask: torch.Tensor,
-    eta_b: float,
     max_rel_delta_b: float,
     min_spikes_for_update: int,
     orthonormalization: str = "qr",
@@ -209,8 +228,7 @@ def update_B_spike_gated(
     """Separation matrix update with retained contrast error.
 
     Gradient uses tanh(Y) — the exact derivative of log_cosh.
-    eta_b scales the step in the normal operating regime; clip_global_delta
-    enforces a hard ceiling on ||ΔB||_F for pathological batches.
+    clip_rowwise_delta enforces a hard ceiling on each row of ΔB for pathological batches.
 
     contrast_scope controls both kappa estimation and gradient direction:
         "batch_based" — kappa = log_cosh(Y).mean(dim=0) over all N samples;
@@ -246,7 +264,7 @@ def update_B_spike_gated(
         grad_B = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
         grad_B = grad_B * active[:, None]
 
-    delta_B = -eta_b * e_b[:, None] * grad_B
+    delta_B = -e_b[:, None] * grad_B
     delta_B = clip_rowwise_delta(delta_B, B, max_rel_delta_b, eps)
 
     B_new = B + delta_B

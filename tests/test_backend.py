@@ -10,6 +10,7 @@ from adapt_decomp.ops import (
     clip_global_delta,
     clip_rowwise_delta,
     orthonormalize_rows_qr,
+    orthonormalize_rows_gram_schmidt,
     orthonormalize_rows,
     find_peaks_multisource,
     classify_peaks_from_adaptive_centroids,
@@ -278,7 +279,7 @@ def test_no_B_update_no_spikes():
 
     B_new, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
         contrast_scope="spike_based",
     )
     # active should all be False → grad_B = 0 → delta_B = 0
@@ -304,7 +305,7 @@ def test_only_active_sources_get_delta_B():
 
     _, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
         contrast_scope="spike_based",
     )
     # Sources 1 and 3: inactive → zero delta
@@ -326,7 +327,20 @@ def test_B_orthonormal_after_qr():
 
 
 # ---------------------------------------------------------------------------
-# 16. Whitening update skips when slogdet sign is invalid
+# 16. B is orthonormal after Gram-Schmidt orthonormalization
+# ---------------------------------------------------------------------------
+
+def test_B_orthonormal_after_gram_schmidt():
+    """B @ B.T ≈ I after orthonormalize_rows_gram_schmidt."""
+    M, D = 5, 20
+    B = torch.randn(M, D)
+    B_orth = orthonormalize_rows_gram_schmidt(B)
+    gram = B_orth @ B_orth.T
+    assert_close(gram, torch.eye(M), atol=1e-5, rtol=0)
+
+
+# ---------------------------------------------------------------------------
+# 17. Whitening update skips when slogdet sign is invalid
 # ---------------------------------------------------------------------------
 
 def test_update_V_skips_invalid_slogdet():
@@ -369,6 +383,7 @@ def test_update_V_skips_invalid_slogdet():
     adapter.units = M
     adapter.diagnostics = {}
     adapter.wh_loss = torch.zeros(1)
+    adapter.wh_trace = torch.zeros(1)
     adapter.total_loss = torch.zeros(1)
 
     # X must also be zero so _update_fifo_cov doesn't add signal back into the FIFO
@@ -396,7 +411,7 @@ def test_debug_mode_returns_diagnostics():
 
     _, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
     )
     required_keys = {
         "kappa", "contrast_error",
@@ -461,12 +476,12 @@ def test_contrast_scope_batch_vs_spike():
 
     _, diag_batch = update_B_spike_gated(
         B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=0.0, min_spikes_for_update=1,
+        max_rel_delta_b=0.0, min_spikes_for_update=1,
         contrast_scope="batch_based",
     )
     _, diag_spike = update_B_spike_gated(
         B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=0.0, min_spikes_for_update=1,
+        max_rel_delta_b=0.0, min_spikes_for_update=1,
         contrast_scope="spike_based",
     )
     # kappa values should differ when the subsets differ
@@ -489,7 +504,7 @@ def test_B_update_requires_at_least_one_spike():
 
     B_new, _ = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
-        eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
         contrast_scope="spike_based",
     )
     # delta_B = 0, so B_new = orth(B_orig) = B_orig (already orthonormal)

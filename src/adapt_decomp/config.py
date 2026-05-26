@@ -38,12 +38,6 @@ class Config:
     #   Zero update iff Rz = Rz_cal (unique fixed point at calibration statistics).
     wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"
 
-    # --- Whitening trace renormalisation ---
-    # After each V update, rescale V so that tr(Rz) = tr(Rz_cal).
-    # This prevents the unbounded norm growth that arises from the +η·e_v·V component
-    # of the natural-gradient update without restricting orientation or shape adaptation.
-    wh_trace_renorm: bool = False
-
     # Propagate the first-order frame correction from each V step to B.
     # Keeps B aligned with V's coordinate frame without waiting for the contrast
     # gradient to discover the mismatch through kappa drift.
@@ -53,10 +47,6 @@ class Config:
     shrinkage: float = 1e-3         # Tikhonov shrinkage on per-FIFO covariance
     eps: float = 1e-7               # Numerical stability floor
 
-    # Learning rates — scale the gradient before the trust-region clip.
-    eta_v: float = 1                # Whitening step size per unit of KL error
-    eta_b: float = 1                # Source step size per unit of contrast error
-
     # Trust-region safety clips — hard ceiling on any single update.
     # V moves at most max_rel_delta_v * ||V|| per batch (Frobenius norm).
     # B moves at most max_rel_delta_b * ||B|| per batch (global Frobenius norm).
@@ -65,7 +55,7 @@ class Config:
 
     min_spikes_for_update: int = 1      # Minimum spike count to allow B row update
 
-    orthonormalization: str = "qr"      # "qr" or "none"
+    orthonormalization: str = "qr"      # "qr" (default), "gram_schmidt", or "none"
 
     # Contrast scope: how kappa and kappa_cal are computed for the B update.
     #   "batch_based"  — log_cosh(Y).mean(dim=0) over all N samples; gradient is also
@@ -107,9 +97,9 @@ class Config:
     # --- Optimisation ---
     trace_check: bool = True                                    # Reject diverged trials in run_optimisation via trace ratio guard
     trace_check_mode: Literal["last", "median"] = "median"     # "last": endpoint batch only; "median": robust to tail extremes
-    # "legacy": wh_loss + sv_loss combined scalar (single-objective, unchanged behaviour)
-    # "source": (wh_loss, sv_loss, centroid_loss) 3-objective tuple (multi-objective)
-    optim_loss: Literal["legacy", "source"] = "legacy"
+    # "single_obj": wh_loss + sv_loss combined scalar (single-objective, unchanged behaviour)
+    # "multi_obj":  (wh_loss, sv_loss, centroid_loss) 3-objective tuple (multi-objective)
+    optim_loss: Literal["single_obj", "multi_obj"] = "single_obj"
 
     # --- Debug ---
     debug: bool = False
