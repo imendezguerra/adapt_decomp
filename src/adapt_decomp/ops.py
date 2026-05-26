@@ -5,9 +5,10 @@ All functions operate without autograd. Heavy functions are wrapped in
 """
 
 import math
+from typing import Literal, Optional
+
 import torch
 import torch.nn.functional as F
-from typing import Literal
 
 
 def log_cosh(x: torch.Tensor) -> torch.Tensor:
@@ -203,50 +204,58 @@ def update_B_spike_gated(
     orthonormalization: str = "qr",
     contrast_scope: str = "batch_based",
     eps: float = 1e-8,
+    sigma_kappa_cal: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, dict]:
-    """Spike-gated separation matrix update with retained contrast error.
+    """Separation matrix update with retained contrast error.
 
     Gradient uses tanh(Y) — the exact derivative of log_cosh.
     eta_b scales the step in the normal operating regime; clip_global_delta
     enforces a hard ceiling on ||ΔB||_F for pathological batches.
-    contrast_scope:
-        "batch_based" — kappa = log_cosh(Y).mean(dim=0) over all N samples
-        "spike_based" — kappa = log_cosh(Y[spike_mask]).mean per source (spike times only)
-    B update is always gated: sources with fewer than min_spikes_for_update spikes
-    get zero delta regardless of contrast_scope.
+
+    contrast_scope controls both kappa estimation and gradient direction:
+        "batch_based" — kappa = log_cosh(Y).mean(dim=0) over all N samples;
+                        gradient = tanh(Y).T @ Z / N  (full-batch ICA step,
+                        decoupled from spike detection)
+        "spike_based" — kappa = log_cosh(Y[spike_mask]).mean per source;
+                        gradient is spike-gated; sources with fewer than
+                        min_spikes_for_update spikes get zero delta
 
     Returns (B_new, diagnostics_dict).
     """
     N, M = Y.shape
 
+    sigma_kappa_cal = sigma_kappa_cal if sigma_kappa_cal is not None else torch.ones_like(kappa_cal)
     if contrast_scope == "batch_based":
         kappa = log_cosh(Y).mean(dim=0)
+        e_b = (kappa - kappa_cal) / sigma_kappa_cal
+
+        # Full-batch ICA natural-gradient direction — no spike gating
+        G = torch.tanh(Y)
+        grad_B = (G.T @ Z) / N
+        active = torch.ones(M, dtype=torch.bool, device=Y.device)
+        spike_counts = spike_mask.to(Y.dtype).sum(dim=0)   # kept for diagnostics only
     else:
         mask_f = spike_mask.to(Y.dtype)
-        counts = mask_f.sum(dim=0)
-        kappa = (log_cosh(Y) * mask_f).sum(dim=0) / counts.clamp_min(1.0)
+        spike_counts = mask_f.sum(dim=0)
+        kappa = (log_cosh(Y) * mask_f).sum(dim=0) / spike_counts.clamp_min(1.0)
+        e_b = (kappa - kappa_cal) / sigma_kappa_cal
 
-    e_b_raw = kappa - kappa_cal
+        # Spike-gated natural-gradient direction
+        G = mask_f * torch.tanh(Y)
+        active = spike_counts >= min_spikes_for_update
+        grad_B = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
+        grad_B = grad_B * active[:, None]
 
-    mask = spike_mask.to(Y.dtype)
-    # tanh is the derivative of log_cosh — used here for the natural-gradient step
-    G = mask * torch.tanh(Y)
-    spike_counts = mask.sum(dim=0)
-    active = spike_counts >= min_spikes_for_update
-
-    grad_B = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
-    grad_B = grad_B * active[:, None]
-
-    delta_B = -eta_b * e_b_raw[:, None] * grad_B
-    delta_B = clip_global_delta(delta_B, B, max_rel_delta_b, eps)
+    delta_B = -eta_b * e_b[:, None] * grad_B
+    delta_B = clip_rowwise_delta(delta_B, B, max_rel_delta_b, eps)
 
     B_new = B + delta_B
     B_new = orthonormalize_rows(B_new, method=orthonormalization)
 
     _nan = torch.tensor(float("nan"), device=Y.device, dtype=Y.dtype)
     diag = {
-        "kappa":          torch.where(active, kappa,    _nan),
-        "contrast_error": torch.where(active, e_b_raw,  _nan),
+        "kappa":          torch.where(active, kappa,  _nan),
+        "contrast_error": torch.where(active, e_b,    _nan),
         "spike_counts":   spike_counts,
         "active":         active,
         "delta_B_norm":   torch.linalg.norm(delta_B, dim=1),
@@ -255,3 +264,27 @@ def update_B_spike_gated(
         ),
     }
     return B_new, diag
+
+
+@torch.no_grad()
+def gate_spikes_by_iqr(
+    Y: torch.Tensor,
+    spike_mask: torch.Tensor,
+    Q75_cal: torch.Tensor,
+    IQR_cal: torch.Tensor,
+    gate_factor: float,
+    peak_power: float = 2.0,
+    use_abs_for_detection: bool = True,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Return trusted_spike_mask: spike_mask with amplitude outliers excluded.
+
+    Outliers are spikes whose detection-domain amplitude exceeds the Tukey upper
+    fence Q75_cal + gate_factor * IQR_cal. Excluded spikes still appear in the
+    output spike train but do not update centroids or separation vectors.
+    """
+    Y_det = Y.abs().pow(peak_power) if use_abs_for_detection else Y.pow(peak_power)
+    upper_gate = Q75_cal + gate_factor * IQR_cal.clamp_min(eps)  # [M]
+    return spike_mask & (Y_det <= upper_gate[None, :])            # [N, M] bool
+
+

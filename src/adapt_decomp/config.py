@@ -27,7 +27,7 @@ class Config:
     adapt_wh: bool = True
     adapt_sv: bool = True
     adapt_sd: bool = True
-    compute_loss: bool = True
+    log_loss: bool = True    # Log wh_loss, sv_loss, centroid_loss and wh_trace each batch
     save_params: bool = False
 
     # --- Whitening mode ---
@@ -38,29 +38,41 @@ class Config:
     #   Zero update iff Rz = Rz_cal (unique fixed point at calibration statistics).
     wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"
 
+    # --- Whitening trace renormalisation ---
+    # After each V update, rescale V so that tr(Rz) = tr(Rz_cal).
+    # This prevents the unbounded norm growth that arises from the +η·e_v·V component
+    # of the natural-gradient update without restricting orientation or shape adaptation.
+    wh_trace_renorm: bool = False
+
+    # Propagate the first-order frame correction from each V step to B.
+    # Keeps B aligned with V's coordinate frame without waiting for the contrast
+    # gradient to discover the mismatch through kappa drift.
+    wh_b_coupling: bool = False
+
     # --- Adaptation hyperparameters ---
     shrinkage: float = 1e-3         # Tikhonov shrinkage on per-FIFO covariance
     eps: float = 1e-7               # Numerical stability floor
 
     # Learning rates — scale the gradient before the trust-region clip.
-    eta_v: float = 1e-4             # Whitening step size per unit of KL error
-    eta_b: float = 1e-5             # Source step size per unit of contrast error
+    eta_v: float = 1                # Whitening step size per unit of KL error
+    eta_b: float = 1                # Source step size per unit of contrast error
 
     # Trust-region safety clips — hard ceiling on any single update.
     # V moves at most max_rel_delta_v * ||V|| per batch (Frobenius norm).
     # B moves at most max_rel_delta_b * ||B|| per batch (global Frobenius norm).
-    max_rel_delta_v: float = 5e-3
-    max_rel_delta_b: float = 1e-3
+    max_rel_delta_v: float = 1e-1
+    max_rel_delta_b: float = 1e-1
 
     min_spikes_for_update: int = 1      # Minimum spike count to allow B row update
 
     orthonormalization: str = "qr"      # "qr" or "none"
 
-    # Contrast scope: how kappa and kappa_cal are computed.
-    #   "batch_based"  — log_cosh(Y).mean(dim=0) over all N samples in the batch
-    #   "spike_based"  — log_cosh(Y) averaged only at detected spike times
+    # Contrast scope: how kappa and kappa_cal are computed for the B update.
+    #   "batch_based"  — log_cosh(Y).mean(dim=0) over all N samples; gradient is also
+    #                    batch-averaged (tanh(Y).T @ Z / N), decoupled from spike detection
+    #   "spike_based"  — log_cosh(Y) averaged only at detected spike times; gradient
+    #                    is spike-gated (tanh(Y[spike_mask]).T @ Z / spike_counts)
     # Calibration kappa_cal is computed the same way for consistency.
-    # B update is always gated on detected spikes regardless of scope.
     contrast_scope: Literal["batch_based", "spike_based"] = "batch_based"
 
     # --- Spike detection ---
@@ -77,15 +89,39 @@ class Config:
     fifo_length: int = 0
     source_fifo_batches: int = 2    # Past batches of Y prepended for edge spike support
 
+    # --- Calibration sigma estimation ---
+    # Maximum number of calibration windows used to estimate sigma_K_cal and sigma_kappa_cal.
+    # Windows are sampled uniformly across the calibration recording.
+    # 0 = use all windows. On CPU, capping at 200-300 gives stable estimates with ~8× speedup.
+    max_sigma_batches: int = 300
+
     # --- Centroid adaptation ---
     centroid_momentum: float = 0.95
     min_spikes_for_centroid: int = 1
-    min_base_peaks_for_centroid: int = 3
+    min_base_peaks_for_centroid: int = 1
+
+    # --- B fixed-point iterations ---
+    max_iter_b: int = 1       # Max ICA fixed-point iterations per batch for B (1 = single step)
+    tol_b: float = 1e-4       # Early-exit threshold: ‖B_new − B_old‖_F / ‖B_old‖_F < tol_b
+
+    # --- Optimisation ---
+    trace_check: bool = True                                    # Reject diverged trials in run_optimisation via trace ratio guard
+    trace_check_mode: Literal["last", "median"] = "median"     # "last": endpoint batch only; "median": robust to tail extremes
+    # "legacy": wh_loss + sv_loss combined scalar (single-objective, unchanged behaviour)
+    # "source": (wh_loss, sv_loss, centroid_loss) 3-objective tuple (multi-objective)
+    optim_loss: Literal["legacy", "source"] = "legacy"
 
     # --- Debug ---
     debug: bool = False
 
+    # --- IQR spike gate ---
+    adapt_iqr_gate: bool = True
+    iqr_gate_factor: float = 3.0
+
     # --- Legacy parameters kept for backward compatibility ---
+    compute_loss: bool = True        # replaced by log_loss
+    log_wh_trace: bool = False       # replaced by log_loss
+    log_centroid_loss: bool = False  # replaced by log_loss
     wh_learning_rate: float = 0.0   # unused — kept so existing YAML files load without error
     sv_learning_rate: float = 0.0   # unused — kept so existing YAML files load without error
     sv_epochs: int = 1

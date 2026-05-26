@@ -14,6 +14,7 @@ from adapt_decomp.ops import (
     classify_peaks_from_adaptive_centroids,
     update_centroids_from_peaks,
     update_B_spike_gated,
+    gate_spikes_by_iqr,
 )
 
 
@@ -71,10 +72,19 @@ class AdaptDecomp:
 
     def _reset_params(self) -> None:
         """Reset adaptive state to calibration originals for a fresh optimisation trial."""
+        # Sync config-derived fields cached on Decomposition as instance vars.
+        # Required when config_overrides changes them between optimisation trials.
+        self.decomp.shrinkage = self.config.shrinkage
+        self.decomp.contrast_scope = self.config.contrast_scope
+        self.decomp.wh_mode = self.config.wh_mode
+        self.decomp.wh_trace_renorm = self.config.wh_trace_renorm
+        self.decomp.batch_size = self.config.batch_size
+
         self.decomp.V = self._V_orig.clone().to(device=self.config.device)
         self.decomp.B = self._B_orig.clone().to(device=self.config.device)
-        self.decomp.init_sd_update()  # resets spike_centroid, base_centroid, source_fifo
-        self.decomp.init_wh_update()  # resets fifo_cov (K_cal is immutable, recomputed in place)
+        self.decomp.init_sd_update()
+        self.decomp.init_wh_update()   # recomputes K_cal, sigma_K_cal, fifo_cov
+        self.decomp.init_sv_update()   # recomputes kappa_cal, sigma_kappa_cal
 
     def init_exe_time(self, batches: int) -> None:
         self.time_sv_ms = torch.zeros(batches, dtype=torch.float32)
@@ -88,22 +98,32 @@ class AdaptDecomp:
         self.ipts = torch.zeros(samples, units, dtype=torch.float32, device=self.config.device)
 
     def init_losses(self, batches: int) -> None:
-        self.wh_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
-        self.sv_loss = torch.zeros((batches, self.units), dtype=torch.float32, device=self.config.device)
-        self.total_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
+        if self.config.log_loss:
+            self.wh_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
+            self.sv_loss = torch.zeros((batches, self.units), dtype=torch.float32, device=self.config.device)
+            self.centroid_loss = torch.zeros((batches, self.units), dtype=torch.float32, device=self.config.device)
+            self.wh_trace = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
+            self.total_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
 
     def format_outputs(self) -> Dict:
         outputs = {
             "spikes": self.spikes.detach().cpu().clone(),
             "ipts": self.ipts.detach().cpu().clone(),
-            "wh_loss": self.wh_loss.detach().cpu().clone(),
-            "sv_loss": self.sv_loss.detach().cpu().clone(),
-            "total_loss": self.total_loss.detach().cpu().clone(),
             "wh_time_ms": self.time_wh_ms,
             "sv_time_ms": self.time_sv_ms,
             "sd_time_ms": self.time_sd_ms,
             "total_time_ms": self.time_wh_ms + self.time_sv_ms + self.time_sd_ms,
         }
+        if hasattr(self, "wh_loss"):
+            outputs["wh_loss"] = self.wh_loss.detach().cpu().clone()
+        if hasattr(self, "sv_loss"):
+            outputs["sv_loss"] = self.sv_loss.detach().cpu().clone()
+        if hasattr(self, "centroid_loss"):
+            outputs["centroid_loss"] = self.centroid_loss.detach().cpu().clone()
+        if hasattr(self, "wh_trace"):
+            outputs["wh_trace"] = self.wh_trace.detach().cpu().clone()
+        if hasattr(self, "total_loss"):
+            outputs["total_loss"] = self.total_loss.detach().cpu().clone()
         if self.config.debug and hasattr(self, "diagnostics"):
             outputs["diagnostics"] = self.diagnostics
         return outputs
@@ -125,8 +145,19 @@ class AdaptDecomp:
 
         # --- Whitening update ---
         t0 = time.time()
-        Z = self._update_V(X, batch_idx)
+        Z, coupling_matrix = self._update_V(X, batch_idx)
         self.time_wh_ms[batch_idx] = (time.time() - t0) * 1000
+
+        # --- V→B coupling correction ---
+        # Applies the first-order frame correction implied by the V step to B before
+        # source estimates are formed, so spike detection and contrast update see a
+        # B that is already aligned with the new whitening frame.
+        if coupling_matrix is not None:
+            delta_B_coupling = self.decomp.B @ coupling_matrix
+            delta_B_coupling = clip_global_delta(
+                delta_B_coupling, self.decomp.B, self.config.max_rel_delta_b, self.config.eps
+            )
+            self.decomp.B = self.decomp.B + delta_B_coupling
 
         # --- Source estimates ---
         Y = Z @ self.decomp.B.T  # [N, M]
@@ -136,11 +167,26 @@ class AdaptDecomp:
         spike_mask, peak_mask = self._detect_spikes(Y, N)
         self.time_sd_ms[batch_idx] = (time.time() - t0) * 1000
 
+        # --- IQR spike gate: compute trusted_spike_mask for adaptation ---
+        # Outlier spikes (amplitude above Tukey upper fence) must NOT update
+        # centroids or B. They are still present in spike_mask for output.
+        if self.config.adapt_iqr_gate and (self.config.adapt_sd or self.config.adapt_sv):
+            trusted_spike_mask = gate_spikes_by_iqr(
+                Y, spike_mask,
+                self.decomp.Q75_cal, self.decomp.IQR_cal,
+                gate_factor=self.config.iqr_gate_factor,
+                peak_power=self.config.peak_power,
+                use_abs_for_detection=self.config.use_abs_for_detection,
+                eps=self.config.eps,
+            )
+        else:
+            trusted_spike_mask = spike_mask
+
         # --- Centroid update (current-batch portion only) ---
         if self.config.adapt_sd:
             self.decomp.spike_centroid, self.decomp.base_centroid = (
                 update_centroids_from_peaks(
-                    Y, peak_mask, spike_mask,
+                    Y, peak_mask, trusted_spike_mask,
                     self.decomp.spike_centroid, self.decomp.base_centroid,
                     peak_power=self.config.peak_power,
                     centroid_momentum=self.config.centroid_momentum,
@@ -151,34 +197,57 @@ class AdaptDecomp:
                 )
             )
 
+        # --- Centroid loss (separation ratio deviation from calibration) ---
+        # Measures whether spike/base centroids remain well-separated relative to
+        # calibration, not their absolute position. Scale-invariant: amplitude shifts
+        # that move both centroids together don't inflate the loss.
+        if self.config.log_loss:
+            sep_t   = self.decomp.spike_centroid - self.decomp.base_centroid
+            sep_cal = self.decomp.spike_centroid_cal - self.decomp.base_centroid_cal
+            self.centroid_loss[batch_idx] = (
+                sep_t / sep_cal.clamp_min(self.config.eps) - 1.0
+            ) ** 2
+
         # --- Source (B) update ---
         t0 = time.time()
         if self.config.adapt_sv:
-            B_new, sv_diag = update_B_spike_gated(
-                B=self.decomp.B,
-                Z=Z,
-                Y=Y,
-                kappa_cal=self.decomp.kappa_cal,
-                spike_mask=spike_mask,
-                eta_b=self.config.eta_b,
-                max_rel_delta_b=self.config.max_rel_delta_b,
-                min_spikes_for_update=self.config.min_spikes_for_update,
-                orthonormalization=self.config.orthonormalization,
-                contrast_scope=self.config.contrast_scope,
-                eps=self.config.eps,
-            )
-            self.decomp.B = B_new
+            B_curr = self.decomp.B
+            Y_curr = Y
+            for _ in range(self.config.max_iter_b):
+                B_new, sv_diag = update_B_spike_gated(
+                    B=B_curr,
+                    Z=Z,
+                    Y=Y_curr,
+                    kappa_cal=self.decomp.kappa_cal,
+                    spike_mask=trusted_spike_mask,
+                    eta_b=self.config.eta_b,
+                    max_rel_delta_b=self.config.max_rel_delta_b,
+                    min_spikes_for_update=self.config.min_spikes_for_update,
+                    orthonormalization=self.config.orthonormalization,
+                    contrast_scope=self.config.contrast_scope,
+                    eps=self.config.eps,
+                    sigma_kappa_cal=getattr(self.decomp, "sigma_kappa_cal", None),
+                )
+                delta_rel = (
+                    torch.linalg.norm(B_new - B_curr)
+                    / (torch.linalg.norm(B_curr) + self.config.eps)
+                )
+                B_curr = B_new
+                Y_curr = Z @ B_curr.T
+                if delta_rel < self.config.tol_b:
+                    break
+            self.decomp.B = B_curr
         else:
             # Still compute contrast for loss tracking even when not adapting
-            sv_diag = self._compute_sv_diag(Y, spike_mask)
+            sv_diag = self._compute_sv_diag(Y, trusted_spike_mask)
 
         self.time_sv_ms[batch_idx] = (time.time() - t0) * 1000
 
         # --- Store losses ---
-        if self.config.compute_loss:
+        if self.config.log_loss:
             sv_err = sv_diag["contrast_error"]
             self.sv_loss[batch_idx] = sv_err ** 2
-            self.total_loss[batch_idx] += (sv_err ** 2).mean().item()
+            self.total_loss[batch_idx] += (sv_err ** 2).nanmean().item()
 
         # --- Debug diagnostics ---
         # Use setdefault+update so _update_V's whitening keys are not overwritten.
@@ -197,6 +266,7 @@ class AdaptDecomp:
                 ).abs().mean(),
                 "peak_counts_before": peak_mask.sum(dim=0),
                 "peak_counts_after": spike_mask.sum(dim=0),
+                "outlier_spike_counts": (spike_mask & ~trusted_spike_mask).sum(dim=0),
             })
 
         return spike_mask.to(torch.int32), Y
@@ -206,7 +276,7 @@ class AdaptDecomp:
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _update_V(self, X: torch.Tensor, batch_idx) -> torch.Tensor:
+    def _update_V(self, X: torch.Tensor, batch_idx) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Natural-gradient whitening update.
 
         Two modes controlled by config.wh_mode:
@@ -217,16 +287,20 @@ class AdaptDecomp:
         cfg = self.config
         decomp = self.decomp
 
-        if cfg.adapt_wh or cfg.compute_loss:
+        coupling_matrix = None
+        if cfg.adapt_wh or cfg.log_loss:
             decomp._update_fifo_cov(X)
             Rz = decomp._compute_Rz_from_fifo()
+
+            if cfg.log_loss:
+                self.wh_trace[batch_idx] = Rz.trace()
 
             sign, logdet = torch.linalg.slogdet(Rz)
             if sign <= 0:
                 if cfg.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
                     self.diagnostics.setdefault(idx, {})["wh_skip_invalid_slogdet"] = True
-                return X @ decomp.V.T
+                return X @ decomp.V.T, None
 
             if cfg.wh_mode == "kl_to_identity":
                 K_online = 0.5 * (Rz.trace() - logdet - decomp.D)
@@ -237,18 +311,38 @@ class AdaptDecomp:
                 A         = decomp.Rz_cal_inv @ Rz
                 logdet_A  = logdet - decomp.logdet_cal   # logdet(A) = logdet(Rz) - logdet(Rz_cal)
                 K_online  = 0.5 * (A.trace() - logdet_A - decomp.D)   # KL(Rz ‖ Rz_cal)
-                K_ref     = torch.zeros(1, device=decomp.V.device, dtype=decomp.V.dtype).squeeze()
-                e_v_raw   = K_online          # zero when Rz = Rz_cal exactly
+                K_ref     = decomp.K_cal      # batch-wise mean KL at calibration (finite-sample bias)
+                e_v_raw   = K_online - K_ref
                 direction = A - decomp.I      # = Rz_cal⁻¹ Rz − I
 
-            if cfg.compute_loss:
-                self.wh_loss[batch_idx] = e_v_raw.item() ** 2
-                self.total_loss[batch_idx] += e_v_raw.item() ** 2
+            # Z-score the whitening error so eta_v is scale-free across contractions.
+            sigma_K = getattr(decomp, "sigma_K_cal", None)
+            e_v = e_v_raw / sigma_K.clamp_min(cfg.eps) if sigma_K is not None else e_v_raw
+
+            if cfg.log_loss:
+                self.wh_loss[batch_idx] = e_v.item() ** 2
+                self.total_loss[batch_idx] += e_v.item() ** 2
 
             if cfg.adapt_wh:
-                delta_V = -cfg.eta_v * e_v_raw * (direction @ decomp.V)
-                delta_V = clip_global_delta(delta_V, decomp.V, cfg.max_rel_delta_v, cfg.eps)
+                delta_V_raw = -cfg.eta_v * e_v * (direction @ decomp.V)
+                delta_V = clip_global_delta(delta_V_raw, decomp.V, cfg.max_rel_delta_v, cfg.eps)
                 decomp.V = decomp.V + delta_V
+
+                if cfg.wh_b_coupling:
+                    raw_norm = torch.linalg.norm(delta_V_raw)
+                    clip_scale = torch.linalg.norm(delta_V) / (raw_norm + cfg.eps)
+                    coupling_matrix = (clip_scale * cfg.eta_v * e_v * direction).detach()
+
+                # Scale-preserving renormalisation: rescale V so tr(Rz) = tr(Rz_cal).
+                # Uses pre-update Rz as a one-step-lagged estimate of the post-update trace,
+                # which is correct to first order since delta_V is trust-region bounded.
+                # This prevents the unbounded norm growth from the +η·e_v·V component of
+                # the natural-gradient update without restricting orientation adaptation.
+                if cfg.wh_trace_renorm:
+                    trace_online = Rz.trace()
+                    if trace_online > cfg.eps:
+                        scale = (decomp.trace_cal / trace_online).sqrt()
+                        decomp.V = decomp.V * scale
 
                 if cfg.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
@@ -256,13 +350,14 @@ class AdaptDecomp:
                     d.update({
                         "K":               K_online.item(),
                         "K_cal":           K_ref.item(),
-                        "whitening_error": e_v_raw.item(),
+                        "whitening_error": e_v.item(),
                         "delta_V_norm":    torch.linalg.norm(delta_V).item(),
                         "Rz_trace":        Rz.trace().item(),
                         "Rz_logdet":       logdet.item(),
+                        "V_norm":          torch.linalg.norm(decomp.V).item(),
                     })
 
-        return X @ decomp.V.T
+        return X @ decomp.V.T, coupling_matrix
 
     # ------------------------------------------------------------------
     # Spike detection (edge-aware via source FIFO)
@@ -333,12 +428,14 @@ class AdaptDecomp:
             kappa = (log_cosh(Y) * mask_f).sum(dim=0) / counts.clamp_min(1.0)
 
         e_b_raw = kappa - decomp.kappa_cal
+        sigma = getattr(decomp, "sigma_kappa_cal", None)
+        e_b = e_b_raw / sigma.clamp_min(cfg.eps) if sigma is not None else e_b_raw
         spike_counts = spike_mask.to(Y.dtype).sum(dim=0)
         active = spike_counts >= cfg.min_spikes_for_update
         _nan = torch.tensor(float("nan"), device=Y.device, dtype=Y.dtype)
         return {
-            "kappa":          torch.where(active, kappa,    _nan),
-            "contrast_error": torch.where(active, e_b_raw,  _nan),
+            "kappa":          torch.where(active, kappa,  _nan),
+            "contrast_error": torch.where(active, e_b,    _nan),
             "spike_counts":   spike_counts,
             "active":         active,
         }
@@ -398,22 +495,32 @@ class AdaptDecomp:
         wh_lr: Optional[float] = None,
         cov_alpha: Optional[float] = None,
         sv_lr: Optional[float] = None,
+        config_overrides: Optional[dict] = None,
     ) -> float:
         """Run decomposition for hyperparameter optimisation.
 
-        Resets adaptive state, runs the full dataset, and returns the negative
-        median loss (suitable for wandb minimisation).
+        Resets adaptive state, runs the full dataset, and returns the combined
+        normalised loss (whitening + contrast, both z-scored by calibration std).
         """
+        self.config.log_loss = True
+
         if wh_lr is not None:
             self.config.max_rel_delta_v = wh_lr
         if sv_lr is not None:
             self.config.max_rel_delta_b = sv_lr
+        for k, v in (config_overrides or {}).items():
+            setattr(self.config, k, v)
+        if config_overrides and "batch_ms" in config_overrides:
+            self.config.batch_size = int(self.config.batch_ms * self.config.fs / 1000)
 
         self._reset_params()
         self.init_outputs(
             samples=self.data.emg_ext.shape[0],
             units=self.decomp.B.shape[0],
         )
+
+        if self.config.debug:
+            self.diagnostics = {}
 
         dataset = DataLoader(
             self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
@@ -427,25 +534,31 @@ class AdaptDecomp:
             self.spikes[idx_labels, :] = spikes
             self.ipts[idx_labels, :] = ipts
 
-        tot_loss = 0.0
-        if wh_lr is not None:
-            tot_loss += self._compute_total_wh_loss()
-        if sv_lr is not None:
-            tot_loss += self._compute_total_sv_loss()
-        return tot_loss
+        if self.config.trace_check:
+            trace_ratios = self.wh_trace / self.decomp.trace_cal
+            agg = trace_ratios.median() if self.config.trace_check_mode == "median" else trace_ratios[-1]
+            if not (0.1 < agg.item() < 50.0):
+                return 1e10 if self.config.optim_loss == "legacy" else (1e10, 1e10, 1e10)
+
+        wh = self._compute_total_wh_loss()
+        if self.config.optim_loss == "legacy":
+            return wh + self._compute_total_sv_loss() + self._compute_total_centroid_loss()
+        return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
 
     # ------------------------------------------------------------------
     # Loss aggregation
     # ------------------------------------------------------------------
 
     def _compute_total_wh_loss(self) -> float:
-        tot = -self.wh_loss.median()
         if torch.any(torch.isnan(self.wh_loss)):
-            tot = -1e10
-        return tot.item()
+            return 1e10
+        return self.wh_loss.median().item()
 
     def _compute_total_sv_loss(self) -> float:
-        return -self.sv_loss.nanmedian().item()
+        return self.sv_loss.nanmedian().item()
+
+    def _compute_total_centroid_loss(self) -> float:
+        return self.centroid_loss.nanmedian().item()
 
     # ------------------------------------------------------------------
     # Utility helpers

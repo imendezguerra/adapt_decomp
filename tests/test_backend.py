@@ -15,6 +15,7 @@ from adapt_decomp.ops import (
     classify_peaks_from_adaptive_centroids,
     update_centroids_from_peaks,
     update_B_spike_gated,
+    gate_spikes_by_iqr,
 )
 
 
@@ -278,6 +279,7 @@ def test_no_B_update_no_spikes():
     B_new, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
         eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        contrast_scope="spike_based",
     )
     # active should all be False → grad_B = 0 → delta_B = 0
     assert torch.all(~diag["active"])
@@ -303,6 +305,7 @@ def test_only_active_sources_get_delta_B():
     _, diag = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
         eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        contrast_scope="spike_based",
     )
     # Sources 1 and 3: inactive → zero delta
     assert diag["delta_B_norm"][1].item() == pytest.approx(0.0, abs=1e-7)
@@ -487,6 +490,7 @@ def test_B_update_requires_at_least_one_spike():
     B_new, _ = update_B_spike_gated(
         B, Z, Y, kappa_cal, spike_mask=spike_mask,
         eta_b=1.0, max_rel_delta_b=1.0, min_spikes_for_update=1,
+        contrast_scope="spike_based",
     )
     # delta_B = 0, so B_new = orth(B_orig) = B_orig (already orthonormal)
     assert_close(B_new, B_orig, atol=1e-5, rtol=0)
@@ -660,3 +664,72 @@ def test_wh_mode_kl_to_cal_nonzero_on_drift():
     K_rel = 0.5 * (A.trace() - logdet_A - D)
 
     assert K_rel.item() > 0.5, f"Expected large KL for 3× variance drift, got {K_rel.item()}"
+
+
+# ---------------------------------------------------------------------------
+# gate_spikes_by_iqr
+# ---------------------------------------------------------------------------
+
+class TestGateSpikesByIqr:
+    def _make_inputs(self, N=50, M=3):
+        torch.manual_seed(0)
+        Y = torch.randn(N, M)
+        spike_mask = torch.zeros(N, M, dtype=torch.bool)
+        spike_mask[5::10] = True
+        Q75_cal = torch.full((M,), 2.0)
+        IQR_cal = torch.full((M,), 0.5)
+        return Y, spike_mask, Q75_cal, IQR_cal
+
+    def test_output_shape_and_dtype(self):
+        Y, spike_mask, Q75_cal, IQR_cal = self._make_inputs()
+        out = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
+        assert out.shape == spike_mask.shape
+        assert out.dtype == torch.bool
+
+    def test_no_outliers_returns_unchanged_mask(self):
+        """When no spikes exceed the gate, trusted_mask == spike_mask."""
+        N, M = 50, 3
+        Y = torch.zeros(N, M)
+        spike_mask = torch.zeros(N, M, dtype=torch.bool)
+        spike_mask[5] = True
+        Y[5] = 1.0  # Y_det = 1.0^2 = 1.0, well below upper_gate = 4.0 + 3*0.5 = 5.5
+        Q75_cal = torch.full((M,), 4.0)
+        IQR_cal = torch.full((M,), 0.5)
+        out = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
+        assert torch.equal(out, spike_mask)
+
+    def test_outlier_spike_excluded(self):
+        """A spike above the upper fence is excluded from the trusted mask."""
+        N, M = 10, 1
+        Y = torch.zeros(N, M)
+        spike_mask = torch.zeros(N, M, dtype=torch.bool)
+        spike_mask[3, 0] = True
+        # peak_power=2, use_abs=True: Y_det = |Y|^2
+        # upper_gate = 4.0 + 3*0.5 = 5.5; set Y so Y_det = 6.0 > 5.5
+        Y[3, 0] = 6.0 ** 0.5
+        Q75_cal = torch.tensor([4.0])
+        IQR_cal = torch.tensor([0.5])
+        out = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
+        assert not out[3, 0]
+        assert out.sum() == 0
+
+    def test_trusted_mask_is_subset_of_spike_mask(self):
+        Y, spike_mask, Q75_cal, IQR_cal = self._make_inputs()
+        trusted = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
+        assert torch.all(~trusted | spike_mask)  # trusted ⊆ spike_mask
+
+    def test_gate_disabled_returns_full_mask(self):
+        """With a very large gate_factor nothing is excluded."""
+        Y, spike_mask, Q75_cal, IQR_cal = self._make_inputs()
+        trusted = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=1e9)
+        assert torch.equal(trusted, spike_mask)
+
+    def test_non_spike_samples_never_added(self):
+        """Samples not in spike_mask are never added to the trusted mask."""
+        N, M = 20, 2
+        Y = torch.zeros(N, M)
+        spike_mask = torch.zeros(N, M, dtype=torch.bool)  # no spikes
+        Q75_cal = torch.ones(M)
+        IQR_cal = torch.ones(M)
+        trusted = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
+        assert trusted.sum() == 0
