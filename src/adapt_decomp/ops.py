@@ -143,17 +143,17 @@ def find_peaks_multisource(
 def classify_peaks_from_adaptive_centroids(
     Y_det: torch.Tensor,
     peak_mask: torch.Tensor,
-    spike_centroid: torch.Tensor,
-    base_centroid: torch.Tensor,
+    spike_centroids: torch.Tensor,
+    base_centroids: torch.Tensor,
 ) -> torch.Tensor:
     """Classify peak candidates as spikes using adaptive online centroids.
 
     Threshold is the midpoint between base and spike centroids.
-    Uses spike_centroid and base_centroid (adaptive), NOT frozen calibration values.
+    Uses spike_centroids and base_centroids (adaptive), NOT frozen calibration values.
 
     Returns spike_mask: [N, M] bool.
     """
-    threshold = base_centroid + 0.5 * (spike_centroid - base_centroid)
+    threshold = base_centroids + 0.5 * (spike_centroids - base_centroids)
     return peak_mask & (Y_det > threshold[None, :])
 
 
@@ -162,8 +162,8 @@ def update_centroids_from_peaks(
     Y: torch.Tensor,
     peak_mask: torch.Tensor,
     spike_mask: torch.Tensor,
-    spike_centroid: torch.Tensor,
-    base_centroid: torch.Tensor,
+    spike_centroids: torch.Tensor,
+    base_centroids: torch.Tensor,
     peak_power: float = 2.0,
     centroid_momentum: float = 0.95,
     min_spikes_for_centroid: int = 1,
@@ -176,14 +176,14 @@ def update_centroids_from_peaks(
     Source loop is intentional: centroid update is inherently per-source stateful.
     Only updates a centroid when enough peaks exist; reverts if spike <= base.
 
-    Returns (new_spike_centroid, new_base_centroid), both shape [M].
+    Returns (new_spike_centroids, new_base_centroids), both shape [M].
     """
     Y_det = Y.abs().pow(peak_power) if use_abs_for_detection else Y.pow(peak_power)
     base_mask = peak_mask & ~spike_mask
     M = Y.shape[1]
 
-    new_spike = spike_centroid.clone()
-    new_base = base_centroid.clone()
+    new_spike = spike_centroids.clone()
+    new_base = base_centroids.clone()
 
     for j in range(M):
         spike_vals = Y_det[spike_mask[:, j], j]
@@ -191,22 +191,22 @@ def update_centroids_from_peaks(
 
         if spike_vals.numel() >= min_spikes_for_centroid:
             candidate = (
-                centroid_momentum * spike_centroid[j]
+                centroid_momentum * spike_centroids[j]
                 + (1.0 - centroid_momentum) * spike_vals.mean()
             )
             new_spike[j] = candidate
 
         if base_vals.numel() >= min_base_peaks_for_centroid:
             candidate = (
-                centroid_momentum * base_centroid[j]
+                centroid_momentum * base_centroids[j]
                 + (1.0 - centroid_momentum) * base_vals.mean()
             )
             new_base[j] = candidate
 
     # Revert any source where the ordering invariant would be violated
     valid = new_spike > (new_base + eps)
-    new_spike = torch.where(valid, new_spike, spike_centroid)
-    new_base = torch.where(valid, new_base, base_centroid)
+    new_spike = torch.where(valid, new_spike, spike_centroids)
+    new_base = torch.where(valid, new_base, base_centroids)
 
     return new_spike, new_base
 

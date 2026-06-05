@@ -1,0 +1,14 @@
+# Optuna hyperparameter search space for adaptive decomposition.
+#
+# Each entry maps a Config field name to a [type, low, high] triple:
+#   log_float — sample from log-uniform distribution in [low, high]
+#   float     — sample from uniform distribution in [low, high]
+#   int       — sample integer from [low, high] (inclusive)
+#
+# Pass this file via --optim_config to scripts/run.py to enable Optuna search.
+# The resulting best_config is logged to wandb as a summary key.
+
+max_rel_delta_v:   [log_float, 1.0e-4, 5.0e-2]
+max_rel_delta_b:   [log_float, 1.0e-4, 1.0e-2]
+centroid_momentum: [float,     0.80,   0.99]
+batch_ms:          [int,       50,     200]

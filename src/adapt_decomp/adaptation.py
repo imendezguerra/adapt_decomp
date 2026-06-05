@@ -34,8 +34,8 @@ class AdaptDecomp:
         emg: torch.Tensor,
         whitening: torch.Tensor,
         sep_vectors: torch.Tensor,
-        base_centr: torch.Tensor,
-        spikes_centr: torch.Tensor,
+        base_centroids: torch.Tensor,
+        spike_centroids: torch.Tensor,
         emg_calib: torch.Tensor,
         ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
@@ -56,11 +56,12 @@ class AdaptDecomp:
                 self.config.device = "cpu"
 
         self.decomp = Decomposition(
-            whitening, sep_vectors, base_centr, spikes_centr,
+            whitening, sep_vectors, base_centroids, spike_centroids,
             emg_calib, ipts_calib, spikes_calib, self.config,
         )
         self.data = Data(emg, preprocess, config)
         self.save_path = save_path
+        self.diagnostics: dict = {}
 
         # Store originals for reset between optimisation trials
         self._V_orig = whitening.to(dtype=torch.float32).clone()
@@ -105,6 +106,26 @@ class AdaptDecomp:
             self.total_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
 
     def format_outputs(self) -> Dict:
+        """Collect per-batch results into a single output dict.
+
+        Always present:
+            spikes          [samples, M]    int32   — binary spike train
+            ipts            [samples, M]    float32 — source signal before B update
+            wh_time_ms      [batches]       float32
+            sv_time_ms      [batches]       float32
+            sd_time_ms      [batches]       float32
+            total_time_ms   [batches]       float32
+
+        Present when config.log_loss=True:
+            wh_loss         [batches]       float32
+            sv_loss         [batches, M]    float32
+            centroid_loss   [batches, M]    float32
+            wh_trace        [batches]       float32
+            total_loss      [batches]       float32
+
+        Present when config.debug=True:
+            diagnostics     dict            per-batch diagnostic tensors
+        """
         outputs = {
             "spikes": self.spikes.detach().cpu().clone(),
             "ipts": self.ipts.detach().cpu().clone(),
@@ -183,10 +204,10 @@ class AdaptDecomp:
 
         # --- Centroid update (current-batch portion only) ---
         if self.config.adapt_sd:
-            self.decomp.spike_centroid, self.decomp.base_centroid = (
+            self.decomp.spike_centroids, self.decomp.base_centroids = (
                 update_centroids_from_peaks(
                     Y, peak_mask, trusted_spike_mask,
-                    self.decomp.spike_centroid, self.decomp.base_centroid,
+                    self.decomp.spike_centroids, self.decomp.base_centroids,
                     peak_power=self.config.peak_power,
                     centroid_momentum=self.config.centroid_momentum,
                     min_spikes_for_centroid=self.config.min_spikes_for_centroid,
@@ -201,8 +222,8 @@ class AdaptDecomp:
         # calibration, not their absolute position. Scale-invariant: amplitude shifts
         # that move both centroids together don't inflate the loss.
         if self.config.log_loss:
-            sep_t   = self.decomp.spike_centroid - self.decomp.base_centroid
-            sep_cal = self.decomp.spike_centroid_cal - self.decomp.base_centroid_cal
+            sep_t   = self.decomp.spike_centroids - self.decomp.base_centroids
+            sep_cal = self.decomp.spike_centroids_cal - self.decomp.base_centroids_cal
             self.centroid_loss[batch_idx] = (
                 sep_t / sep_cal.clamp_min(self.config.eps) - 1.0
             ) ** 2
@@ -255,12 +276,12 @@ class AdaptDecomp:
             d.update({
                 **sv_diag,
                 "kappa_cal": self.decomp.kappa_cal.clone(),
-                "base_centroid": self.decomp.base_centroid.clone(),
-                "spike_centroid": self.decomp.spike_centroid.clone(),
-                "base_centroid_cal": self.decomp.base_centroid_cal.clone(),
-                "spike_centroid_cal": self.decomp.spike_centroid_cal.clone(),
+                "base_centroids": self.decomp.base_centroids.clone(),
+                "spike_centroids": self.decomp.spike_centroids.clone(),
+                "base_centroids_cal": self.decomp.base_centroids_cal.clone(),
+                "spike_centroids_cal": self.decomp.spike_centroids_cal.clone(),
                 "centroid_drift": (
-                    self.decomp.spike_centroid - self.decomp.spike_centroid_cal
+                    self.decomp.spike_centroids - self.decomp.spike_centroids_cal
                 ).abs().mean(),
                 "peak_counts_before": peak_mask.sum(dim=0),
                 "peak_counts_after": spike_mask.sum(dim=0),
@@ -378,7 +399,7 @@ class AdaptDecomp:
         )
         spike_mask_full = classify_peaks_from_adaptive_centroids(
             Y_det_full, peak_mask_full,
-            decomp.spike_centroid, decomp.base_centroid,
+            decomp.spike_centroids, decomp.base_centroids,
         )
 
         # Only the current-batch rows are used for outputs and adaptation
@@ -444,14 +465,14 @@ class AdaptDecomp:
         self.init_exe_time(len(dataset))
 
         if self.config.debug:
-            self.diagnostics = {}
+            self.diagnostics.clear()
 
         if self.config.save_params and self.save_path is not None:
             self.saver = H5ParamsBatchWriter(
                 path=self.save_path,
                 wh_shape=self.decomp.V.shape,
                 sv_shape=self.decomp.B.shape,
-                sd_shape=self.decomp.spike_centroid.shape,
+                sd_shape=self.decomp.spike_centroids.shape,
                 batches=len(dataset),
                 dtype="float32",
             )
@@ -464,8 +485,8 @@ class AdaptDecomp:
                 self.saver._append({
                     "whitening": self.decomp.V.cpu().numpy(),
                     "sep_vectors": self.decomp.B.cpu().numpy(),
-                    "base_centr": self.decomp.base_centroid.cpu().numpy(),
-                    "spikes_centr": self.decomp.spike_centroid.cpu().numpy(),
+                    "base_centroids": self.decomp.base_centroids.cpu().numpy(),
+                    "spike_centroids": self.decomp.spike_centroids.cpu().numpy(),
                 })
 
             spikes, ipts = self.run_decomp(emg_batch, i_t)
@@ -507,7 +528,7 @@ class AdaptDecomp:
         )
 
         if self.config.debug:
-            self.diagnostics = {}
+            self.diagnostics.clear()
 
         dataset = DataLoader(
             self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False

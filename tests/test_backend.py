@@ -115,8 +115,8 @@ def test_find_peaks_strict_suppresses_plateau():
 def test_classify_peaks_uses_adaptive_centroids():
     """spike_mask is True only where Y_det exceeds the adaptive threshold."""
     N, M = 20, 2
-    spike_centroid = torch.tensor([4.0, 6.0])
-    base_centroid = torch.tensor([1.0, 2.0])
+    spike_centroids = torch.tensor([4.0, 6.0])
+    base_centroids = torch.tensor([1.0, 2.0])
     # threshold = base + 0.5 * (spike - base) = [2.5, 4.0]
     Y_det = torch.zeros(N, M)
     Y_det[5, 0] = 3.0   # above threshold 2.5 → spike
@@ -127,7 +127,7 @@ def test_classify_peaks_uses_adaptive_centroids():
     peak_mask[10, 1] = True
 
     spike_mask = classify_peaks_from_adaptive_centroids(
-        Y_det, peak_mask, spike_centroid, base_centroid
+        Y_det, peak_mask, spike_centroids, base_centroids
     )
     assert spike_mask[5, 0].item() is True
     assert spike_mask[5, 1].item() is False
@@ -140,17 +140,17 @@ def test_classify_peaks_not_frozen_cal():
     Y_det = torch.tensor([[3.0]] * N)
     peak_mask = torch.ones(N, M, dtype=torch.bool)
 
-    # With high spike_centroid → threshold high → no spikes
+    # With high spike_centroids → threshold high → no spikes
     spike_mask_high = classify_peaks_from_adaptive_centroids(
         Y_det, peak_mask,
-        spike_centroid=torch.tensor([8.0]),
-        base_centroid=torch.tensor([1.0]),
+        spike_centroids=torch.tensor([8.0]),
+        base_centroids=torch.tensor([1.0]),
     )
-    # With low spike_centroid → threshold low → all spikes
+    # With low spike_centroids → threshold low → all spikes
     spike_mask_low = classify_peaks_from_adaptive_centroids(
         Y_det, peak_mask,
-        spike_centroid=torch.tensor([3.5]),
-        base_centroid=torch.tensor([1.0]),
+        spike_centroids=torch.tensor([3.5]),
+        base_centroids=torch.tensor([1.0]),
     )
     assert spike_mask_high.sum() == 0
     assert spike_mask_low.sum() == N
@@ -183,8 +183,8 @@ def test_centroid_init_from_calibration():
     spikes_cal[::50] = 1
 
     decomp = Decomposition(V, B, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
-    assert_close(decomp.spike_centroid, decomp.spike_centroid_cal)
-    assert_close(decomp.base_centroid, decomp.base_centroid_cal)
+    assert_close(decomp.spike_centroids, decomp.spike_centroids_cal)
+    assert_close(decomp.base_centroids, decomp.base_centroids_cal)
 
 
 # ---------------------------------------------------------------------------
@@ -192,8 +192,8 @@ def test_centroid_init_from_calibration():
 # ---------------------------------------------------------------------------
 
 def _make_centroid_inputs(N=100, M=2):
-    spike_centroid = torch.tensor([4.0] * M)
-    base_centroid = torch.tensor([1.0] * M)
+    spike_centroids = torch.tensor([4.0] * M)
+    base_centroids = torch.tensor([1.0] * M)
     # Y_det values: spikes are 5.0, baseline 0.5
     Y = torch.zeros(N, M)
     spike_mask = torch.zeros(N, M, dtype=torch.bool)
@@ -206,7 +206,7 @@ def _make_centroid_inputs(N=100, M=2):
     for idx in [20, 40, 60, 70, 80]:
         Y[idx] = 0.5
         peak_mask[idx] = True
-    return Y, peak_mask, spike_mask, spike_centroid, base_centroid
+    return Y, peak_mask, spike_mask, spike_centroids, base_centroids
 
 
 def test_centroid_update_with_sufficient_spikes():
@@ -244,9 +244,9 @@ def test_centroid_update_skipped_few_samples():
 # ---------------------------------------------------------------------------
 
 def test_centroid_update_reverted_if_invalid():
-    """If proposed update would make spike_centroid <= base_centroid, revert."""
+    """If proposed update would make spike_centroids <= base_centroids, revert."""
     N, M = 50, 1
-    # Set up so batch spike values are below base_centroid
+    # Set up so batch spike values are below base_centroids
     Y = torch.zeros(N, M)
     Y[10, 0] = 0.1   # tiny "spike"
     spike_mask = torch.zeros(N, M, dtype=torch.bool)

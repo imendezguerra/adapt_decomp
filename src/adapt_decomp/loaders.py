@@ -71,8 +71,8 @@ def load_example(path_emg:str, path_decomp:str, preprocess:bool) -> Dict:
 
         'whitening': torch.from_numpy(decomp['WH']),
         'sep_vectors': torch.from_numpy(decomp['BRT'].T),
-        'base_centr': torch.from_numpy(decomp['N_CENT']),
-        'spikes_centr': torch.from_numpy(decomp['SIG_CENT']),
+        'base_centroids': torch.from_numpy(decomp['N_CENT']),
+        'spike_centroids': torch.from_numpy(decomp['SIG_CENT']),
         'ext_fact': int(decomp['EXT_FACT']),
 
         'emg_calib': torch.from_numpy(decomp['EMG'].T),

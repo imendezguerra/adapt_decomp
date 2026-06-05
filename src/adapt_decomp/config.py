@@ -6,7 +6,25 @@ from typing import Dict, Literal, Optional
 
 
 @dataclass
-class Config:
+class _LegacyConfig:
+    """Fields retained only so old YAML files load without error. Not used by any logic."""
+    compute_loss: bool = True
+    log_wh_trace: bool = False
+    log_centroid_loss: bool = False
+    wh_learning_rate: float = 0.0
+    sv_learning_rate: float = 0.0
+    sv_epochs: int = 1
+    sv_tol: float = 1e-4
+    contrast_fun: Literal["logcosh", "cube"] = "logcosh"
+    cov_reg_eps: float = 1e-6
+    wh_error_clamp: float = 1e3
+    sv_error_clamp: float = 10.0
+    spike_height_mult: int = 3
+    spike_prev_weight: int = 5
+
+
+@dataclass
+class Config(_LegacyConfig):
     """Configuration parameters."""
 
     # General parameters
@@ -107,21 +125,6 @@ class Config:
     # --- IQR spike gate ---
     adapt_iqr_gate: bool = True
     iqr_gate_factor: float = 3.0
-
-    # --- Legacy parameters kept for backward compatibility ---
-    compute_loss: bool = True        # replaced by log_loss
-    log_wh_trace: bool = False       # replaced by log_loss
-    log_centroid_loss: bool = False  # replaced by log_loss
-    wh_learning_rate: float = 0.0   # unused — kept so existing YAML files load without error
-    sv_learning_rate: float = 0.0   # unused — kept so existing YAML files load without error
-    sv_epochs: int = 1
-    sv_tol: float = 1e-4
-    contrast_fun: Literal["logcosh", "cube"] = "logcosh"
-    cov_reg_eps: float = 1e-6
-    wh_error_clamp: float = 1e3
-    sv_error_clamp: float = 10.0
-    spike_height_mult: int = 3
-    spike_prev_weight: int = 5
 
     def __post_init__(self) -> None:
         self.spike_dist = int(self.spike_dist_ms * self.fs / 1000)

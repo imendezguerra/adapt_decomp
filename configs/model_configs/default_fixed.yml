@@ -1,55 +1,60 @@
-# General parameters
-fs: 2048
-device: null
+# General
+fs: 2048                          # Sampling frequency (Hz)
+device: null                      # Compute device: null (auto), "cpu", "cuda", "mps"
 
-# Preprocessing parameters
-lowcut: 20.0
-highcut: 500.0
-powerline: True
-powerline_freq: 50.0
+# Preprocessing
+lowcut: 20.0                      # High-pass cutoff (Hz)
+highcut: 500.0                    # Low-pass cutoff (Hz)
+powerline: true                   # Remove powerline artefact
+powerline_freq: 50.0              # Powerline frequency (Hz)
 
-# Decomposition parameters
-ext_fact: 10
+# Decomposition
+ext_fact: 10                      # Time-delay embedding: D = channels × ext_fact
 
-# Decomposition adaptation
-batch_ms: 100
-adapt_wh: False
-adapt_sv: False
-adapt_sd: False
-compute_loss: True
+# Adaptation flags — all disabled: run fixed calibration model without updating
+batch_ms: 100                     # Batch duration (ms); batch_size = batch_ms × fs / 1000
+adapt_wh: false                   # Do not adapt whitening matrix V
+adapt_sv: false                   # Do not adapt separation matrix B
+adapt_sd: false                   # Do not adapt spike / base centroids
+log_loss: true                    # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
 
-# Learning rates
-wh_learning_rate: 0.0
-sv_learning_rate: 0.0
+# Step-size (trust-region relative norm clips; unused when adapt_wh/sv are false)
+max_rel_delta_v: 5.0e-3           # Max ||ΔV||_F / ||V||_F per batch
+max_rel_delta_b: 1.0e-3           # Max ||ΔB||_F / ||B||_F per batch
 
-# Source separation parameters
-sv_epochs: 1
-sv_tol: 1.0e-4
-contrast_fun: logcosh
+# Whitening
+wh_mode: kl_to_identity           # KL target: "kl_to_identity" or "kl_to_cal"
+wh_b_coupling: false              # Propagate V-step frame correction to B
+shrinkage: 1.0e-3                 # Ledoit-Wolf shrinkage on FIFO covariance
+fifo_length: 0                    # FIFO samples for covariance (0 = auto: 2×D)
+max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
 
-# Whitening parameters
-cov_reg_eps: 1e-6
+# Source separation
+orthonormalization: qr            # Row orthonormalisation: "qr", "gram_schmidt", or "none"
+contrast_scope: batch_based       # "batch_based" or "spike_based"
+max_iter_b: 1                     # Fixed-point iterations per batch for B
+tol_b: 1.0e-4                     # Early-exit threshold: ||ΔB||_F / ||B||_F < tol_b
+min_spikes_for_update: 1          # Minimum trusted spikes per batch to trigger B update
 
-# Spike detection parameters
-spike_height_mult: 3
-spike_prev_weight: 5
-spike_dist_ms: 10
+# Spike detection
+spike_dist_ms: 10                 # Minimum inter-spike interval for NMS (ms)
+peak_power: 2.0                   # Exponent applied to source signal before peak detection
+strict_peaks: true                # Reject peaks whose right neighbour equals them
+use_abs_for_detection: true       # Use |Y|^peak_power rather than Y^peak_power
+source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
 
-# Adaptation hyperparameters
-wh_mode: kl_to_identity   # "kl_to_identity" or "kl_to_cal" (adapt_wh/adapt_sv are False so unused)
-shrinkage: 1.0e-3
-eps: 1.0e-7
-max_rel_delta_v: 5.0e-3
-max_rel_delta_b: 1.0e-3
-min_spikes_for_update: 1
-orthonormalization: qr
-contrast_scope: batch_based
-peak_power: 2.0
-strict_peaks: true
-use_abs_for_detection: true
-fifo_length: 0
-source_fifo_batches: 2
-centroid_momentum: 0.95
-min_spikes_for_centroid: 1
-min_base_peaks_for_centroid: 3
-debug: false
+# Centroid adaptation (inactive when adapt_sd is false)
+centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
+min_spikes_for_centroid: 1        # Min trusted spikes per batch to update spike centroid
+min_base_peaks_for_centroid: 3    # Min non-spike peaks per batch to update base centroid
+
+# IQR outlier gate
+adapt_iqr_gate: true              # Exclude outlier spikes from B and centroid updates
+iqr_gate_factor: 3.0              # Tukey fence: outlier if amplitude > Q75 + factor×IQR
+
+# Optimisation / trial checks
+trace_check: false                # Abort optimisation trial if whitening trace diverges
+trace_check_mode: median          # "median" or "last" for trace-check aggregation
+
+# Debug
+debug: false                      # Store per-batch diagnostics in outputs["diagnostics"]

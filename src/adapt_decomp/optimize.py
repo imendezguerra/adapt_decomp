@@ -19,8 +19,8 @@ def optimize_adapt_decomp(
     emg: torch.Tensor,
     whitening: torch.Tensor,
     sep_vectors: torch.Tensor,
-    base_centr: torch.Tensor,
-    spikes_centr: torch.Tensor,
+    base_centroids: torch.Tensor,
+    spike_centroids: torch.Tensor,
     emg_calib: torch.Tensor,
     ipts_calib: torch.Tensor,
     spikes_calib: torch.Tensor,
@@ -38,7 +38,7 @@ def optimize_adapt_decomp(
     Reuses a single AdaptDecomp instance across all Optuna trials, resetting
     calibration state between runs via _reset_params(). The objective is the
     combined whitening + contrast loss (single) or (wh_loss, source_loss) tuple
-    (multiobjective, requires base_config to include optim_loss="source").
+    (multiobjective, requires base_config to include optim_loss="multi_obj").
 
     param_space format::
 
@@ -68,8 +68,8 @@ def optimize_adapt_decomp(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centr=base_centr,
-        spikes_centr=spikes_centr,
+        base_centroids=base_centroids,
+        spike_centroids=spike_centroids,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,
@@ -121,8 +121,8 @@ def run_with_optimization(
     emg: torch.Tensor,
     whitening: torch.Tensor,
     sep_vectors: torch.Tensor,
-    base_centr: torch.Tensor,
-    spikes_centr: torch.Tensor,
+    base_centroids: torch.Tensor,
+    spike_centroids: torch.Tensor,
     emg_calib: torch.Tensor,
     ipts_calib: torch.Tensor,
     spikes_calib: torch.Tensor,
@@ -145,8 +145,8 @@ def run_with_optimization(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centr=base_centr,
-        spikes_centr=spikes_centr,
+        base_centroids=base_centroids,
+        spike_centroids=spike_centroids,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,
@@ -169,8 +169,8 @@ def run_with_optimization(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centr=base_centr,
-        spikes_centr=spikes_centr,
+        base_centroids=base_centroids,
+        spike_centroids=spike_centroids,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,

@@ -1,5 +1,6 @@
 """Data structures for input EMG and the precalibrated decomposition model."""
 
+import warnings
 from typing import Optional, Tuple
 
 import numpy as np
@@ -11,6 +12,14 @@ from adapt_decomp.preprocessing import bandpass_filter, remove_powerline
 
 
 def _extend_data_v(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tensor:
+    """Build a time-delay-embedded matrix from raw EMG.
+
+    Each of the ext_fact column blocks is the raw channel matrix shifted by one
+    additional sample, giving shape [samples, channels * ext_fact].  The resulting
+    D = channels * ext_fact dimensional space lets the whitening matrix V capture
+    temporal correlations across ext_fact consecutive samples in a single linear
+    projection.
+    """
     if device is None:
         device = data.device
     samples, chs = data.shape
@@ -75,10 +84,10 @@ class Data(Dataset):
 class Decomposition:
     """Precalibrated decomposition model with adaptive online state.
 
-    Immutable calibration references (K_cal, kappa_cal, spike_centroid_cal,
-    base_centroid_cal) are set once during init and never modified.
+    Immutable calibration references (K_cal, kappa_cal, spike_centroids_cal,
+    base_centroids_cal) are set once during init and never modified.
 
-    Adaptive state (V, B, spike_centroid, base_centroid, fifo_cov, source_fifo)
+    Adaptive state (V, B, spike_centroids, base_centroids, fifo_cov, source_fifo)
     is updated per batch during online adaptation.
     """
 
@@ -86,13 +95,21 @@ class Decomposition:
         self,
         V: torch.Tensor,          # whitening matrix [D, D]
         B: torch.Tensor,          # separation matrix [M, D]
-        base_centr: torch.Tensor, # baseline centroids [M] — kept as arg name for compat
-        spikes_centr: torch.Tensor,  # spike centroids [M]
+        base_centroids: torch.Tensor,   # baseline centroids [M]
+        spike_centroids: torch.Tensor,  # spike centroids [M]
         emg_calib: torch.Tensor,
         ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
         config: Optional[Config] = None,
     ) -> None:
+        """Initialise the decomposition model from precalibrated matrices.
+
+        Stores immutable calibration references (V, B, centroids, emg_calib,
+        ipts_calib, spikes_calib) and calls init_wh_update, init_sv_update, and
+        init_sd_update to compute the calibration statistics needed for online
+        adaptation.  After construction, adaptive state (V, B, spike_centroids,
+        base_centroids, fifo_cov, source_fifo) is ready for per-batch updates.
+        """
         if config is None:
             config = Config()
 
@@ -114,10 +131,10 @@ class Decomposition:
         self.B = B.to(dtype=torch.float32, device=self.device)
 
         # --- Immutable calibration centroid references ---
-        self.spike_centroid_cal = spikes_centr.to(
+        self.spike_centroids_cal = spike_centroids.to(
             dtype=torch.float32, device=self.device
         )
-        self.base_centroid_cal = base_centr.to(
+        self.base_centroids_cal = base_centroids.to(
             dtype=torch.float32, device=self.device
         )
 
@@ -319,8 +336,8 @@ class Decomposition:
     def init_sd_update(self) -> None:
         """Initialise adaptive centroids from calibration references, reset source FIFO,
         and compute IQR-gate statistics (Q75_cal, IQR_cal) in detection domain."""
-        self.spike_centroid = self.spike_centroid_cal.clone()
-        self.base_centroid = self.base_centroid_cal.clone()
+        self.spike_centroids = self.spike_centroids_cal.clone()
+        self.base_centroids = self.base_centroids_cal.clone()
         self.source_fifo: Optional[torch.Tensor] = None
 
         ipts   = self.ipts_calib.to(self.device)    # [N_cal, M]
@@ -343,8 +360,14 @@ class Decomposition:
                 IQR_cal[j] = q75 - q25
             else:
                 # Fallback: centroid-gap heuristic for units with sparse calibration spikes
-                Q75_cal[j] = self.spike_centroid_cal[j]
-                IQR_cal[j] = (self.spike_centroid_cal[j] - self.base_centroid_cal[j]).clamp_min(self.eps)
+                warnings.warn(
+                    f"Unit {j}: fewer than {_min_spikes_for_iqr} calibration spikes; "
+                    "IQR gate using centroid-gap heuristic.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                Q75_cal[j] = self.spike_centroids_cal[j]
+                IQR_cal[j] = (self.spike_centroids_cal[j] - self.base_centroids_cal[j]).clamp_min(self.eps)
 
         self.Q75_cal = Q75_cal  # [M]
         self.IQR_cal = IQR_cal  # [M]
