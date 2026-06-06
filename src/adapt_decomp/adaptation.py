@@ -550,7 +550,7 @@ class AdaptDecomp:
 
         wh = self._compute_total_wh_loss()
         if self.config.optim_loss == "single_obj":
-            return wh + self._compute_total_sv_loss() + self._compute_total_centroid_loss()
+            return wh + self._compute_total_sv_loss()
         return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
 
     # ------------------------------------------------------------------

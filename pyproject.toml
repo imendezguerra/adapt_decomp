@@ -23,5 +23,7 @@ dependencies = [
     "seaborn",
     "ipykernel",
     "torch",                   # pip version (CPU by default)
-    "wandb",             
+    "wandb",
+    "optuna",
+    "cmaes",                   # required by optuna.samplers.CmaEsSampler
 ]

@@ -47,7 +47,7 @@ def _log_outputs(outputs, data, config):
 
 
 def run(model_config, data_config, wandb_project_name, wandb_config=None,
-        optim_config=None, n_trials=50):
+        optim_config=None, n_trials=100):
     """Run adaptive decomposition, optionally with Optuna hyperparameter search.
 
     Args:
@@ -119,7 +119,7 @@ def main():
                         help="Number of wandb sweep trials")
     parser.add_argument("--optim_config", type=str, default=None,
                         help="Path to Optuna param-space YAML (single-obj optimisation)")
-    parser.add_argument("--n_trials", type=int, default=50,
+    parser.add_argument("--n_trials", type=int, default=100,
                         help="Number of Optuna trials (used with --optim_config)")
     parser.add_argument("--wandb_project_name", type=str,
                         default="adaptive_emg_decomp_dyn",

@@ -7,8 +7,23 @@
 #
 # Pass this file via --optim_config to scripts/run.py to enable Optuna search.
 # The resulting best_config is logged to wandb as a summary key.
+#
+# These bounds match DEFAULT_PARAM_SPACE in src/adapt_decomp/optimize.py.
+# Empirical rationale (from root-cause analysis on simulated data):
+#   max_rel_delta_v:   optimal values cluster in [1e-4, 5e-2]; anything above
+#                      causes V divergence, anything below is non-adaptation.
+#   max_rel_delta_b:   optimal values cluster in [1e-3, 1e-1]; the upper bound
+#                      was widened from 1e-2 (previous default was too tight).
+#   centroid_momentum: lower bound extended to 0.70 to allow faster centroid
+#                      tracking, which partially compensates for slow B adaptation
+#                      (relevant for iter1 configs and high-non-stationarity data).
+#
+# batch_ms is intentionally excluded from this default file because changing it
+# alters the covariance-estimation window and the kappa_cal / sigma_K_cal
+# references, requiring dedicated experiments. To search it, add explicitly:
+#   batch_ms: [int, 50, 200]
+# The default value (100 ms) is set in Config.batch_ms.
 
 max_rel_delta_v:   [log_float, 1.0e-4, 5.0e-2]
-max_rel_delta_b:   [log_float, 1.0e-4, 1.0e-2]
-centroid_momentum: [float,     0.80,   0.99]
-batch_ms:          [int,       50,     200]
+max_rel_delta_b:   [log_float, 1.0e-3, 1.0e-1]
+centroid_momentum: [float,     0.70,   0.98]

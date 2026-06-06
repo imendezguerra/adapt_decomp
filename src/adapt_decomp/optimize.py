@@ -2,6 +2,20 @@
 
 Self-contained: no dependency on decomposition.cbss. All inputs are raw tensors
 using the same conventions as AdaptDecomp.__init__ (sep_vectors is [M, D]).
+
+Default search space
+--------------------
+DEFAULT_PARAM_SPACE covers the three parameters whose empirical optimal values
+cluster in well-defined ranges across simulated and experimental datasets:
+
+    max_rel_delta_v   — whitening learning rate (log-uniform)
+    max_rel_delta_b   — separation-vector learning rate (log-uniform)
+    centroid_momentum — EMA momentum for spike/base centroid tracking (uniform)
+
+batch_ms is intentionally excluded from the default space because changing it
+alters the covariance-estimation window and the kappa_cal reference, requiring
+dedicated experiments. To include it, add it to the param_space dict explicitly:
+    param_space = {**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}
 """
 
 from __future__ import annotations
@@ -13,6 +27,12 @@ import torch
 
 from adapt_decomp.adaptation import AdaptDecomp
 from adapt_decomp.config import Config
+
+DEFAULT_PARAM_SPACE: dict = {
+    "max_rel_delta_v":   ("log_float", 1e-4, 5e-2),
+    "max_rel_delta_b":   ("log_float", 1e-3, 1e-1),
+    "centroid_momentum": ("float",     0.70, 0.98),
+}
 
 
 def optimize_adapt_decomp(
@@ -27,7 +47,7 @@ def optimize_adapt_decomp(
     param_space: dict,
     *,
     base_config: Optional[dict] = None,
-    n_trials: int = 50,
+    n_trials: int = 100,
     preprocess: bool = False,
     sampler=None,
     config: Optional[Config] = None,
@@ -36,18 +56,26 @@ def optimize_adapt_decomp(
     """Search for optimal AdaptDecomp hyperparameters using Bayesian optimisation.
 
     Reuses a single AdaptDecomp instance across all Optuna trials, resetting
-    calibration state between runs via _reset_params(). The objective is the
-    combined whitening + contrast loss (single) or (wh_loss, source_loss) tuple
-    (multiobjective, requires base_config to include optim_loss="multi_obj").
+    calibration state between runs via _reset_params(). The single-objective
+    loss is wh_loss + sv_loss (centroid_loss excluded — it is 0-2% of total
+    and has a mild anti-signal correlation with RoA). For multiobjective,
+    returns (wh_loss, sv_loss, centroid_loss) as a 3-objective Pareto problem.
+
+    Default sampler for single-objective: CmaEsSampler (n_startup_trials=15).
+    CMA-ES is preferred over TPE because the optimal (delta_v, delta_b,
+    centroid_momentum) configurations are jointly constrained along a ridge
+    in parameter space; CMA-ES learns this covariance, TPE cannot.
 
     param_space format::
 
         {
             "max_rel_delta_v":   ("log_float", 1e-4, 5e-2),
-            "centroid_momentum": ("float",     0.8,  0.99),
-            "batch_ms":          ("int",       50,   200),
-            "wh_mode":           ("categorical", ["kl_to_identity", "kl_to_cal"]),
+            "max_rel_delta_b":   ("log_float", 1e-3, 1e-1),
+            "centroid_momentum": ("float",     0.70, 0.98),
         }
+
+    Use DEFAULT_PARAM_SPACE for the recommended defaults. To also search
+    batch_ms, extend it: {**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}.
 
     Returns (best_config_dict, optuna.Study).
     For multiobjective, study.best_trials returns the full Pareto front;
@@ -101,7 +129,9 @@ def optimize_adapt_decomp(
     else:
         study = optuna.create_study(
             direction="minimize",
-            sampler=sampler if sampler is not None else optuna.samplers.TPESampler(),
+            sampler=sampler if sampler is not None else optuna.samplers.CmaEsSampler(
+                n_startup_trials=15,
+            ),
         )
 
     study.optimize(objective, n_trials=n_trials)
@@ -129,7 +159,7 @@ def run_with_optimization(
     param_space: dict,
     *,
     base_config: Optional[dict] = None,
-    n_trials: int = 50,
+    n_trials: int = 100,
     preprocess: bool = False,
     sampler=None,
     config: Optional[Config] = None,
