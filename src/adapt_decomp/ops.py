@@ -285,6 +285,71 @@ def update_B_spike_gated(
 
 
 @torch.no_grad()
+def kmeans2_1d(vals: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Globally optimal 1-D k=2 clustering via sorted threshold sweep.
+
+    For 1-D data the optimal 2-means partition is always a single threshold.
+    Sorting + prefix sums evaluate all N-1 split points in O(N) after the
+    O(N log N) sort — guaranteed global optimum, no random restarts needed.
+
+    Returns:
+        labels:    [N] LongTensor — 0 for lower cluster, 1 for upper cluster.
+        centroids: [2] tensor    — [c_lower, c_upper].
+    """
+    sorted_vals, sort_idx = vals.sort()
+    N = sorted_vals.shape[0]
+    cs  = sorted_vals.cumsum(0)
+    cs2 = (sorted_vals ** 2).cumsum(0)
+    ks  = torch.arange(1, N, device=vals.device, dtype=vals.dtype)
+    n0, n1  = ks, N - ks
+    s0, s2_0 = cs[:-1], cs2[:-1]
+    s1, s2_1 = cs[-1] - s0, cs2[-1] - s2_0
+    cost = (s2_0 - s0 ** 2 / n0) + (s2_1 - s1 ** 2 / n1)
+    k = int(cost.argmin().item()) + 1
+    labels_sorted = torch.zeros(N, dtype=torch.long, device=vals.device)
+    labels_sorted[k:] = 1
+    labels = torch.empty_like(labels_sorted)
+    labels[sort_idx] = labels_sorted
+    c0 = sorted_vals[:k].median()
+    c1 = sorted_vals[k:].median()
+    return labels, torch.stack([c0, c1])
+
+
+@torch.no_grad()
+def contrast_fn(
+    u: torch.Tensor,
+    fn: Literal["logcosh", "square", "cube", "smooth_abs"] = "logcosh",
+    *,
+    contrast_exp: float = 3.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Evaluate a contrast function and its derivative.
+
+    The ``logcosh`` branch uses :func:`log_cosh` for numerical stability.
+
+    Args:
+        u:            [T] estimated source signal.
+        fn:           Which contrast function to use.
+        contrast_exp: Exponent for ``smooth_abs`` (default 3.0).
+
+    Returns:
+        ``(g_u, dg_u)`` — contrast value and derivative, both ``[T]``.
+    """
+    if fn == "logcosh":
+        tanh_u = torch.tanh(u)
+        return tanh_u, 1.0 - tanh_u ** 2
+    if fn == "square":
+        return u ** 2, 2.0 * u
+    if fn == "smooth_abs":
+        eps = 1e-3
+        a = contrast_exp
+        g_u  = (eps + u ** 2) ** ((a - 3) / 2) * (a * u ** 2 + eps)
+        dg_u = (a - 1) * u * (eps + u ** 2) ** ((a - 5) / 2) * (a * u ** 2 + 3 * eps)
+        return g_u, dg_u
+    # cube
+    return u ** 3, 3.0 * u ** 2
+
+
+@torch.no_grad()
 def gate_spikes_by_iqr(
     Y: torch.Tensor,
     spike_mask: torch.Tensor,

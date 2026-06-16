@@ -1,9 +1,11 @@
 """Online adaptive EMG decomposition."""
 
 import time
+from typing import Dict, Optional, Tuple, Union
+
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Tuple
 
 from adapt_decomp.config import Config
 from adapt_decomp.data_structures import Data, Decomposition
@@ -28,6 +30,75 @@ class AdaptDecomp:
       3. Adaptive centroid-based spike classification.
       4. Spike-gated B update with retained contrast error and QR orthonormalisation.
     """
+
+    # ------------------------------------------------------------------
+    # Factory constructor
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_calibration(
+        cls,
+        emg: Union[torch.Tensor, np.ndarray],
+        calibration: "CBSSResult",
+        config: Optional[Config] = None,
+        preprocess: bool = False,
+        save_path: Optional[str] = None,
+    ) -> "AdaptDecomp":
+        """Build ``AdaptDecomp`` from a ``CBSSResult`` produced by ``calibrate_from_indices()``.
+
+        ``calibration.emg`` must be set (guaranteed when using ``calibrate_from_indices()``).
+        ``calibration.gt_matched_indices`` (if present) is stored on the instance and
+        propagated through ``format_outputs()``.
+
+        Args:
+            emg:          ``[T, C]`` online EMG recording (the segment after calibration).
+            calibration:  ``CBSSResult`` from ``calibrate_from_indices()`` (optionally filtered
+                          by ``select_units_unsupervised()`` / ``select_units_supervised()``).
+            config:       ``Config`` for the online adaptation (default ``Config()``).
+            preprocess:   Whether ``Data`` should apply bandpass pre-processing.
+            save_path:    Optional HDF5 path for persisting adaptive parameters.
+        """
+        from adapt_decomp.cbss import CBSSResult  # local import to avoid circular
+
+        if not isinstance(calibration, CBSSResult):
+            raise TypeError(f"calibration must be a CBSSResult, got {type(calibration)}")
+        if calibration.emg is None:
+            raise ValueError(
+                "calibration.emg is None. Use calibrate_from_indices() which sets save_emg=True."
+            )
+
+        def _t(arr: Optional[np.ndarray]) -> Optional[torch.Tensor]:
+            if arr is None:
+                return None
+            if isinstance(arr, torch.Tensor):
+                return arr.float()
+            return torch.from_numpy(np.asarray(arr, dtype=np.float32))
+
+        emg_t: torch.Tensor
+        if isinstance(emg, np.ndarray):
+            emg_t = torch.from_numpy(emg.astype(np.float32))
+        else:
+            emg_t = emg.float()
+
+        sep_vectors_t = _t(calibration.sep_vectors)
+        if sep_vectors_t is not None:
+            sep_vectors_t = sep_vectors_t.T.contiguous()  # CBSSResult stores [dim, n_mu]; AdaptDecomp expects [n_mu, dim]
+
+        instance = cls(
+            emg=emg_t,
+            whitening=_t(calibration.whitening),
+            sep_vectors=sep_vectors_t,
+            base_centroids=_t(calibration.base_centr),
+            spike_centroids=_t(calibration.spikes_centr),
+            emg_calib=_t(calibration.emg),
+            ipts_calib=_t(calibration.sources),
+            spikes_calib=_t(calibration.spikes),
+            preprocess=preprocess,
+            config=config,
+            save_path=save_path,
+        )
+        instance.gt_matched_indices = calibration.gt_matched_indices  # None if unsupervised
+        return instance
 
     def __init__(
         self,
@@ -146,6 +217,8 @@ class AdaptDecomp:
             outputs["total_loss"] = self.total_loss.detach().cpu().clone()
         if self.config.debug and hasattr(self, "diagnostics"):
             outputs["diagnostics"] = self.diagnostics
+        if hasattr(self, "gt_matched_indices"):
+            outputs["gt_matched_indices"] = self.gt_matched_indices
         return outputs
 
     # ------------------------------------------------------------------
