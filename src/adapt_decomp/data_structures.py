@@ -12,13 +12,10 @@ from adapt_decomp.preprocessing import bandpass_filter, remove_powerline
 
 
 def _extend_data_v(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tensor:
-    """Build a time-delay-embedded matrix from raw EMG.
+    """Build a time-delay-embedded matrix from raw EMG using block-shift ordering.
 
-    Each of the ext_fact column blocks is the raw channel matrix shifted by one
-    additional sample, giving shape [samples, channels * ext_fact].  The resulting
-    D = channels * ext_fact dimensional space lets the whitening matrix V capture
-    temporal correlations across ext_fact consecutive samples in a single linear
-    projection.
+    Column block k (cols k*chs : (k+1)*chs) contains all channels delayed by k
+    samples, giving shape [samples, channels * ext_fact].
     """
     if device is None:
         device = data.device
@@ -27,6 +24,35 @@ def _extend_data_v(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tens
     for i in range(ext_fact):
         data_ext[i:samples, chs * i: chs * (i + 1)] = data[0:(samples - i), :]
     return data_ext
+
+
+def _extend_data_toeplitz(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tensor:
+    """Build a time-delay-embedded matrix using the Toeplitz (per-channel) ordering.
+
+    Column block i (cols i*ext_fact : (i+1)*ext_fact) contains ext_fact consecutive
+    delays of channel i, giving shape [samples, channels * ext_fact].  This is the
+    row-major equivalent of muniverse's CBSS extension scheme, so whitening matrices
+    and separation vectors produced by CBSS (extension_method='toeplitz') are
+    directly compatible with adapt_decomp when this function is used.
+    """
+    if device is None:
+        device = data.device
+    samples, chs = data.shape
+    data_ext = torch.zeros((samples, int(chs * ext_fact)), device=device)
+    for k in range(ext_fact):
+        # Stride indexing: columns k, ext_fact+k, 2*ext_fact+k, ... are channel 0,1,2,...
+        # at delay k — fills all channels in one vectorised slice.
+        data_ext[k:, k::ext_fact] = data[: samples - k, :]
+    return data_ext
+
+
+def _extend_data(
+    data: torch.Tensor, ext_fact: int, method: str = "block", device=None
+) -> torch.Tensor:
+    """Dispatch to the requested time-delay extension scheme."""
+    if method == "toeplitz":
+        return _extend_data_toeplitz(data, ext_fact, device=device)
+    return _extend_data_v(data, ext_fact, device=device)
 
 
 class Data(Dataset):
@@ -46,7 +72,7 @@ class Data(Dataset):
         else:
             offset = emg.mean(axis=0)
             emg -= offset
-        self.extend_data(emg, config.ext_fact)
+        self.extend_data(emg, config.ext_fact, config.extension_method)
 
         self.emg_ext = self.emg_ext.to(device=config.device, dtype=torch.float32)
         self.labels = torch.arange(emg.shape[0]).to(device=config.device)
@@ -77,8 +103,8 @@ class Data(Dataset):
         emg -= offset
         return torch.from_numpy(emg), torch.from_numpy(offset)
 
-    def extend_data(self, emg: torch.Tensor, ext_fact: int) -> None:
-        self.emg_ext = _extend_data_v(emg, ext_fact)
+    def extend_data(self, emg: torch.Tensor, ext_fact: int, method: str = "block") -> None:
+        self.emg_ext = _extend_data(emg, ext_fact, method=method)
 
 
 class Decomposition:
@@ -125,6 +151,7 @@ class Decomposition:
         self.peak_power = config.peak_power
         self.use_abs_for_detection = config.use_abs_for_detection
         self.eps = config.eps
+        self.extension_method = config.extension_method
 
         # --- Adaptive matrices ---
         self.V = V.to(dtype=torch.float32, device=self.device)
@@ -167,7 +194,7 @@ class Decomposition:
         applied to the FIFO to produce Rz, keeping Rz full-rank even when the
         batch is smaller than D.
         """
-        X_cal = _extend_data_v(self.emg_calib, self.ext_fact).to(device=self.device)
+        X_cal = _extend_data(self.emg_calib, self.ext_fact, method=self.extension_method).to(device=self.device)
         X_cal = X_cal - X_cal.mean(0, keepdim=True)
 
         # FIFO length: at least D to keep Rz full-rank; default = 2×D

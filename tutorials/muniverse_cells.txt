@@ -1,0 +1,180 @@
+--- CELL 5 ---
+def clean_path(subject, condition, key):
+    return os.path.join(OUTPUT_DIR, 'data', subject, 'clean',
+                        f'{subject}_{MUSCLE}_{condition}_{key}.npz')
+
+def noisy_path(subject, condition, snr_db):
+    return os.path.join(OUTPUT_DIR, 'data', subject, 'noisy',
+                        f'{subject}_{MUSCLE}_{condition}_snr{snr_db}dB_emg.npz')
+
+def cbss_path(subject, condition, snr_db):
+    return os.path.join(OUTPUT_DIR, 'decomposition', subject,
+                        f'{subject}_{MUSCLE}_{condition}_snr{snr_db}dB_cbss.npz')
+
+def cal_units_path(subject, condition, snr_db):
+    return os.path.join(OUTPUT_DIR, 'calibrated_units', subject,
+                        f'{subject}_{MUSCLE}_{condition}_snr{snr_db}dB_calibrated_units.npz')
+
+def load_gt_spikes(subject, condition):
+    path = clean_path(subject, condition, 'spikes')
+    obj  = np.load(path, allow_pickle=True)['spikes']
+    return [np.asarray(s) for s in obj]
+
+def load_cbss_results(subject, condition, snr_db):
+    path = cbss_path(subject, condition, snr_db)
+    if not os.path.exists(path):
+        return None, None, {}
+    d          = np.load(path, allow_pickle=False)
+    sources    = d['sources']
+    silhouette = d['silhouette']
+    spikes     = {int(k.replace('spikes_unit', '')): d[k]
+                  for k in d.files if k.startswith('spikes_unit')}
+    return sources, silhouette, spikes
+
+
+def rate_of_agreement(spike_trains_ref, spike_trains_test,
+                      fs=2048, tol_spike_ms=1, tol_train_ms=40):
+    """Cross-correlate binary spike trains, match GT–EST pairs, return RoA per pair."""
+    if len(spike_trains_ref.shape) == 1:
+        spike_trains_ref  = np.expand_dims(spike_trains_ref,  axis=-1)
+    if len(spike_trains_test.shape) == 1:
+        spike_trains_test = np.expand_dims(spike_trains_test, axis=-1)
+
+    tol_spike    = round(tol_spike_ms / 1000 * fs)
+    tol_train    = round(tol_train_ms / 1000 * fs)
+    n_ref        = spike_trains_ref.shape[1]
+    n_test       = spike_trains_test.shape[1]
+
+    if not np.any(spike_trains_test):
+        return np.zeros(n_test), list(zip(range(n_test), range(n_test))), [0] * n_test
+
+    corr_mat = np.zeros((n_ref, n_test))
+    lag_mat  = np.zeros((n_ref, n_test), dtype=np.int64)
+    for ur in range(n_ref):
+        for ut in range(n_test):
+            t0   = np.convolve(spike_trains_ref[:, ur],  np.ones(tol_spike), mode='same')
+            t1   = np.convolve(spike_trains_test[:, ut], np.ones(tol_spike), mode='same')
+            corr = signal.correlate(t0, t1, mode='full')
+            lags = signal.correlation_lags(len(t0), len(t1), mode='full')
+            lag  = lags[np.argmax(np.abs(corr))]
+            if not np.isscalar(lag):
+                lag = int(np.amin(lag))
+            if abs(lag) > tol_train:
+                lag = 0
+            corr_mat[ur, ut] = corr.max()
+            lag_mat[ur, ut]  = int(lag)
+
+    pair_idx, pair_lag = [], []
+    while np.any(corr_mat):
+        idx = np.unravel_index(np.argmax(corr_mat), cor
+--- CELL 9 ---
+rows_yield   = []
+rows_metrics = []   # one row per matched GT–EST pair
+
+for subject in SUBJECTS:
+    for condition in CONDITIONS:
+        gt_spikes = load_gt_spikes(subject, condition)
+        if not gt_spikes:
+            print(f'  No GT spikes: {subject} / {condition}')
+            continue
+
+        for snr_db in SNR_LEVELS_DB:
+            _, _, est_spikes = load_cbss_results(subject, condition, snr_db)
+            n_mus = len(est_spikes)
+            rows_yield.append({
+                'subject':   subject,
+                'condition': CONDITION_LABELS[condition],
+                'snr_db':    snr_db,
+                'n_mus':     n_mus,
+            })
+
+            if n_mus > 0:
+                pairs = compute_full_metrics_for_recording(
+                    gt_spikes, est_spikes, iso_end_s=ISO_END_S, fs=FS)
+                for p in pairs:
+                    rows_metrics.append({
+                        'subject':   subject,
+                        'condition': CONDITION_LABELS[condition],
+                        'snr_db':    snr_db,
+                        **p,
+                    })
+
+df_yield   = pd.DataFrame(rows_yield)
+df_metrics = pd.DataFrame(rows_metrics)
+
+print(f'Yield records  : {len(df_yield)}')
+print(f'Matched pairs  : {len(df_metrics)}')
+if not df_metrics.empty:
+    print(f'  RoA ≥ {ROA_THRESH} : {(df_metrics.roa >= ROA_THRESH).sum()} pairs')
+print('\nYield summary:')
+print(df_yield.groupby(['condition', 'snr_db'])['n_mus'].describe().round(1))
+if not df_metrics.empty:
+    print('\nMetrics summary (all conditions + SNR pooled):')
+    print(df_metrics[['roa', 'precision', 'sensitivity']].describe().round(3))
+--- CELL 17 ---
+import subprocess as _sp
+try:
+    _git_commit = _sp.check_output(
+        ['git', 'rev-parse', 'HEAD'], stderr=_sp.DEVNULL,
+    ).decode().strip()
+except Exception:
+    _git_commit = 'unknown'
+
+total_hq = 0
+skipped  = 0
+
+for subject in SUBJECTS:
+    for condition in CONDITIONS:
+        gt_spikes = load_gt_spikes(subject, condition)
+
+        for snr_db in SNR_LEVELS_DB:
+            cbss_file = cbss_path(subject, condition, snr_db)
+            if not os.path.exists(cbss_file):
+                skipped += 1
+                continue
+
+            d = np.load(cbss_file, allow_pickle=False)
+            est_spikes = {int(k.replace('spikes_unit', '')): d[k]
+                          for k in d.files if k.startswith('spikes_unit')}
+            if not est_spikes:
+                continue
+
+            pairs = compute_full_metrics_for_recording(
+                gt_spikes, est_spikes, iso_end_s=ISO_END_S, fs=FS)
+            hq = [p for p in pairs if p['roa'] >= ROA_THRESH]
+            if not hq:
+                continue
+
+            # Map CBSS unit IDs → column index in mu_filters / sources
+            all_unit_ids = sorted(est_spikes.keys())
+            uid_to_col   = {uid: col for col, uid in enumerate(all_unit_ids)}
+            hq_cols      = [uid_to_col[p['est_unit']] for p in hq]
+
+            iso_n = int(ISO_END_S * FS)
+
+            mu_filters = d['mu_filters']   # (n_ch_ext, n_all_units)
+            whitening  = d['whitening']    # (n_ch_ext, n_ch_ext)
+            centroids  = d['centroids']    # (n_all_units, 2)
+
+            # Calibration EMG (noisy, channels × iso_n) — same data CBSS whitened
+            emg_full = np.load(noisy_path(subject, condition, snr_db))['emg']  # (T, 100)
+            emg_cal  = emg_full[:iso_n].T.astype(np.float32)                   # (100, iso_n)
+
+            # Biomechanical context over calibration window (flat at 0 ° / 15 % MVC by design)
+            angle_cal  = np.load(clean_path(subject, condition, 'angle'))['angle'][:iso_n]
+            effort_cal = np.load(clean_path(subject, condition, 'effort'))['effort'][:iso_n]
+
+            save_dict = {
+                'whitening':      whitening,
+                'mu_filters':     mu_filters[:, hq_cols],
+                'centroids':      centroids[hq_cols],
+                'sources':        d['sources'][hq_cols, :],
+                'emg_cal':        emg_cal,
+                'angle':          angle_cal,
+                'effort':         effort_cal,
+                'gt_unit_labels': np.array([p['gt_unit']     for p in hq], dtype=np.int32),
+                'est_unit_ids':   np.array([p['est_unit']    for p in hq], dtype=np.int32),
+                'roa':            np.array([p['roa']         for p in hq], dtype=np.float64),
+                'precision':      np.array([p['precision']   for p in hq], dtype=np.float64),
+                'sensitivity':    np.array([p['sensitivity'] for p in hq], dtype=np.float64),
+                'lag_samples':    np.array([p['lag_samples'] for p in hq], dtyp

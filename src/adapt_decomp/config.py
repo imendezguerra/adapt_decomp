@@ -39,6 +39,7 @@ class Config(_LegacyConfig):
 
     # Decomposition parameters
     ext_fact: int = 10
+    extension_method: Literal["block", "toeplitz"] = "block"
 
     # Decomposition adaptation flags
     batch_ms: int = 100

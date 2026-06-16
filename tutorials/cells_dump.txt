@@ -1,0 +1,149 @@
+---CELL---
+path_emg    = Path('..', 'data', 'example', 'data_sim.hdf5')
+path_decomp = Path('..', 'data', 'example', 'decomp_sim.mat')
+
+data = load_example(path_emg, path_decomp, False)
+
+n_units      = data['sep_vectors'].shape[0]
+fs           = data['fs']
+timestamps   = data['timestamps'].numpy()
+ext_fact     = data['ext_fact']
+n_samples    = data['emg'].shape[0]
+duration_s   = n_samples / fs
+
+print(f'Units: {n_units}  |  Samples: {n_samples}  |  fs: {fs} Hz  |  Duration: {duration_s:.1f} s')
+
+---CELL---
+_out_no_path = RESULTS_DIR / 'out_no.pt'
+
+if RUN_OPTIMISATION:
+    cfg_no = Config()
+    cfg_no.ext_fact       = data['ext_fact']
+    cfg_no.adapt_wh       = False
+    cfg_no.adapt_sv       = False
+    cfg_no.adapt_sd       = False
+    cfg_no.log_loss       = True
+    cfg_no.device         = 'cpu'
+    cfg_no.wh_mode        = 'kl_to_cal'
+    cfg_no.contrast_scope = 'spike_based'
+    cfg_no.wh_b_coupling  = False
+
+    dec_no = AdaptDecomp(
+        emg             = data['emg'].clone(),
+        whitening       = data['whitening'].clone(),
+        sep_vectors     = data['sep_vectors'].clone(),
+        base_centroids  = data['base_centroids'].clone(),
+        spike_centroids = data['spike_centroids'].clone(),
+        emg_calib       = data['emg_calib'].clone(),
+        ipts_calib      = data['ipts_calib'].clone(),
+        spikes_calib    = data['spikes_calib'].clone(),
+        preprocess      = data['preprocess'],
+        config          = cfg_no,
+    )
+    out_no = dec_no.run()
+    torch.save(out_no, _out_no_path)
+    print(f'Saved → {_out_no_path}')
+else:
+    out_no = torch.load(_out_no_path, weights_only=False)
+    print(f'Loaded from {_out_no_path}')
+print('No-adaptation run complete.')
+
+---CELL---
+_cfg_so_path   = RESULTS_DIR / 'best_config_so.json'
+_study_so_path = RESULTS_DIR / 'study_so_trials.csv'
+
+if RUN_OPTIMISATION:
+    best_config_so, study_so = optimize_adapt_decomp(
+        emg             = data['emg'],
+        whitening       = data['whitening'],
+        sep_vectors     = data['sep_vectors'],
+        base_centroids  = data['base_centroids'],
+        spike_centroids = data['spike_centroids'],
+        emg_calib       = data['emg_calib'],
+        ipts_calib      = data['ipts_calib'],
+        spikes_calib    = data['spikes_calib'],
+        param_space     = param_space,
+        base_config     = base_config,
+        n_trials        = 50,
+        preprocess      = data['preprocess'],
+    )
+    with open(_cfg_so_path, 'w') as f:
+        json.dump({k: _to_json_safe(v) for k, v in best_config_so.items()}, f, indent=2)
+    pd.DataFrame([{'trial': t.number, 'value': t.value, **t.params}
+                  for t in study_so.trials if t.value is not None]).to_csv(_study_so_path, index=False)
+    print(f'Saved → {_cfg_so_path}')
+else:
+    with open(_cfg_so_path) as f:
+        best_config_so = json.load(f)
+    study_so = None
+    print(f'Loaded from {_cfg_so_path}')
+
+print('Best hyperparameters (single-obj):')
+for k in param_space:
+    print(f'  {k}: {best_config_so[k]:.4e}')
+
+---CELL---
+_out_so_path = RESULTS_DIR / 'out_so.pt'
+
+if RUN_OPTIMISATION:
+    cfg_so = Config()
+    for k, v in best_config_so.items():
+        setattr(cfg_so, k, v)
+
+    dec_so = AdaptDecomp(
+        emg             = data['emg'].clone(),
+        whitening       = data['whitening'].clone(),
+        sep_vectors     = data['sep_vectors'].clone(),
+        base_centroids  = data['base_centroids'].clone(),
+        spike_centroids = data['spike_centroids'].clone(),
+        emg_calib       = data['emg_calib'].clone(),
+        ipts_calib      = data['ipts_calib'].clone(),
+        spikes_calib    = data['spikes_calib'].clone(),
+        preprocess      = data['preprocess'],
+        config          = cfg_so,
+    )
+    out_so = dec_so.run()
+    torch.save(out_so, _out_so_path)
+    print(f'Saved → {_out_so_path}')
+else:
+    out_so = torch.load(_out_so_path, weights_only=False)
+    print(f'Loaded from {_out_so_path}')
+print('Single-obj adaptation run complete.')
+
+---CELL---
+_cfg_mo_path = RESULTS_DIR / 'best_config_mo.json'
+_out_mo_path = RESULTS_DIR / 'out_mo.pt'
+
+base_config_mo = {**base_config, 'optim_loss': 'multi_obj'}
+
+if RUN_OPTIMISATION:
+    out_mo, best_config_mo, study_mo = run_with_optimization(
+        emg             = data['emg'],
+        whitening       = data['whitening'],
+        sep_vectors     = data['sep_vectors'],
+        base_centroids  = data['base_centroids'],
+        spike_centroids = data['spike_centroids'],
+        emg_calib       = data['emg_calib'],
+        ipts_calib      = data['ipts_calib'],
+        spikes_calib    = data['spikes_calib'],
+        param_space     = param_space,
+        base_config     = base_config_mo,
+        n_trials        = 50,
+        preprocess      = data['preprocess'],
+        optim_mode      = 'multiobjective',
+    )
+    with open(_cfg_mo_path, 'w') as f:
+        json.dump({k: _to_json_safe(v) for k, v in best_config_mo.items()}, f, indent=2)
+    torch.save(out_mo, _out_mo_path)
+    print(f'Saved → {_cfg_mo_path}, {_out_mo_path}')
+    print(f'Pareto front: {len(study_mo.best_trials)} trials')
+else:
+    with open(_cfg_mo_path) as f:
+        best_config_mo = json.load(f)
+    out_mo   = torch.load(_out_mo_path, weights_only=False)
+    study_mo = None
+    print(f'Loaded from {_cfg_mo_path}, {_out_mo_path}')
+
+print('Selected config (multi-objective):')
+for k in param_space:
+    print(f'  {k}: {best_config_mo[k]:.4e}')
