@@ -5,13 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-import torch
 
 from adapt_decomp.cbss import CBSSResult
-from adapt_decomp.cbss.comparison import (
-    rate_of_agreement_all,
-    spikes_dict_to_binary,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -116,42 +111,23 @@ def select_units_supervised(
             f"gt_spikes has {gt_spikes.shape[0]} samples but result.sources has {T}. "
             "gt_spikes must be aligned to the calibration window."
         )
-    n_gt = gt_spikes.shape[1]
-
     fs = _resolve_fs(fs, result)
 
-    device = torch.device("cpu")
-    dtype = torch.float32
-    tol_spike = max(1, round(tol_ms / 1000.0 * fs))
+    from adapt_decomp.utils import rate_of_agreement
+    roa_vals, pairs, _ = rate_of_agreement(
+        gt_spikes.astype(np.float32),
+        result.spikes.astype(np.float32),
+        fs=int(fs),
+        tol_spike_ms=tol_ms,
+    )
+    # pairs[i] = (gt_idx, dec_idx), sorted by dec_idx ascending — 1:1 global greedy assignment
+    mask = np.zeros(n_mu, dtype=bool)
+    gt_matched = np.zeros(n_mu, dtype=np.int64)
+    for (gt_idx, dec_idx), roa_val in zip(pairs, roa_vals):
+        if roa_val >= roa_th:
+            mask[dec_idx] = True
+            gt_matched[dec_idx] = gt_idx
 
-    # Build binary tensors
-    dec_spikes_t = torch.as_tensor(
-        result.spikes.astype(np.int32), dtype=torch.int32, device=device
-    )  # [T, n_mu]
-    gt_spikes_t = torch.as_tensor(
-        gt_spikes.astype(np.int32), dtype=torch.int32, device=device
-    )  # [T, n_gt]
-
-    # Compute RoA between every decomposed unit and every GT unit
-    from adapt_decomp.cbss.comparison import rate_of_agreement_pair
-
-    roa_matrix = np.zeros((n_mu, n_gt), dtype=np.float32)
-    for i in range(n_mu):
-        for j in range(n_gt):
-            score, _ = rate_of_agreement_pair(
-                dec_spikes_t[:, i].bool(),
-                gt_spikes_t[:, j].bool(),
-                tol_spike,
-                tol_train=0,
-                dtype=dtype,
-            )
-            roa_matrix[i, j] = float(score.item())
-
-    # Each decomposed unit matches the GT unit with highest RoA
-    best_gt_idx = roa_matrix.argmax(axis=1)   # [n_mu]
-    best_roa = roa_matrix[np.arange(n_mu), best_gt_idx]  # [n_mu]
-
-    mask = best_roa >= roa_th
     n_kept = int(mask.sum())
     if n_kept == 0:
         raise ValueError(
@@ -160,7 +136,7 @@ def select_units_supervised(
         )
 
     subset = _subset_cbss_result(result, mask)
-    subset.gt_matched_indices = best_gt_idx[mask].astype(np.int64)
+    subset.gt_matched_indices = gt_matched[mask].astype(np.int64)
     return subset
 
 
