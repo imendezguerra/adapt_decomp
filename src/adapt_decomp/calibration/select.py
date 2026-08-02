@@ -123,10 +123,12 @@ def select_units_supervised(
     # pairs[i] = (gt_idx, dec_idx), sorted by dec_idx ascending — 1:1 global greedy assignment
     mask = np.zeros(n_mu, dtype=bool)
     gt_matched = np.zeros(n_mu, dtype=np.int64)
+    roa_by_dec_idx = np.zeros(n_mu, dtype=np.float64)
     for (gt_idx, dec_idx), roa_val in zip(pairs, roa_vals):
         if roa_val >= roa_th:
             mask[dec_idx] = True
             gt_matched[dec_idx] = gt_idx
+            roa_by_dec_idx[dec_idx] = roa_val
 
     n_kept = int(mask.sum())
     if n_kept == 0:
@@ -137,6 +139,7 @@ def select_units_supervised(
 
     subset = _subset_cbss_result(result, mask)
     subset.gt_matched_indices = gt_matched[mask].astype(np.int64)
+    subset.roa = roa_by_dec_idx[mask]
     return subset
 
 
@@ -198,6 +201,7 @@ def _subset_cbss_result(result: CBSSResult, mask: np.ndarray) -> CBSSResult:
         centroid_loss=result.centroid_loss,
         wh_trace=result.wh_trace,
         gt_matched_indices=_sel1d(result.gt_matched_indices),
+        roa=_sel1d(result.roa),
     )
 
 

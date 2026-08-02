@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from adapt_decomp.config import Config
+from adapt_decomp.config import Config, validate_literals
 from adapt_decomp.data_structures import Data, Decomposition
 from adapt_decomp.io import H5ParamsBatchWriter
 from adapt_decomp.ops import (
@@ -18,6 +18,7 @@ from adapt_decomp.ops import (
     update_B_spike_gated,
     gate_spikes_by_iqr,
 )
+from adapt_decomp.cbss.result import CBSSResult
 
 
 class AdaptDecomp:
@@ -39,7 +40,7 @@ class AdaptDecomp:
     def from_calibration(
         cls,
         emg: Union[torch.Tensor, np.ndarray],
-        calibration: "CBSSResult",
+        calibration: CBSSResult,
         config: Optional[Config] = None,
         preprocess: bool = False,
         save_path: Optional[str] = None,
@@ -146,10 +147,18 @@ class AdaptDecomp:
         """Reset adaptive state to calibration originals for a fresh optimisation trial."""
         # Sync config-derived fields cached on Decomposition as instance vars.
         # Required when config_overrides changes them between optimisation trials.
+        self.decomp.device = self.config.device
+        self.decomp.ext_fact = self.config.ext_fact
         self.decomp.shrinkage = self.config.shrinkage
         self.decomp.contrast_scope = self.config.contrast_scope
+        self.decomp.fifo_length_cfg = self.config.fifo_length
+        self.decomp.source_fifo_batches = self.config.source_fifo_batches
         self.decomp.wh_mode = self.config.wh_mode
         self.decomp.batch_size = self.config.batch_size
+        self.decomp.max_sigma_batches = self.config.max_sigma_batches
+        self.decomp.peak_power = self.config.peak_power
+        self.decomp.use_abs_for_detection = self.config.use_abs_for_detection
+        self.decomp.eps = self.config.eps
 
         self.decomp.V = self._V_orig.clone().to(device=self.config.device)
         self.decomp.B = self._B_orig.clone().to(device=self.config.device)
@@ -247,8 +256,9 @@ class AdaptDecomp:
         # B that is already aligned with the new whitening frame.
         if coupling_matrix is not None:
             delta_B_coupling = self.decomp.B @ coupling_matrix
+            eff_max_rel_delta_b = self.config.safety_clip_multiplier_b * self.config.lr_b
             delta_B_coupling = clip_global_delta(
-                delta_B_coupling, self.decomp.B, self.config.max_rel_delta_b, self.config.eps
+                delta_B_coupling, self.decomp.B, eff_max_rel_delta_b, self.config.eps
             )
             self.decomp.B = self.decomp.B + delta_B_coupling
 
@@ -306,20 +316,44 @@ class AdaptDecomp:
         if self.config.adapt_sv:
             B_curr = self.decomp.B
             Y_curr = Y
-            for _ in range(self.config.max_iter_b):
+            first_sv_diag = None
+            eff_max_rel_delta_b = self.config.safety_clip_multiplier_b * self.config.lr_b
+            ema_gradnorm_b_batch = self.decomp.ema_gradnorm_b   # carried over from last batch
+            for it in range(self.config.max_iter_b):
                 B_new, sv_diag = update_B_spike_gated(
                     B=B_curr,
                     Z=Z,
                     Y=Y_curr,
                     kappa_cal=self.decomp.kappa_cal,
                     spike_mask=trusted_spike_mask,
-                    max_rel_delta_b=self.config.max_rel_delta_b,
+                    max_rel_delta_b=eff_max_rel_delta_b,
                     min_spikes_for_update=self.config.min_spikes_for_update,
                     orthonormalization=self.config.orthonormalization,
                     contrast_scope=self.config.contrast_scope,
                     eps=self.config.eps,
                     sigma_kappa_cal=getattr(self.decomp, "sigma_kappa_cal", None),
+                    contrast_error_silent=(
+                        self.config.silence_penalty_zscore
+                        if self.config.silence_penalty else None
+                    ),
+                    lr_b=self.config.lr_b,
+                    lr_alone=self.config.lr_alone,
+                    ema_gradnorm_b=ema_gradnorm_b_batch,
+                    # EMA blends only once per batch (iteration 0); later fixed-point
+                    # sub-iterations reuse the just-updated EMA frozen (alpha=1.0 means
+                    # new = 1.0*old + 0*new = old) so refinement isn't double-counted
+                    # as extra "time steps" in the smoothing.
+                    ema_alpha=self.config.ema_alpha if it == 0 else 1.0,
                 )
+                # First sub-iteration only: the natural-gradient step before any
+                # fixed-point refinement, i.e. the step the safety clip actually
+                # trust-region clips. Later sub-iterations are refinements of an
+                # already-applied update and shrink toward tol_b by construction,
+                # which would dilute the clip/EMA signal.
+                if first_sv_diag is None:
+                    first_sv_diag = sv_diag
+                    ema_gradnorm_b_batch = sv_diag["ema_gradnorm_b"]
+                    self.decomp.ema_gradnorm_b = ema_gradnorm_b_batch
                 delta_rel = (
                     torch.linalg.norm(B_new - B_curr)
                     / (torch.linalg.norm(B_curr) + self.config.eps)
@@ -332,6 +366,7 @@ class AdaptDecomp:
         else:
             # Still compute contrast for loss tracking even when not adapting
             sv_diag = self._compute_sv_diag(Y, trusted_spike_mask)
+            first_sv_diag = sv_diag
 
         self.time_sv_ms[batch_idx] = (time.time() - t0) * 1000
 
@@ -360,6 +395,11 @@ class AdaptDecomp:
                 "peak_counts_after": spike_mask.sum(dim=0),
                 "outlier_spike_counts": (spike_mask & ~trusted_spike_mask).sum(dim=0),
             })
+            if "delta_B_raw_norm" in first_sv_diag:
+                # Override the last-iteration values **sv_diag contributed above --
+                # see the first_sv_diag comment at the B-update loop for why.
+                d["delta_B_norm"]     = first_sv_diag["delta_B_norm"]
+                d["delta_B_raw_norm"] = first_sv_diag["delta_B_raw_norm"]
 
         return spike_mask.to(torch.int32), Y
 
@@ -374,7 +414,10 @@ class AdaptDecomp:
         Two modes controlled by config.wh_mode:
           "kl_to_identity" — error = K − K_cal,  direction = (Rz − I) @ V
           "kl_to_cal"      — error = KL(Rz‖Rz_cal), direction = (Rz_cal⁻¹Rz − I) @ V
-        Both use the same trust-region clip on ‖ΔV‖_F.
+        Both direction-normalize (EMA of ‖direction@V‖) before scaling by lr_v and the
+        signed error, then apply the same (now rare-safety-net) trust-region clip on ‖ΔV‖_F.
+        lr_alone=True skips the direction-normalization and error term entirely, using
+        the raw step V -= lr_v * direction @ V instead (see Config.lr_alone docstring).
         """
         cfg = self.config
         decomp = self.decomp
@@ -416,26 +459,62 @@ class AdaptDecomp:
                 self.total_loss[batch_idx] += e_v.item() ** 2
 
             if cfg.adapt_wh:
-                delta_V_raw = -e_v * (direction @ decomp.V)
-                delta_V = clip_global_delta(delta_V_raw, decomp.V, cfg.max_rel_delta_v, cfg.eps)
+                # Normalize the whitening natural-gradient direction to unit scale via an
+                # EMA of its own norm (so one noisy/small batch can't skew the normalization),
+                # then scale by lr_v and the full signed e_v -- step size now tracks how
+                # wrong the model actually is, instead of always being clipped to a fixed size.
+                # (lr_alone bypasses this normalization entirely -- see below; the EMA is
+                # still tracked so state stays consistent if the flag changes mid-run.)
+                M_v = direction @ decomp.V
+                M_v_norm = torch.linalg.norm(M_v)
+                decomp.ema_dirnorm_v = (
+                    M_v_norm.detach() if decomp.ema_dirnorm_v is None
+                    else (cfg.ema_alpha * decomp.ema_dirnorm_v + (1 - cfg.ema_alpha) * M_v_norm).detach()
+                )
+                V_norm = torch.linalg.norm(decomp.V)
+                # delta_V_target = dir_coeff @ decomp.V; dir_coeff is factored out (rather
+                # than computed from M_v directly) so the same coefficient can be reused
+                # below for the wh_b_coupling correction.
+                if cfg.lr_alone:
+                    # Main (v1)'s raw, un-normalized natural-gradient step: no EMA
+                    # direction-normalization, no error term. Reproduces main's
+                    # fixed-learning-rate whitening update -- the step shrinks on its own
+                    # as direction -> 0 (Rz approaches its target), instead of being
+                    # forced to a constant relative size every batch. lr_v means something
+                    # different here than in the default branch and must be tuned
+                    # separately. V's sign is unaffected either way.
+                    dir_coeff = -cfg.lr_v * direction
+                else:
+                    dir_coeff = (
+                        -cfg.lr_v * V_norm * e_v
+                        / (decomp.ema_dirnorm_v + cfg.eps) * direction
+                    )
+                delta_V_target = dir_coeff @ decomp.V
+                eff_max_rel_delta_v = cfg.safety_clip_multiplier_v * cfg.lr_v
+                delta_V = clip_global_delta(delta_V_target, decomp.V, eff_max_rel_delta_v, cfg.eps)
                 decomp.V = decomp.V + delta_V
 
                 if cfg.wh_b_coupling:
-                    raw_norm = torch.linalg.norm(delta_V_raw)
-                    clip_scale = torch.linalg.norm(delta_V) / (raw_norm + cfg.eps)
-                    coupling_matrix = (clip_scale * e_v * direction).detach()
+                    # -delta_V @ V^-1 (the first-order frame correction implied by the V
+                    # step), rescaled by the same clip factor applied to delta_V itself --
+                    # holds because clip_global_delta is a pure scalar rescale of
+                    # delta_V_target = dir_coeff @ decomp.V.
+                    target_norm = torch.linalg.norm(delta_V_target)
+                    clip_scale = torch.linalg.norm(delta_V) / (target_norm + cfg.eps)
+                    coupling_matrix = (-clip_scale * dir_coeff).detach()
 
                 if cfg.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
                     d = self.diagnostics.setdefault(idx, {})
                     d.update({
-                        "K":               K_online.item(),
-                        "K_cal":           K_ref.item(),
-                        "whitening_error": e_v.item(),
-                        "delta_V_norm":    torch.linalg.norm(delta_V).item(),
-                        "Rz_trace":        Rz.trace().item(),
-                        "Rz_logdet":       logdet.item(),
-                        "V_norm":          torch.linalg.norm(decomp.V).item(),
+                        "K":                K_online.item(),
+                        "K_cal":            K_ref.item(),
+                        "whitening_error":  e_v.item(),
+                        "delta_V_norm":     torch.linalg.norm(delta_V).item(),
+                        "delta_V_raw_norm": torch.linalg.norm(delta_V_target).item(),
+                        "Rz_trace":         Rz.trace().item(),
+                        "Rz_logdet":        logdet.item(),
+                        "V_norm":           torch.linalg.norm(decomp.V).item(),
                     })
 
         return X @ decomp.V.T, coupling_matrix
@@ -512,11 +591,20 @@ class AdaptDecomp:
         sigma = getattr(decomp, "sigma_kappa_cal", None)
         e_b = e_b_raw / sigma.clamp_min(cfg.eps) if sigma is not None else e_b_raw
         spike_counts = spike_mask.to(Y.dtype).sum(dim=0)
-        active = spike_counts >= cfg.min_spikes_for_update
+        if cfg.contrast_scope == "batch_based":
+            # Mirrors ops.py::update_B_spike_gated's batch_based branch, which never
+            # gates by min_spikes_for_update -- only spike_based mode does.
+            active = torch.ones_like(spike_counts, dtype=torch.bool)
+        else:
+            active = spike_counts >= cfg.min_spikes_for_update
         _nan = torch.tensor(float("nan"), device=Y.device, dtype=Y.dtype)
+        _fallback = (
+            torch.full_like(e_b, cfg.silence_penalty_zscore)
+            if cfg.silence_penalty else _nan
+        )
         return {
             "kappa":          torch.where(active, kappa,  _nan),
-            "contrast_error": torch.where(active, e_b,    _nan),
+            "contrast_error": torch.where(active, e_b,    _fallback),
             "spike_counts":   spike_counts,
             "active":         active,
         }
@@ -527,6 +615,8 @@ class AdaptDecomp:
 
     def run(self) -> Dict:
         """Run the full online decomposition over all batches."""
+        if self.config.save_params and self.save_path is None:
+            raise ValueError("config.save_params=True requires save_path to be set.")
         dataset = DataLoader(
             self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
         )
@@ -583,48 +673,52 @@ class AdaptDecomp:
         Resets adaptive state, runs the full dataset, and returns the combined
         normalised loss (whitening + contrast, both z-scored by calibration std).
         """
+        prev_log_loss = self.config.log_loss
         self.config.log_loss = True
+        try:
+            if wh_lr is not None:
+                self.config.lr_v = wh_lr
+            if sv_lr is not None:
+                self.config.lr_b = sv_lr
+            for k, v in (config_overrides or {}).items():
+                setattr(self.config, k, v)
+            if config_overrides and "batch_ms" in config_overrides:
+                self.config.batch_size = int(self.config.batch_ms * self.config.fs / 1000)
+            validate_literals(self.config)
 
-        if wh_lr is not None:
-            self.config.max_rel_delta_v = wh_lr
-        if sv_lr is not None:
-            self.config.max_rel_delta_b = sv_lr
-        for k, v in (config_overrides or {}).items():
-            setattr(self.config, k, v)
-        if config_overrides and "batch_ms" in config_overrides:
-            self.config.batch_size = int(self.config.batch_ms * self.config.fs / 1000)
+            self._reset_params()
+            self.init_outputs(
+                samples=self.data.emg_ext.shape[0],
+                units=self.decomp.B.shape[0],
+            )
 
-        self._reset_params()
-        self.init_outputs(
-            samples=self.data.emg_ext.shape[0],
-            units=self.decomp.B.shape[0],
-        )
+            if self.config.debug:
+                self.diagnostics.clear()
 
-        if self.config.debug:
-            self.diagnostics.clear()
+            dataset = DataLoader(
+                self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
+            )
+            self.init_losses(len(dataset))
+            self.init_exe_time(len(dataset))
 
-        dataset = DataLoader(
-            self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
-        )
-        self.init_losses(len(dataset))
-        self.init_exe_time(len(dataset))
+            for i, (emg_batch, idx_labels) in enumerate(dataset):
+                emg_batch, idx_labels = self._check_batch(emg_batch, idx_labels)
+                spikes, ipts = self.run_decomp(emg_batch, i)
+                self.spikes[idx_labels, :] = spikes
+                self.ipts[idx_labels, :] = ipts
 
-        for i, (emg_batch, idx_labels) in enumerate(dataset):
-            emg_batch, idx_labels = self._check_batch(emg_batch, idx_labels)
-            spikes, ipts = self.run_decomp(emg_batch, i)
-            self.spikes[idx_labels, :] = spikes
-            self.ipts[idx_labels, :] = ipts
+            if self.config.trace_check:
+                trace_ratios = self.wh_trace / self.decomp.trace_cal
+                agg = trace_ratios.median() if self.config.trace_check_mode == "median" else trace_ratios[-1]
+                if not (0.1 < agg.item() < 50.0):
+                    return 1e10 if self.config.optim_loss == "single_obj" else (1e10, 1e10, 1e10)
 
-        if self.config.trace_check:
-            trace_ratios = self.wh_trace / self.decomp.trace_cal
-            agg = trace_ratios.median() if self.config.trace_check_mode == "median" else trace_ratios[-1]
-            if not (0.1 < agg.item() < 50.0):
-                return 1e10 if self.config.optim_loss == "single_obj" else (1e10, 1e10, 1e10)
-
-        wh = self._compute_total_wh_loss()
-        if self.config.optim_loss == "single_obj":
-            return wh + self._compute_total_sv_loss()
-        return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
+            wh = self._compute_total_wh_loss()
+            if self.config.optim_loss == "single_obj":
+                return wh + self._compute_total_sv_loss()
+            return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
+        finally:
+            self.config.log_loss = prev_log_loss
 
     # ------------------------------------------------------------------
     # Loss aggregation

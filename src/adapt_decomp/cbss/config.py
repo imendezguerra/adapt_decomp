@@ -8,29 +8,37 @@ import numpy as np
 import torch
 import yaml
 
+from adapt_decomp.config import validate_literals
+
 
 @dataclass
 class CBSSConfig:
     """Configuration for the CBSS decomposition algorithm."""
 
     # Preprocessing
+    # Shares preprocessing.preprocess_emg with the online AdaptDecomp Config -- these
+    # field names are kept identical to Config's equivalents (lowcut/highcut/powerline/
+    # powerline_freq) so the two configs stay directly comparable/copyable.
     fs: float = 2048.0
     preprocess_emg: bool = True
-    highpass_cutoff_hz: Optional[float] = 20.0
-    lowpass_cutoff_hz: Optional[float] = 500.0
+    lowcut: Optional[float] = 20.0
+    highcut: Optional[float] = 500.0
     filter_order: int = 4
-    filter_type: Literal["butter", "firwin2"] = "butter"
-    notch_filter: bool = True
-    notch_freq_hz: float = 50.0
-    notch_quality_factor: float = 30.0
+    powerline: bool = True
+    powerline_freq: float = 50.0
+    notch_width_hz: float = 1.0      # half-bandwidth per notch, in Hz (was mislabelled
+                                      # notch_quality_factor and fed straight into a
+                                      # Hz-half-bandwidth parameter as if it were 30 Hz)
     notch_n_harmonics: int = 3
-    notch_filter_type: Literal["butter", "firwin2"] = "butter"
+    notch_order: int = 2
     replace_bad_channels: bool = False
     bad_chs: Optional[list] = None
     ch_map: Optional[np.ndarray] = None
 
     # Extension
-    ext_fact: int = 12
+    # Must match the online adaptation Config.ext_fact used downstream on this
+    # calibration's output (Decomposition.__init__ validates this at construction).
+    ext_fact: int = 10
 
     # PCA dimensionality reduction before whitening (None = skip PCA)
     n_components: Optional[int] = None
@@ -41,7 +49,6 @@ class CBSSConfig:
     eps: float = 1e-10
 
     # ICA
-    solver: Literal["fast_ica"] = "fast_ica"
     contrast_fun: Literal["logcosh", "square", "cube", "smooth_abs"] = "square"
     contrast_exp: float = 3.0
     search_iter: int = 100
@@ -56,7 +63,6 @@ class CBSSConfig:
     refinement_loop: bool = True
     refinement_mode: Literal["cov", "sil"] = "sil"
     refine_max_iter: int = 20
-    cov_th: float = 0.35
 
     # Quality control
     sil_th: float = 0.9
@@ -96,6 +102,7 @@ class CBSSConfig:
             self.device = str(self.device)
         if self.ch_map is not None and not isinstance(self.ch_map, np.ndarray):
             self.ch_map = np.asarray(self.ch_map)
+        validate_literals(self)
 
     def to_dict(self) -> dict:
         out = {}

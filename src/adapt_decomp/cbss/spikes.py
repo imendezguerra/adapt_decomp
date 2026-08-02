@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
-
 import torch
 
 from adapt_decomp.ops import find_peaks_multisource, kmeans2_1d

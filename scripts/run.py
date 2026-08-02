@@ -66,8 +66,8 @@ def run(model_config, data_config, wandb_project_name, wandb_config=None,
     config.ext_fact = data['ext_fact']
 
     run_name = (
-        f'adapt_decomp_dv{config.max_rel_delta_v:.0e}'
-        f'_db{config.max_rel_delta_b:.0e}'
+        f'adapt_decomp_dv{config.lr_v:.0e}'
+        f'_db{config.lr_b:.0e}'
     )
 
     if wandb.run is None:

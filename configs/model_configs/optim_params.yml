@@ -9,11 +9,15 @@
 # The resulting best_config is logged to wandb as a summary key.
 #
 # These bounds match DEFAULT_PARAM_SPACE in src/adapt_decomp/optimize.py.
-# Empirical rationale (from root-cause analysis on simulated data):
-#   max_rel_delta_v:   optimal values cluster in [1e-4, 5e-2]; anything above
-#                      causes V divergence, anything below is non-adaptation.
-#   max_rel_delta_b:   optimal values cluster in [1e-3, 1e-1]; the upper bound
-#                      was widened from 1e-2 (previous default was too tight).
+# lr_v/lr_b are the real learning rates: the applied step is
+# lr * ||ref|| * e * (direction / ema_norm), so it's proportional to the signed
+# error instead of being clipped to a fixed size every batch. The trust-region
+# clip ceiling is derived automatically as safety_clip_multiplier_{v,b} * lr_{v,b}
+# (Config defaults, not searched here) and only acts as a rare safety net.
+# Empirical rationale (bounds carried over from the previous max_rel_delta_{v,b}
+# search space as a starting point; likely need re-tuning post-refactor):
+#   lr_v:              optimal values cluster in [1e-4, 5e-2].
+#   lr_b:              optimal values cluster in [1e-3, 1e-1].
 #   centroid_momentum: lower bound extended to 0.70 to allow faster centroid
 #                      tracking, which partially compensates for slow B adaptation
 #                      (relevant for iter1 configs and high-non-stationarity data).
@@ -24,6 +28,6 @@
 #   batch_ms: [int, 50, 200]
 # The default value (100 ms) is set in Config.batch_ms.
 
-max_rel_delta_v:   [log_float, 1.0e-4, 5.0e-2]
-max_rel_delta_b:   [log_float, 1.0e-3, 1.0e-1]
+lr_v:              [log_float, 1.0e-4, 5.0e-2]
+lr_b:              [log_float, 1.0e-3, 1.0e-1]
 centroid_momentum: [float,     0.70,   0.98]

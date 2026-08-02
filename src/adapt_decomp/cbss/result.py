@@ -35,6 +35,7 @@ class CBSSResult:
     centroid_loss: Optional[np.ndarray] = None
     wh_trace: Optional[np.ndarray] = None
     gt_matched_indices: Optional[np.ndarray] = None  # [n_mu] index into GT units after supervised selection
+    roa: Optional[np.ndarray] = None                 # [n_mu] RoA vs gt_matched_indices, set by select_units_supervised
 
     def to_dict(self) -> Dict:
         return {
@@ -61,4 +62,5 @@ class CBSSResult:
             "centroid_loss": self.centroid_loss,
             "wh_trace": self.wh_trace,
             "gt_matched_indices": self.gt_matched_indices,
+            "roa": self.roa,
         }

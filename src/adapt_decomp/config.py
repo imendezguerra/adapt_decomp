@@ -1,8 +1,29 @@
 """Configuration dataclass for adaptive EMG decomposition."""
 
 import yaml
+import dataclasses
 from dataclasses import dataclass, field
-from typing import Dict, Literal, Optional
+from typing import Dict, Literal, Optional, get_args, get_origin
+
+
+def validate_literals(obj) -> None:
+    """Raise ValueError if any Literal[...]-typed dataclass field holds a value
+    outside its declared choices.
+
+    Config/CBSSConfig fields are set via plain setattr() in several places
+    (config_overrides, base_config, categorical Optuna search spaces), which
+    bypasses dataclass construction entirely -- a typo'd value would otherwise
+    silently fall through whatever `==` checks read that field downstream
+    instead of raising. Call this after every such override.
+    """
+    for f in dataclasses.fields(obj):
+        if get_origin(f.type) is Literal:
+            value = getattr(obj, f.name)
+            choices = get_args(f.type)
+            if value not in choices:
+                raise ValueError(
+                    f"{type(obj).__name__}.{f.name} = {value!r} is not one of {choices!r}"
+                )
 
 
 @dataclass
@@ -21,6 +42,12 @@ class _LegacyConfig:
     sv_error_clamp: float = 10.0
     spike_height_mult: int = 3
     spike_prev_weight: int = 5
+    # Superseded by lr_v/lr_b + safety_clip_multiplier_v/b (see Config below): these used
+    # to be both the step size AND the clip ceiling, which meant the clip was engaged on
+    # ~100% of batches and silently discarded the error term's magnitude. Kept here inert
+    # so old YAML/JSON configs still load without error.
+    max_rel_delta_v: float = 1e-1
+    max_rel_delta_b: float = 1e-1
 
 
 @dataclass
@@ -32,10 +59,17 @@ class Config(_LegacyConfig):
     device: Literal["cpu", "cuda", "mps", None] = None
 
     # Preprocessing parameters
+    # Shares preprocessing.preprocess_emg with CBSS calibration (CBSSConfig) -- keep
+    # these in sync with CBSSConfig's equivalents so the whitening reference computed
+    # at calibration and the online covariance see EMG at the same scale.
     lowcut: float = 20
     highcut: float = 500
+    filter_order: int = 4
     powerline: bool = True
     powerline_freq: float = 50
+    notch_width_hz: float = 1.0
+    notch_n_harmonics: int = 3
+    notch_order: int = 2
 
     # Decomposition parameters
     ext_fact: int = 10
@@ -65,13 +99,58 @@ class Config(_LegacyConfig):
     shrinkage: float = 1e-3         # Tikhonov shrinkage on per-FIFO covariance
     eps: float = 1e-7               # Numerical stability floor
 
-    # Trust-region safety clips — hard ceiling on any single update.
-    # V moves at most max_rel_delta_v * ||V|| per batch (Frobenius norm).
-    # B moves at most max_rel_delta_b * ||B|| per batch (global Frobenius norm).
-    max_rel_delta_v: float = 1e-1
-    max_rel_delta_b: float = 1e-1
+    # --- Learning rate + safety clip ---
+    # The natural-gradient direction (direction@V for V, grad_B row for B) is normalized
+    # to unit scale (via an EMA of its own norm, so a single noisy/near-zero batch can't
+    # dominate the normalization) before being scaled by lr_{v,b} and the actual signed
+    # error e_v/e_b. This is the real, Optuna-tunable step size: actual step ~ lr * ||ref||
+    # * e, so it shrinks toward zero as e -> 0 and grows for genuine drift -- unlike the
+    # old max_rel_delta_{v,b} scheme, whose clip engaged on ~100% of batches (verified
+    # empirically) and reduced every step to a fixed size, discarding e's magnitude
+    # entirely and keeping only its sign.
+    lr_v: float = 5e-3
+    lr_b: float = 1e-3
+
+    # Rare safety net only -- NOT tuned by Optuna. Effective ceiling is always
+    # safety_clip_multiplier_{v,b} * lr_{v,b} * ||ref||, so it scales automatically with
+    # whatever lr gets tuned to and can never independently collapse back to a
+    # near-always-binding threshold (which fixing it at an absolute constant would risk).
+    safety_clip_multiplier_v: float = 20.0
+    safety_clip_multiplier_b: float = 20.0
+
+    # Smoothing rate for the EMA of ||direction@V|| / ||grad_B_row|| used to normalize
+    # the natural-gradient direction. Keeps the normalization denominator stable across
+    # batches (a single low-spike-count batch can't make the direction estimate noisy)
+    # while the direction itself stays fully responsive to the current batch.
+    ema_alpha: float = 0.95
+
+    # --- Learning-rate-alone ablation ---
+    # False (default): current behaviour -- lr_{v,b} scales the direction-normalized
+    # natural gradient AND the signed calibration error e_v/e_b (step magnitude tracks
+    # how wrong the model currently is; sign target-tracks calibration statistics).
+    # True: drop the e_v/e_b factor -- lr_{v,b} alone sets a constant relative step
+    # applied every batch, direction-normalized but otherwise unconditional. This is
+    # the closest available reproduction of main (v1)'s fixed-learning-rate update,
+    # now built on the EMA-normalized direction rather than main's raw gradient. For
+    # B this also flips the update from error-correcting descent to natural-gradient
+    # ASCENT -- main's B update maximized contrast unconditionally (no error term at
+    # all); see ops.py::update_B_spike_gated and adaptation.py::_update_V for why V's
+    # sign is unaffected but B's must flip.
+    lr_alone: bool = False
 
     min_spikes_for_update: int = 1      # Minimum spike count to allow B row update
+
+    # --- Silence penalty (opt-in ablation of NaN-exclusion) ---
+    # When a unit has fewer than min_spikes_for_update trusted spikes in a batch
+    # (spike_based contrast_scope only -- batch_based never gates), its
+    # contrast_error is normally excluded (NaN) from sv_loss so it doesn't bias
+    # the loss, but this also hides real failures (whitening/B-update collapse)
+    # behind indistinguishable "no spike" windows. When silence_penalty is True,
+    # a fixed z-score (silence_penalty_zscore) is used instead of NaN. The B
+    # update itself is unaffected either way -- grad_B stays masked to zero for
+    # inactive units, only the reported/optimised loss value changes.
+    silence_penalty: bool = False
+    silence_penalty_zscore: float = -3.0
 
     orthonormalization: str = "qr"      # "qr" (default), "gram_schmidt", or "none"
 
@@ -129,6 +208,7 @@ class Config(_LegacyConfig):
     def __post_init__(self) -> None:
         self.spike_dist = int(self.spike_dist_ms * self.fs / 1000)
         self.batch_size = int(self.batch_ms * self.fs / 1000)
+        validate_literals(self)
 
 
 def load_yaml(file_path: str) -> Dict:

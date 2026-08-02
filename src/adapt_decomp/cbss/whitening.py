@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Optional, Tuple
 
-import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
@@ -72,7 +71,7 @@ def whiten(
     if regularization == "auto":
         low_evals = evals_cpu[: len(evals_cpu) // 2]
         reg = float(torch.mean(low_evals).item()) if low_evals.numel() > 0 else 0.0
-    elif isinstance(regularization, float):
+    elif isinstance(regularization, (int, float)) and not isinstance(regularization, bool):
         reg = float(regularization)
     elif regularization is None:
         reg = 0.0

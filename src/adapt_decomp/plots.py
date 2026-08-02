@@ -74,12 +74,12 @@ def plot_sep_vectors_comp(
     vmin = np.amin([sv1, sv2])
     vmax = np.amax([sv1, sv2])
 
-    ax[0].imshow(sv1, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
+    im0 = ax[0].imshow(sv1, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
     ax[0].set(title='Separation vectors 1', xticks=[], yticks=[])
     divider0 = make_axes_locatable(ax[0])
     cax0 = divider0.append_axes("right", size="5%", pad=0.05)
 
-    im = ax[1].imshow(sv2, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
+    im1 = ax[1].imshow(sv2, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
     ax[1].set(title='Separation vectors 2', xticks=[], yticks=[])
     divider1 = make_axes_locatable(ax[1])
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
@@ -89,8 +89,8 @@ def plot_sep_vectors_comp(
     divider2 = make_axes_locatable(ax[2])
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
 
-    plt.colorbar(im, cax=cax0, orientation='vertical')
-    plt.colorbar(im, cax=cax1, orientation='vertical')
+    plt.colorbar(im0, cax=cax0, orientation='vertical')
+    plt.colorbar(im1, cax=cax1, orientation='vertical')
     plt.colorbar(im2, cax=cax2, orientation='vertical')
     
     return ax
@@ -112,10 +112,11 @@ def plot_sep_vectors_diff(
         plt.Axes: Axes with the plots.
     """ 
     
+    units = sv.shape[0]
+
     if ax is None:
-        units = sv.shape[0]
         cols = 3
-        rows = int(units/cols)
+        rows = -(-units // cols)
         fig, ax = plt.subplots(rows, cols, figsize=(12, 2 * rows), layout='tight')
         ax = np.ravel(ax)
 

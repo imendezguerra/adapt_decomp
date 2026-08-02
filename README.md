@@ -47,7 +47,7 @@ Please note that the `environment.yml` only installs the `cpu` version of `pytor
 The code has been tested on macOS, Windows, and Linux.
 
 ## Tutorial
-To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/main/tutorials/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. The model requires a precalibrated decomposition model including extension factor, whitening matrix, separation vectors, spike and baseline centroids, EMG during calibration, and the resulting IPTs and spikes. To execute the code, download this [example contraction](https://imperiallondon-my.sharepoint.com/:f:/g/personal/im4417_ic_ac_uk/EkJvoEffPmdEnkoHeRItVt8BWyQd6kztbrszu6njnfHM0Q?e=wbbuZF) and save it in the repository directory under `data/example`.
+To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/examples/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. The model requires a precalibrated decomposition model including extension factor, whitening matrix, separation vectors, spike and baseline centroids, EMG during calibration, and the resulting IPTs and spikes. To execute the code, download this [example contraction](https://imperiallondon-my.sharepoint.com/:f:/g/personal/im4417_ic_ac_uk/EkJvoEffPmdEnkoHeRItVt8BWyQd6kztbrszu6njnfHM0Q?e=wbbuZF) and save it in the repository directory under `data/JNE_data/sim`.
 
 ## Algorithm
 
@@ -104,7 +104,7 @@ The `data_config` is a YAML wrapper with paths to the calibrated decomposition m
 
 ## Config reference
 
-All active fields in `Config`. Legacy fields (`wh_learning_rate`, `sv_learning_rate`, etc.) are accepted by the YAML loader for backward compatibility but are not used by any logic.
+All active fields in `Config`. Legacy fields (`wh_learning_rate`, `sv_learning_rate`, `max_rel_delta_v`, `max_rel_delta_b`, etc.) are accepted by the YAML loader for backward compatibility but are not used by any logic.
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -120,8 +120,11 @@ All active fields in `Config`. Legacy fields (`wh_learning_rate`, `sv_learning_r
 | `adapt_sv` | `true` | Enable separation matrix B adaptation |
 | `adapt_sd` | `true` | Enable spike/base centroid adaptation |
 | `log_loss` | `true` | Log wh_loss, sv_loss, centroid_loss, wh_trace each batch |
-| `max_rel_delta_v` | `1e-1` | Trust-region clip: max ‖ΔV‖_F / ‖V‖_F per batch |
-| `max_rel_delta_b` | `1e-1` | Trust-region clip: max ‖ΔB‖_F / ‖B‖_F per batch |
+| `lr_v` | `5e-3` | Whitening learning rate: applied step ≈ `lr_v · ‖V‖ · e_v` along the (unit-normalized) natural-gradient direction |
+| `lr_b` | `1e-3` | Separation-vector learning rate: applied step ≈ `lr_b · ‖B_row‖ · e_b` along the (unit-normalized) natural-gradient direction |
+| `safety_clip_multiplier_v` | `20.0` | Rare safety-net ceiling for V, expressed as a multiple of `lr_v` (not independently tunable — scales with `lr_v` so it can't collapse to always-on during search) |
+| `safety_clip_multiplier_b` | `20.0` | Rare safety-net ceiling for B, expressed as a multiple of `lr_b` |
+| `ema_alpha` | `0.95` | Smoothing rate for the EMA of ‖direction‖/‖grad_B‖ used to normalize the natural-gradient direction to unit scale before scaling by `lr_{v,b}` |
 | `wh_mode` | `"kl_to_identity"` | KL divergence target: `"kl_to_identity"` or `"kl_to_cal"` |
 | `wh_b_coupling` | `false` | Propagate V-step frame correction to B |
 | `shrinkage` | `1e-3` | Ledoit-Wolf shrinkage applied to FIFO covariance |
@@ -163,7 +166,7 @@ Key differences between `main` (v1) and `feature_sim` (v2):
 
 | Aspect | v1 (`main`) | v2 (`feature_sim`) |
 |--------|-------------|---------------------|
-| Step-size control | `wh_learning_rate`, `sv_learning_rate` (scalar multipliers) | `max_rel_delta_v`, `max_rel_delta_b` (trust-region relative norm clips) |
+| Step-size control | `wh_learning_rate`, `sv_learning_rate` (scalar multipliers) | `lr_v`, `lr_b` (learning rate applied to a unit-normalized natural-gradient direction; `safety_clip_multiplier_{v,b}` sets a rare safety-net ceiling scaled to `lr_{v,b}`, replacing the earlier `max_rel_delta_{v,b}` trust-region clip that was found to engage on ~100% of batches) |
 | Whitening update | Recursive EMA covariance + KL gradient | FIFO covariance + natural-gradient update; two KL modes (`kl_to_identity`, `kl_to_cal`) |
 | Source update | Per-unit loop, scipy `find_peaks` | Vectorised NMS + adaptive centroids, GPU-compatible |
 | Orthonormalisation | Gram-Schmidt deflation (per unit) | QR decomposition (all units at once); Gram-Schmidt available via `orthonormalization: gram_schmidt` |

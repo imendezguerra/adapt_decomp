@@ -8,8 +8,8 @@ Default search space
 DEFAULT_PARAM_SPACE covers the three parameters whose empirical optimal values
 cluster in well-defined ranges across simulated and experimental datasets:
 
-    max_rel_delta_v   — whitening learning rate (log-uniform)
-    max_rel_delta_b   — separation-vector learning rate (log-uniform)
+    lr_v              — whitening learning rate (log-uniform)
+    lr_b              — separation-vector learning rate (log-uniform)
     centroid_momentum — EMA momentum for spike/base centroid tracking (uniform)
 
 batch_ms is intentionally excluded from the default space because changing it
@@ -26,13 +26,35 @@ from typing import Literal, Optional
 import torch
 
 from adapt_decomp.adaptation import AdaptDecomp
-from adapt_decomp.config import Config
+from adapt_decomp.config import Config, validate_literals
 
 DEFAULT_PARAM_SPACE: dict = {
-    "max_rel_delta_v":   ("log_float", 1e-4, 5e-2),
-    "max_rel_delta_b":   ("log_float", 1e-3, 1e-1),
-    "centroid_momentum": ("float",     0.70, 0.98),
+    "lr_v":   ("log_float", 1e-4, 5e-2),
+    "lr_b":   ("log_float", 1e-4, 1e-1),
+    # "centroid_momentum": ("float",     0.70, 0.98),
 }
+
+
+def _suggest_overrides(trial, param_space: dict) -> dict:
+    """Suggest one value per param_space entry for this trial.
+
+    Shared by optimize_adapt_decomp and optimize_adapt_decomp_pooled so both
+    interpret a param_space spec identically.
+    """
+    overrides = {}
+    for name, spec in param_space.items():
+        kind = spec[0]
+        if kind == "log_float":
+            overrides[name] = trial.suggest_float(name, spec[1], spec[2], log=True)
+        elif kind == "float":
+            overrides[name] = trial.suggest_float(name, spec[1], spec[2])
+        elif kind == "int":
+            overrides[name] = trial.suggest_int(name, spec[1], spec[2])
+        elif kind == "categorical":
+            overrides[name] = trial.suggest_categorical(name, spec[1])
+        else:
+            raise ValueError(f"Unknown param_space kind: {kind!r}")
+    return overrides
 
 
 def optimize_adapt_decomp(
@@ -69,9 +91,9 @@ def optimize_adapt_decomp(
     param_space format::
 
         {
-            "max_rel_delta_v":   ("log_float", 1e-4, 5e-2),
-            "max_rel_delta_b":   ("log_float", 1e-3, 1e-1),
-            "centroid_momentum": ("float",     0.70, 0.98),
+            "lr_v":   ("log_float", 1e-4, 5e-2),
+            "lr_b":   ("log_float", 1e-4, 1e-1),
+            # "centroid_momentum": ("float",     0.70, 0.98),
         }
 
     Use DEFAULT_PARAM_SPACE for the recommended defaults. To also search
@@ -91,6 +113,11 @@ def optimize_adapt_decomp(
     if base_config:
         for k, v in base_config.items():
             setattr(run_config, k, v)
+    # optim_mode is the single source of truth for how many values
+    # run_optimisation() returns -- keep run_config.optim_loss in sync so a
+    # caller never has to separately/correctly set both.
+    run_config.optim_loss = "multi_obj" if optim_mode == "multiobjective" else "single_obj"
+    validate_literals(run_config)
 
     adapter = AdaptDecomp(
         emg=emg,
@@ -106,19 +133,7 @@ def optimize_adapt_decomp(
     )
 
     def objective(trial):
-        overrides = {}
-        for name, spec in param_space.items():
-            kind = spec[0]
-            if kind == "log_float":
-                overrides[name] = trial.suggest_float(name, spec[1], spec[2], log=True)
-            elif kind == "float":
-                overrides[name] = trial.suggest_float(name, spec[1], spec[2])
-            elif kind == "int":
-                overrides[name] = trial.suggest_int(name, spec[1], spec[2])
-            elif kind == "categorical":
-                overrides[name] = trial.suggest_categorical(name, spec[1])
-            else:
-                raise ValueError(f"Unknown param_space kind: {kind!r}")
+        overrides = _suggest_overrides(trial, param_space)
         return adapter.run_optimisation(config_overrides=overrides)
 
     if optim_mode == "multiobjective":
@@ -143,7 +158,86 @@ def optimize_adapt_decomp(
     else:
         best_params = study.best_params
 
-    best_config = {**(base_config or {}), **best_params}
+    best_config = {**(base_config or {}), **best_params, "optim_loss": run_config.optim_loss}
+    return best_config, study
+
+
+def optimize_adapt_decomp_pooled(
+    recordings: list,
+    param_space: dict,
+    *,
+    base_config: Optional[dict] = None,
+    n_trials: int = 100,
+    preprocess: bool = False,
+    sampler=None,
+    config: Optional[Config] = None,
+) -> tuple:
+    """Search for hyperparameters minimising the SUMMED single-objective loss
+    across multiple recordings at once, instead of one reference recording.
+
+    Use this instead of optimize_adapt_decomp to test whether a single
+    (lr_v, lr_b) generalises across conditions rather than overfitting to
+    whichever single recording was used as reference. Recordings to hold out
+    for a generalisation check simply aren't included in `recordings`.
+
+    Each element of `recordings` is a dict with the same keys as
+    optimize_adapt_decomp's tensor arguments: emg, whitening, sep_vectors,
+    base_centroids, spike_centroids, emg_calib, ipts_calib, spikes_calib.
+
+    Single-objective only -- summing a 3-tuple (multi_obj) across recordings
+    would no longer be a meaningful Pareto problem, so multiobjective pooling
+    isn't supported here.
+
+    The divergence guard (trace_check) already returns 1e10 per recording when
+    it diverges, so a setting that blows up on even one pooled recording
+    dominates the sum rather than being averaged away.
+
+    Returns (best_config_dict, optuna.Study). Per-recording losses for each
+    trial are stored in trial.user_attrs['loss_<i>'] (index into `recordings`).
+    """
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError:
+        raise ImportError("optimize_adapt_decomp_pooled requires optuna: pip install optuna")
+
+    run_config_template = config if config is not None else Config()
+    if base_config:
+        for k, v in base_config.items():
+            setattr(run_config_template, k, v)
+    run_config_template.optim_loss = "single_obj"
+    validate_literals(run_config_template)
+
+    adapters = [
+        AdaptDecomp(
+            emg=rec["emg"],
+            whitening=rec["whitening"],
+            sep_vectors=rec["sep_vectors"],
+            base_centroids=rec["base_centroids"],
+            spike_centroids=rec["spike_centroids"],
+            emg_calib=rec["emg_calib"],
+            ipts_calib=rec["ipts_calib"],
+            spikes_calib=rec["spikes_calib"],
+            preprocess=preprocess,
+            config=copy.deepcopy(run_config_template),
+        )
+        for rec in recordings
+    ]
+
+    def objective(trial):
+        overrides = _suggest_overrides(trial, param_space)
+        losses = [a.run_optimisation(config_overrides=overrides) for a in adapters]
+        for i, loss_i in enumerate(losses):
+            trial.set_user_attr(f"loss_{i}", loss_i)
+        return sum(losses)
+
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=sampler if sampler is not None else optuna.samplers.CmaEsSampler(n_startup_trials=15),
+    )
+    study.optimize(objective, n_trials=n_trials)
+
+    best_config = {**(base_config or {}), **study.best_params, "optim_loss": "single_obj"}
     return best_config, study
 
 
@@ -194,6 +288,7 @@ def run_with_optimization(
         setattr(run_config, k, v)
     if "batch_ms" in best_config:
         run_config.batch_size = int(run_config.batch_ms * run_config.fs / 1000)
+    validate_literals(run_config)
 
     adapter = AdaptDecomp(
         emg=emg,

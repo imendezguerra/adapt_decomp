@@ -748,3 +748,413 @@ class TestGateSpikesByIqr:
         IQR_cal = torch.ones(M)
         trusted = gate_spikes_by_iqr(Y, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)
         assert trusted.sum() == 0
+
+
+# ---------------------------------------------------------------------------
+# lr_v/lr_b direction-normalized update: proportionality, safety-net-is-rare,
+# EMA smoothing, wh_b_coupling consistency, multi-batch stability
+# ---------------------------------------------------------------------------
+
+def test_delta_B_scales_with_error_magnitude():
+    """With a loose safety clip, delta_B_norm scales linearly with |e_b| -- the
+    property the lr_b/direction-normalization reorder restores (the old
+    max_rel_delta_b scheme discarded |e_b| entirely once the clip engaged)."""
+    torch.manual_seed(0)
+    M, D, N = 1, 8, 60
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)  # batch_based ignores spike_mask
+    sigma_kappa_cal = torch.ones(M)
+    kappa = log_cosh(Y).mean(dim=0)
+
+    def delta_norm_for(e_b_target: torch.Tensor) -> float:
+        kappa_cal = kappa - e_b_target
+        _, diag = update_B_spike_gated(
+            B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
+            max_rel_delta_b=1e6, min_spikes_for_update=1,   # effectively unclipped
+            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
+            lr_b=1e-3,
+        )
+        return diag["delta_B_norm"][0].item()
+
+    d1 = delta_norm_for(torch.tensor([1.0]))
+    d3 = delta_norm_for(torch.tensor([3.0]))
+    assert d3 == pytest.approx(3.0 * d1, rel=1e-4)
+
+
+def test_safety_clip_engages_only_for_extreme_error():
+    """A typical-magnitude e_b produces an (almost) unclipped step; a deliberately
+    extreme e_b is capped by the safety net -- confirms the clip is now a rare
+    guard rather than the routine, always-on transform it used to be."""
+    torch.manual_seed(1)
+    M, D, N = 1, 8, 60
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)
+    sigma_kappa_cal = torch.ones(M)
+    kappa = log_cosh(Y).mean(dim=0)
+    lr_b = 1e-3
+    safety_ceiling = 20.0 * lr_b   # matches Config.safety_clip_multiplier_b default
+
+    def run(e_b_target: torch.Tensor):
+        kappa_cal = kappa - e_b_target
+        return update_B_spike_gated(
+            B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
+            max_rel_delta_b=safety_ceiling, min_spikes_for_update=1,
+            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
+            lr_b=lr_b,
+        )
+
+    _, diag_typical = run(torch.tensor([2.0]))     # well within the ~20-sigma margin
+    _, diag_extreme = run(torch.tensor([1000.0]))  # deliberately pathological
+
+    assert diag_typical["delta_B_norm"][0].item() == pytest.approx(
+        diag_typical["delta_B_raw_norm"][0].item(), rel=1e-4
+    )
+    # Extreme case: the raw (unclipped) target is far above the ceiling, and the
+    # applied step is pinned exactly at the ceiling rather than scaling with it.
+    assert diag_extreme["delta_B_raw_norm"][0].item() > 10 * safety_ceiling
+    assert diag_extreme["delta_B_norm"][0].item() == pytest.approx(safety_ceiling, rel=1e-3)
+
+
+def test_ema_gradnorm_cold_start_seeds_directly():
+    """First call (ema_gradnorm_b=None) seeds the EMA to exactly the instantaneous
+    grad_B norm -- no blending on the first batch of a fresh trial."""
+    torch.manual_seed(2)
+    M, D, N = 2, 8, 40
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)
+    kappa_cal = torch.zeros(M)
+
+    _, diag = update_B_spike_gated(
+        B, Z, Y, kappa_cal, spike_mask=spike_mask,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        contrast_scope="batch_based", ema_gradnorm_b=None,
+    )
+    G = torch.tanh(Y)
+    grad_B = (G.T @ Z) / N
+    expected = torch.linalg.norm(grad_B, dim=1)
+    assert_close(diag["ema_gradnorm_b"], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_ema_gradnorm_blends_on_subsequent_call():
+    """A prior EMA value blends with the new instantaneous norm via ema_alpha."""
+    torch.manual_seed(3)
+    M, D, N = 2, 8, 40
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)
+    kappa_cal = torch.zeros(M)
+    prior_ema = torch.tensor([5.0, 7.0])
+    alpha = 0.8
+
+    _, diag = update_B_spike_gated(
+        B, Z, Y, kappa_cal, spike_mask=spike_mask,
+        max_rel_delta_b=1.0, min_spikes_for_update=1,
+        contrast_scope="batch_based", ema_gradnorm_b=prior_ema, ema_alpha=alpha,
+    )
+    G = torch.tanh(Y)
+    grad_B = (G.T @ Z) / N
+    instantaneous = torch.linalg.norm(grad_B, dim=1)
+    expected = alpha * prior_ema + (1 - alpha) * instantaneous
+    assert_close(diag["ema_gradnorm_b"], expected, atol=1e-5, rtol=1e-5)
+
+
+def test_wh_b_coupling_matches_frame_correction_identity():
+    """coupling_matrix must equal -delta_V @ V^-1 (the first-order frame correction
+    implied by the V step) under the new lr_v/direction-normalized formula -- this
+    identity previously held because clip_global_delta is a pure scalar rescale of
+    delta_V_raw; the reorder requires reintroducing the extra lr_v/ema_dirnorm_v
+    factor into coupling_matrix's own formula (see adaptation.py::_update_V)."""
+    from adapt_decomp.config import Config
+    from adapt_decomp.data_structures import Decomposition
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    M, ext_fact, raw_chs = 2, 2, 3
+    D = raw_chs * ext_fact
+    cfg = Config()
+    cfg.device = "cpu"
+    cfg.ext_fact = ext_fact
+    cfg.adapt_wh = True
+    cfg.wh_b_coupling = True
+    cfg.debug = False
+    cfg.lr_v = 5e-3
+    cfg.__post_init__()
+
+    V = torch.eye(D) * 1.3   # non-identity, trivially invertible
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    spike_cal = torch.rand(M) + 2.0
+    base_cal = torch.rand(M) * 0.5
+    emg_cal = torch.randn(300, raw_chs)
+    ipts_cal = torch.randn(300, M)
+    spikes_cal = torch.zeros(300, M, dtype=torch.int32)
+    spikes_cal[::40] = 1
+
+    decomp = Decomposition(V, B, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
+
+    adapter = AdaptDecomp.__new__(AdaptDecomp)
+    adapter.config = cfg
+    adapter.decomp = decomp
+    adapter.units = M
+    adapter.diagnostics = {}
+    adapter.wh_loss = torch.zeros(1)
+    adapter.wh_trace = torch.zeros(1)
+    adapter.total_loss = torch.zeros(1)
+
+    # Real (nonzero) signal so Rz is a genuine, positive-definite, drifted
+    # covariance -- otherwise e_v ~ 0 and both delta_V and coupling_matrix would
+    # be trivially ~0, which wouldn't exercise the identity meaningfully.
+    X = torch.randn(50, D) * 2.0
+    V_before = decomp.V.clone()
+    _, coupling_matrix = adapter._update_V(X, batch_idx=0)
+
+    assert coupling_matrix is not None
+    delta_V = decomp.V - V_before
+    expected_coupling = -delta_V @ torch.linalg.inv(V_before)
+    assert_close(coupling_matrix, expected_coupling, atol=1e-4, rtol=1e-3)
+
+
+def test_multibatch_stability_and_rare_safety_clip():
+    """Run AdaptDecomp over many synthetic batches with the new lr-based update:
+    no NaN/Inf, B stays orthonormal, V stays finite/invertible, and the safety
+    clip engages rarely (not on ~100% of batches like the old max_rel_delta
+    scheme, verified empirically on real data before this change)."""
+    from adapt_decomp.config import Config
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    torch.manual_seed(42)
+    raw_chs, ext_fact, M = 3, 2, 2
+    D = raw_chs * ext_fact
+    fs = 200
+
+    cfg = Config()
+    cfg.device = "cpu"
+    cfg.fs = fs
+    cfg.ext_fact = ext_fact
+    cfg.batch_ms = 100
+    cfg.adapt_wh = True
+    cfg.adapt_sv = True
+    cfg.adapt_sd = True
+    cfg.debug = True
+    cfg.lr_v = 5e-3
+    cfg.lr_b = 1e-3
+    cfg.__post_init__()
+
+    V = torch.eye(D)
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    base_centroids = torch.rand(M) * 0.5
+    spike_centroids = torch.rand(M) + 2.0
+    emg_calib = torch.randn(500, raw_chs)
+    ipts_calib = torch.randn(500, M)
+    spikes_calib = torch.zeros(500, M, dtype=torch.int32)
+    spikes_calib[::20] = 1
+
+    emg_online = torch.randn(600, raw_chs)
+
+    adapter = AdaptDecomp(
+        emg=emg_online,
+        whitening=V,
+        sep_vectors=B,
+        base_centroids=base_centroids,
+        spike_centroids=spike_centroids,
+        emg_calib=emg_calib,
+        ipts_calib=ipts_calib,
+        spikes_calib=spikes_calib,
+        preprocess=False,
+        config=cfg,
+    )
+    outputs = adapter.run()
+
+    assert torch.isfinite(adapter.decomp.V).all()
+    assert torch.isfinite(adapter.decomp.B).all()
+    gram = adapter.decomp.B @ adapter.decomp.B.T
+    assert_close(gram, torch.eye(M), atol=1e-3, rtol=0)
+    assert torch.isfinite(torch.linalg.inv(adapter.decomp.V)).all()
+
+    diagnostics = outputs["diagnostics"]
+
+    def clip_fraction(raw_key: str, applied_key: str) -> float:
+        # Values are scalars for V (delta_V_*) but per-unit [M] tensors for B
+        # (delta_B_*) -- normalize both to flat 1-D tensors before stacking.
+        raw_vals = [d[raw_key] for d in diagnostics.values() if raw_key in d]
+        applied_vals = [d[applied_key] for d in diagnostics.values() if applied_key in d]
+        assert len(raw_vals) > 5, "expected multiple valid batches for this check"
+        raw = torch.stack([torch.as_tensor(v).flatten() for v in raw_vals]).flatten()
+        applied = torch.stack([torch.as_tensor(v).flatten() for v in applied_vals]).flatten()
+        ratio = applied / raw.clamp_min(1e-12)
+        return (ratio < 0.99).float().mean().item()
+
+    # Both should engage the safety clip rarely, not on ~100% of batches.
+    assert clip_fraction("delta_V_raw_norm", "delta_V_norm") < 0.5
+    assert clip_fraction("delta_B_raw_norm", "delta_B_norm") < 0.5
+
+
+# ---------------------------------------------------------------------------
+# lr_alone ablation: drops the signed e_v/e_b factor entirely, leaving a
+# constant direction-normalized step -- the closest available reproduction of
+# main (v1)'s fixed-learning-rate update (V's sign is unaffected; B's flips
+# from an error-correcting descent to an unconditional ascent).
+# ---------------------------------------------------------------------------
+
+def test_lr_alone_ignores_error_magnitude_B():
+    """With lr_alone=True, delta_B_norm is identical regardless of e_b's magnitude --
+    the defining property of a genuine fixed learning rate (main's v1 update had no
+    error term at all). Contrast with test_delta_B_scales_with_error_magnitude, which
+    shows the default (error-weighted) branch scales linearly with |e_b|."""
+    torch.manual_seed(4)
+    M, D, N = 1, 8, 60
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)
+    sigma_kappa_cal = torch.ones(M)
+    kappa = log_cosh(Y).mean(dim=0)
+
+    def delta_norm_for(e_b_target: torch.Tensor) -> float:
+        kappa_cal = kappa - e_b_target
+        _, diag = update_B_spike_gated(
+            B.clone(), Z, Y, kappa_cal, spike_mask=spike_mask,
+            max_rel_delta_b=1e6, min_spikes_for_update=1,   # effectively unclipped
+            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
+            lr_b=1e-3, lr_alone=True,
+        )
+        return diag["delta_B_norm"][0].item()
+
+    d1 = delta_norm_for(torch.tensor([1.0]))
+    d3 = delta_norm_for(torch.tensor([3.0]))
+    assert d1 == pytest.approx(d3, rel=1e-5)
+
+
+def test_lr_alone_is_natural_gradient_ascent_for_B():
+    """lr_alone's delta_B_target must equal +lr_b*B_row_norm*grad_B/ema (an ascent),
+    not -lr_b*...*grad_B (a descent) -- the sign flip that reproduces main (v1)'s
+    unconditional contrast-maximizing update instead of an error-correcting descent."""
+    torch.manual_seed(5)
+    M, D, N = 2, 8, 50
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    Z = torch.randn(N, D)
+    Y = Z @ B.T
+    spike_mask = torch.ones(N, M, dtype=torch.bool)
+    kappa_cal = torch.zeros(M)
+    lr_b = 2e-3
+
+    _, diag = update_B_spike_gated(
+        B, Z, Y, kappa_cal, spike_mask=spike_mask,
+        max_rel_delta_b=1e6, min_spikes_for_update=1,
+        contrast_scope="batch_based", lr_b=lr_b, lr_alone=True,
+    )
+    G = torch.tanh(Y)
+    grad_B = (G.T @ Z) / N
+    ema_gradnorm_b = torch.linalg.norm(grad_B, dim=1)   # cold-start seed (ema_gradnorm_b=None)
+    B_row_norm = torch.linalg.norm(B, dim=1, keepdim=True)
+    expected_delta = lr_b * B_row_norm * grad_B / ema_gradnorm_b[:, None]
+    assert_close(diag["delta_B_norm"], torch.linalg.norm(expected_delta, dim=1), atol=1e-5, rtol=1e-4)
+    # Sign check: applying B + delta_B moves each row TOWARD grad_B (ascent), not away.
+    B_new = B + expected_delta
+    assert ((B_new * grad_B).sum(dim=1) > (B * grad_B).sum(dim=1)).all()
+
+
+def test_lr_alone_ignores_error_magnitude_V():
+    """With cfg.lr_alone=True, delta_V is identical regardless of the calibration
+    reference K_cal (which drives e_v's magnitude under the default branch) -- same
+    fixed-learning-rate property as the B-side test above, applied to whitening."""
+    from adapt_decomp.config import Config
+    from adapt_decomp.data_structures import Decomposition
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    M, ext_fact, raw_chs = 2, 2, 3
+    D = raw_chs * ext_fact
+
+    def run_with_K_cal(k_cal_value: float) -> torch.Tensor:
+        torch.manual_seed(6)   # identical V/B/calib/X across calls; only K_cal differs
+        cfg = Config()
+        cfg.device = "cpu"
+        cfg.ext_fact = ext_fact
+        cfg.adapt_wh = True
+        cfg.lr_alone = True
+        cfg.lr_v = 5e-3
+        cfg.__post_init__()
+
+        V = torch.eye(D) * 1.3
+        B = orthonormalize_rows_qr(torch.randn(M, D))
+        spike_cal = torch.rand(M) + 2.0
+        base_cal = torch.rand(M) * 0.5
+        emg_cal = torch.randn(300, raw_chs)
+        ipts_cal = torch.randn(300, M)
+        spikes_cal = torch.zeros(300, M, dtype=torch.int32)
+        spikes_cal[::40] = 1
+        decomp = Decomposition(V, B, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
+        decomp.K_cal = torch.tensor(k_cal_value)   # only knob that changes e_v's magnitude
+
+        adapter = AdaptDecomp.__new__(AdaptDecomp)
+        adapter.config = cfg
+        adapter.decomp = decomp
+        adapter.units = M
+        adapter.diagnostics = {}
+        adapter.wh_loss = torch.zeros(1)
+        adapter.wh_trace = torch.zeros(1)
+        adapter.total_loss = torch.zeros(1)
+
+        X = torch.randn(50, D) * 2.0
+        V_before = decomp.V.clone()
+        adapter._update_V(X, batch_idx=0)
+        return decomp.V - V_before
+
+    delta_v_1 = run_with_K_cal(0.0)
+    delta_v_2 = run_with_K_cal(50.0)   # would drive e_v far from the first run's value
+    assert_close(delta_v_1, delta_v_2, atol=1e-6, rtol=1e-5)
+
+
+def test_wh_b_coupling_matches_frame_correction_identity_lr_alone():
+    """Same identity as test_wh_b_coupling_matches_frame_correction_identity, but
+    under cfg.lr_alone=True -- confirms `weight` was substituted symmetrically into
+    both delta_V_target and coupling_matrix's formula, not just one of them."""
+    from adapt_decomp.config import Config
+    from adapt_decomp.data_structures import Decomposition
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    M, ext_fact, raw_chs = 2, 2, 3
+    D = raw_chs * ext_fact
+    cfg = Config()
+    cfg.device = "cpu"
+    cfg.ext_fact = ext_fact
+    cfg.adapt_wh = True
+    cfg.wh_b_coupling = True
+    cfg.debug = False
+    cfg.lr_alone = True
+    cfg.lr_v = 5e-3
+    cfg.__post_init__()
+
+    V = torch.eye(D) * 1.3
+    B = orthonormalize_rows_qr(torch.randn(M, D))
+    spike_cal = torch.rand(M) + 2.0
+    base_cal = torch.rand(M) * 0.5
+    emg_cal = torch.randn(300, raw_chs)
+    ipts_cal = torch.randn(300, M)
+    spikes_cal = torch.zeros(300, M, dtype=torch.int32)
+    spikes_cal[::40] = 1
+
+    decomp = Decomposition(V, B, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
+
+    adapter = AdaptDecomp.__new__(AdaptDecomp)
+    adapter.config = cfg
+    adapter.decomp = decomp
+    adapter.units = M
+    adapter.diagnostics = {}
+    adapter.wh_loss = torch.zeros(1)
+    adapter.wh_trace = torch.zeros(1)
+    adapter.total_loss = torch.zeros(1)
+
+    X = torch.randn(50, D) * 2.0
+    V_before = decomp.V.clone()
+    _, coupling_matrix = adapter._update_V(X, batch_idx=0)
+
+    assert coupling_matrix is not None
+    delta_V = decomp.V - V_before
+    expected_coupling = -delta_V @ torch.linalg.inv(V_before)
+    assert_close(coupling_matrix, expected_coupling, atol=1e-4, rtol=1e-3)

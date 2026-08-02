@@ -18,9 +18,11 @@ adapt_sv: false                   # Do not adapt separation matrix B
 adapt_sd: false                   # Do not adapt spike / base centroids
 log_loss: true                    # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
 
-# Step-size (trust-region relative norm clips; unused when adapt_wh/sv are false)
-max_rel_delta_v: 5.0e-3           # Max ||ΔV||_F / ||V||_F per batch
-max_rel_delta_b: 1.0e-3           # Max ||ΔB||_F / ||B||_F per batch
+# Step-size (learning rate; unused when adapt_wh/sv are false). The clip ceiling
+# is now derived automatically as safety_clip_multiplier_{v,b} * lr_{v,b} (Config
+# defaults), not set here.
+lr_v: 5.0e-3                      # Whitening learning rate
+lr_b: 1.0e-3                      # Separation-vector learning rate
 
 # Whitening
 wh_mode: kl_to_identity           # KL target: "kl_to_identity" or "kl_to_cal"

@@ -224,11 +224,15 @@ def update_B_spike_gated(
     contrast_scope: str = "batch_based",
     eps: float = 1e-8,
     sigma_kappa_cal: Optional[torch.Tensor] = None,
+    contrast_error_silent: Optional[float] = None,
+    lr_b: float = 1e-3,
+    ema_gradnorm_b: Optional[torch.Tensor] = None,
+    ema_alpha: float = 0.95,
+    lr_alone: bool = False,
 ) -> tuple[torch.Tensor, dict]:
     """Separation matrix update with retained contrast error.
 
     Gradient uses tanh(Y) — the exact derivative of log_cosh.
-    clip_rowwise_delta enforces a hard ceiling on each row of ΔB for pathological batches.
 
     contrast_scope controls both kappa estimation and gradient direction:
         "batch_based" — kappa = log_cosh(Y).mean(dim=0) over all N samples;
@@ -237,6 +241,32 @@ def update_B_spike_gated(
         "spike_based" — kappa = log_cosh(Y[spike_mask]).mean per source;
                         gradient is spike-gated; sources with fewer than
                         min_spikes_for_update spikes get zero delta
+
+    contrast_error_silent, when given, replaces NaN as the reported
+    contrast_error for inactive sources (fewer than min_spikes_for_update
+    trusted spikes) -- a fixed penalty instead of exclusion from the loss.
+    Does not affect grad_B, which stays masked to zero for inactive sources
+    regardless: only the loss/diagnostic value changes, never the B update.
+
+    The natural-gradient direction (grad_B, per row) is normalized to unit scale by
+    an EMA of its own norm (ema_gradnorm_b, updated here and returned in diag for the
+    caller to persist) before being scaled by lr_b and the *signed* e_b -- so the
+    applied step tracks how wrong the model actually is, rather than always being
+    clipped to a fixed size (max_rel_delta_b is now a rare safety net only; pass
+    ema_gradnorm_b=None to seed cold, e.g. the first batch of a fresh trial).
+
+    lr_alone=True drops the signed e_b factor entirely, flips the sign, and skips the
+    EMA direction-normalization below -- giving the raw, un-normalized
+    natural-gradient ASCENT B += lr_b * grad_B, reproducing main (v1)'s
+    fixed-learning-rate B update (main had no error term and no normalization
+    either). The step shrinks on its own as B approaches its fixed point
+    (grad_B -> 0), the same self-damping behaviour main relied on for stability --
+    the EMA-normalized branch below would otherwise force a constant relative step
+    every batch regardless of convergence. The sign flip (vs. the default branch's
+    -e_b*grad_B) is required: main's update always increases contrast, whereas the
+    default branch is a signed control step that can push contrast either way
+    depending on e_b's sign. Because this step is unnormalized, lr_b means something
+    different here than in the default branch and must be tuned separately.
 
     Returns (B_new, diagnostics_dict).
     """
@@ -264,19 +294,46 @@ def update_B_spike_gated(
         grad_B = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
         grad_B = grad_B * active[:, None]
 
-    delta_B = -e_b[:, None] * grad_B
-    delta_B = clip_rowwise_delta(delta_B, B, max_rel_delta_b, eps)
+    # Normalize the natural-gradient direction to unit scale via an EMA of its own
+    # norm (per unit), then scale by lr_b and the full signed e_b -- restores step
+    # size proportional to how wrong the model is, instead of a fixed-size step.
+    # (lr_alone bypasses this normalization entirely -- see docstring above; the EMA
+    # is still tracked/returned below so state stays consistent if the flag changes
+    # between runs.)
+    grad_B_norm = torch.linalg.norm(grad_B, dim=1)   # [M], instantaneous
+    new_ema_gradnorm_b = (
+        grad_B_norm.detach() if ema_gradnorm_b is None
+        else (ema_alpha * ema_gradnorm_b + (1 - ema_alpha) * grad_B_norm).detach()
+    )
+    B_row_norm = torch.linalg.norm(B, dim=1, keepdim=True)
+    if lr_alone:
+        # Main (v1)'s raw, un-normalized natural-gradient ASCENT: no EMA
+        # direction-normalization, no error term (see docstring above).
+        delta_B_target = lr_b * grad_B
+    else:
+        delta_B_target = (
+            -lr_b * B_row_norm * e_b[:, None]
+            * grad_B / (new_ema_gradnorm_b[:, None] + eps)
+        )
+    delta_B_raw_norm = torch.linalg.norm(delta_B_target, dim=1)   # pre-safety-clip target norm
+    delta_B = clip_rowwise_delta(delta_B_target, B, max_rel_delta_b, eps)  # rare safety net
 
     B_new = B + delta_B
     B_new = orthonormalize_rows(B_new, method=orthonormalization)
 
     _nan = torch.tensor(float("nan"), device=Y.device, dtype=Y.dtype)
+    _fallback = (
+        torch.full_like(e_b, contrast_error_silent)
+        if contrast_error_silent is not None else _nan
+    )
     diag = {
         "kappa":          torch.where(active, kappa,  _nan),
-        "contrast_error": torch.where(active, e_b,    _nan),
+        "contrast_error": torch.where(active, e_b,    _fallback),
         "spike_counts":   spike_counts,
         "active":         active,
-        "delta_B_norm":   torch.linalg.norm(delta_B, dim=1),
+        "delta_B_norm":     torch.linalg.norm(delta_B, dim=1),
+        "delta_B_raw_norm": delta_B_raw_norm,
+        "ema_gradnorm_b":    new_ema_gradnorm_b,
         "orthogonality_error": torch.linalg.norm(
             B_new @ B_new.T - torch.eye(M, device=B.device, dtype=B.dtype)
         ),

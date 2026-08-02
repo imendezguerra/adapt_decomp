@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 from loguru import logger
@@ -12,7 +11,7 @@ import torch
 
 from adapt_decomp.cbss.comparison import remove_duplicates, spikes_dict_to_binary
 from adapt_decomp.cbss.config import CBSSConfig
-from adapt_decomp.cbss.ica import FastICAResult, _fast_fixed_point_ica, _gram_schmidt_deflate, _normalize
+from adapt_decomp.cbss.ica import _fast_fixed_point_ica, _gram_schmidt_deflate, _normalize
 from adapt_decomp.cbss.result import CBSSResult
 from adapt_decomp.cbss.signal_props import (
     emg_to_ch_array,
@@ -23,7 +22,7 @@ from adapt_decomp.cbss.signal_props import (
 )
 from adapt_decomp.cbss.spikes import _apply_spike_detection, _spike_detection
 from adapt_decomp.cbss.whitening import extend_emg, pca_reduction, whiten
-from adapt_decomp.preprocessing import bandpass, notch_harmonics, replace_bad_channels
+from adapt_decomp.preprocessing import filter_kwargs, preprocess_emg, replace_bad_channels
 
 
 class CBSS:
@@ -47,27 +46,24 @@ class CBSS:
     # ------------------------------------------------------------------
 
     def _preprocess_emg(self, emg: np.ndarray, fs: float) -> torch.Tensor:
-        """Bandpass + optional notch + zero-mean + optional bad-channel replacement."""
-        emg_f = bandpass(
-            emg, fs,
-            highpass=self.config.highpass_cutoff_hz,
-            lowpass=self.config.lowpass_cutoff_hz,
-            order=self.config.filter_order,
-            ftype=self.config.filter_type,
-        )
-        if self.config.notch_filter:
-            emg_f = notch_harmonics(
-                emg_f, fs,
-                f0=self.config.notch_freq_hz,
-                n_harmonics=self.config.notch_n_harmonics,
-                width=self.config.notch_quality_factor,
-                order=2,
-                ftype=self.config.notch_filter_type,
-            )
+        """Bandpass + optional notch + zero-mean + optional bad-channel replacement.
+
+        Shares preprocess_emg() with Data.preprocess_emg (online adaptation) so the
+        whitening reference computed here at calibration and the online covariance see
+        EMG at the same scale/spectral content.
+        """
+        emg_f = preprocess_emg(emg, fs, **filter_kwargs(self.config))
         emg_f = emg_f - emg_f.mean(axis=0, keepdims=True)
         if self.config.replace_bad_channels and self.config.bad_chs is not None and self.config.ch_map is not None:
             emg_f = replace_bad_channels(emg_f, self.config.bad_chs, self.config.ch_map, layout="samples_first")
         elif self.config.bad_chs is not None:
+            if self.config.ch_map is not None:
+                raise ValueError(
+                    "Dropping bad channels (replace_bad_channels=False) while "
+                    "ch_map is set is not supported: ch_map's indices would no "
+                    "longer match the shrunk channel layout. Set "
+                    "replace_bad_channels=True to keep channel count/indexing intact."
+                )
             mask = np.ones(emg_f.shape[1], dtype=bool)
             mask[self.config.bad_chs] = False
             emg_f = emg_f[:, mask]
@@ -125,7 +121,7 @@ class CBSS:
                 break
             spike_idx, spike_centr, base_centr, sil = _spike_detection(
                 source, self.config.fs, self.config.spike_min_dist_ms,
-                self.config.spike_det_exp, self.config.refinement_mode == "sil",
+                self.config.spike_det_exp,
             )
             cov = self._cov_from_idx(spike_idx, timestamps)
             if self.config.refinement_mode == "sil":

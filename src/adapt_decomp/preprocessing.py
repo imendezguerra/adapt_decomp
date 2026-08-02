@@ -1,240 +1,70 @@
 """Functions to preprocess EMG signals"""
 
-from typing import Literal, Optional
+from typing import Literal
 import numpy as np
-from scipy import signal
-from scipy.fft import irfft, rfft, rfftfreq
-from scipy.signal import butter, filtfilt, firwin2, iirnotch
+from scipy.signal import butter, sosfilt
 
 
-def bandpass_filter(
-    data: np.ndarray,
-    fs: Optional[int] = 2048,
-    cutoff: Optional[list] = None,
-    order: Optional[int] = 4,
-    filtfilt: Optional[bool] = True,
-    ) -> np.ndarray:
-
-    """
-    Apply a bandpass filter to the input data.
-
-    Parameters:
-        data (np.ndarray): The input data to be filtered.
-        fs (Optional[int]): The sampling frequency of the data. Default is 2048.
-        cutoff (Optional[list]): List with the cutoff frequencies of the filter.
-            Default is [20, 500].
-        order (Optional[int]): The order of the filter. Default is 4.
-        filtfilt (Optional[bool]): Whether to use forward-backward filtering.
-            Default is True.
-    Returns:
-        np.ndarray: The filtered data.
-
-    """
-    # Define cutoff frequencies
-    if cutoff is None:
-        cutoff = [20, 500]
-
-    # Define filter
-    sos = signal.butter(order, cutoff, btype='band', fs=fs, output='sos')
-
-    # Apply filter
-    if filtfilt:
-        out = signal.sosfiltfilt(sos, data)
-    else:
-        out = signal.sosfilt(sos, data)
-
-    return out
-
-
-def highpass_filter(
-    data: np.ndarray,
-    fs: Optional[int] = 2048,
-    cutoff: Optional[float] = 20,
-    order: Optional[int] = 2,
-    filtfilt: Optional[bool] = True,
-    ) -> np.ndarray:
-
-    """
-    Apply a highpass filter to the input data.
-
-    Parameters:
-        data (np.ndarray): The input data to be filtered.
-        fs (Optional[int]): The sampling frequency of the data. Default is 2048.
-        cutoff (Optional[list]): High cutoff frequency of the filter. Default is 20.
-        order (Optional[int]): The order of the filter. Default is 2.
-        filtfilt (Optional[bool]): Whether to use forward-backward filtering.
-            Default is True.
-    Returns:
-        np.ndarray: The filtered data.
-
-    """
-    # Define filter
-    sos = signal.butter(order, cutoff, btype='high', fs=fs, output='sos')
-
-    # Apply filter
-    if filtfilt:
-        out = signal.sosfiltfilt(sos, data)
-    else:
-        out = signal.sosfilt(sos, data)
-
-    return out
-
-
-def lowpass_filter(
-    data: np.ndarray,
-    fs: Optional[int] = 2048,
-    cutoff: Optional[float] = 500,
-    order: Optional[int] = 2,
-    filtfilt: Optional[bool] = True,
-    ) -> np.ndarray:
-
-    """
-    Apply a lowpass filter to the input data.
-
-    Parameters:
-        data (np.ndarray): The input data to be filtered.
-        fs (Optional[int]): The sampling frequency of the data. Default is 2048.
-        cutoff (Optional[list]): Low cutoff frequency of the filter. Default is 20.
-        order (Optional[int]): The order of the filter. Default is 4.
-        filtfilt (Optional[bool]): Whether to use forward-backward filtering.
-            Default is True.
-    Returns:
-        np.ndarray: The filtered data.
-
-    """
-    # Define filter
-    sos = signal.butter(order, cutoff, btype='low', fs=fs, output='sos')
-
-    # Apply filter
-    if filtfilt:
-        out = signal.sosfiltfilt(sos, data)
-    else:
-        out = signal.sosfilt(sos, data)
-
-    return out
-
- 
-def remove_powerline(
-    data: np.ndarray,
-    fs: Optional[int] = 2048,
-    cutoff: Optional[float] = 50,
-    width: Optional[float] = 1,
-    order: Optional[int] = 2,
-    filtfilt: Optional[bool] = True,
-    ) -> np.ndarray:
-
-    """
-    Remove powerline noise from the input data.
-
-    Parameters:
-        data (np.ndarray): The input data to be filtered.
-        fs (Optional[int]): The sampling frequency of the data. Default is 2048.
-        cutoff (Optional[list]): Cutoff frequency of the filter. Default is 50.
-        width (Optional[float]): Width of the filter. Default is 1. 
-        order (Optional[int]): The order of the filter. Default is 4.
-        filtfilt (Optional[bool]): Whether to use forward-backward filtering.
-            Default is True.
-    Returns:
-        np.ndarray: The filtered data.
-    """
-
-    # Build cutoff
-    cutoff = [cutoff - width/2, cutoff + width/2]
-
-    # Define filter
-    sos = signal.butter(order, cutoff, btype='bandstop', fs=fs, output='sos')
-
-    # Apply filter
-    if filtfilt:
-        out = signal.sosfiltfilt(sos, data)
-    else:
-        out = signal.sosfilt(sos, data)
-
-    return out
-
-
-def bandpass(
+def preprocess_emg(
     data: np.ndarray,
     fs: float,
     highpass: float = 20.0,
     lowpass: float = 500.0,
-    order: int = 4,
-    ftype: Literal["butter", "firwin2"] = "butter",
+    filter_order: int = 4,
+    notch_filter: bool = True,
+    notch_freq: float = 50.0,
+    notch_width_hz: float = 1.0,
+    notch_n_harmonics: int = 3,
+    notch_order: int = 2,
 ) -> np.ndarray:
-    """Bandpass filter with explicit high/low cutoff frequencies.
+    """Causal bandpass + optional harmonic notch. The single preprocessing path shared
+    by CBSS calibration (CBSS._preprocess_emg) and online adaptation (Data.preprocess_emg).
 
     Args:
-        data:     [T, C] EMG array.
-        fs:       Sampling frequency in Hz.
-        highpass: High-pass cutoff frequency in Hz.
-        lowpass:  Low-pass cutoff frequency in Hz.
-        order:    Filter order (butter) or number of taps (firwin2).
-        ftype:    Filter design method.
+        data:              [T, C] EMG array.
+        fs:                Sampling frequency in Hz.
+        highpass, lowpass: Bandpass cutoffs in Hz.
+        filter_order:      Butterworth order for the bandpass stage.
+        notch_filter:      Whether to notch out powerline harmonics.
+        notch_freq:        Fundamental powerline frequency in Hz (50 or 60).
+        notch_width_hz:    Half-bandwidth of each notch in Hz (±notch_width_hz).
+        notch_n_harmonics: Number of harmonics to notch (including the fundamental).
+        notch_order:       Butterworth order for each notch stage.
 
     Returns:
-        Filtered array, same shape as input.
+        Filtered array, same shape as input, float32.
     """
-    if ftype == "butter":
-        b, a = butter(order, [highpass, lowpass], fs=fs, btype="band")
-        return filtfilt(b, a, data, axis=0)
-    if ftype == "firwin2":
-        nyq = fs / 2
-        f = [0, highpass * 0.9, highpass, lowpass, lowpass * 1.1, nyq]
-        m = [0, 0, 1, 1, 0, 0]
-        fir_coeff = firwin2(order, f, m, fs=fs)
-        return filtfilt(fir_coeff, [1.0], data, axis=0)
-    raise ValueError(f"Unknown filter type: {ftype!r}")
+    out = np.asarray(data, dtype=np.float64)
+    sos_bp = butter(filter_order, [highpass, lowpass], fs=fs, btype="band", output="sos")
+    out = sosfilt(sos_bp, out, axis=0)
+    if notch_filter:
+        for harmonic in notch_freq * np.arange(1, notch_n_harmonics + 1):
+            sos_notch = butter(
+                notch_order, [harmonic - notch_width_hz, harmonic + notch_width_hz],
+                fs=fs, btype="bandstop", output="sos",
+            )
+            out = sosfilt(sos_notch, out, axis=0)
+    return out.astype(np.float32)
 
 
-def notch_harmonics(
-    data: np.ndarray,
-    fs: float,
-    f0: float = 50.0,
-    n_harmonics: int = 3,
-    width: float = 1.0,
-    order: int = 2,
-    ftype: Literal["butter", "fft", "iirnotch"] = "butter",
-) -> np.ndarray:
-    """Remove powerline noise and its harmonics.
+def filter_kwargs(cfg) -> dict:
+    """Build preprocess_emg() kwargs from a Config or CBSSConfig.
 
-    Args:
-        data:        [T, C] EMG array.
-        fs:          Sampling frequency in Hz.
-        f0:          Fundamental powerline frequency in Hz (50 or 60).
-        n_harmonics: Number of harmonics to notch (including fundamental).
-        width:       Half-bandwidth of each notch in Hz (±width).
-        order:       Filter order (butter) or quality factor (iirnotch).
-        ftype:       Filter design method.
-
-    Returns:
-        Filtered array, same shape as input.
+    Both config dataclasses declare identically-named lowcut/highcut/powerline/
+    powerline_freq/notch_* fields for this shared filter, so this one mapping
+    keeps CBSS calibration (cbss/core.py::_preprocess_emg) and online adaptation
+    (data_structures.py::Data.preprocess_emg) from drifting out of sync.
     """
-    harmonics = f0 * np.arange(1, n_harmonics + 1)
-    out = data.copy()
-
-    if ftype == "butter":
-        for freq in harmonics:
-            b, a = butter(order, [freq - width, freq + width], fs=fs, btype="bandstop")
-            out = filtfilt(b, a, out, axis=0)
-
-    elif ftype == "fft":
-        n_samples = data.shape[0]
-        spectrum = rfft(out, axis=0)
-        freqs = rfftfreq(n_samples, d=1.0 / fs)
-        for freq in harmonics:
-            mask = np.abs(freqs - freq) <= width
-            spectrum[mask, :] = 0
-        out = irfft(spectrum, n=n_samples, axis=0)
-
-    elif ftype == "iirnotch":
-        for freq in harmonics:
-            b, a = iirnotch(freq, order, fs)
-            out = filtfilt(b, a, out, axis=0)
-
-    else:
-        raise ValueError(f"Unknown filter type: {ftype!r}")
-
-    return out
+    return dict(
+        highpass=cfg.lowcut,
+        lowpass=cfg.highcut,
+        filter_order=cfg.filter_order,
+        notch_filter=cfg.powerline,
+        notch_freq=cfg.powerline_freq,
+        notch_width_hz=cfg.notch_width_hz,
+        notch_n_harmonics=cfg.notch_n_harmonics,
+        notch_order=cfg.notch_order,
+    )
 
 
 def replace_bad_channels(

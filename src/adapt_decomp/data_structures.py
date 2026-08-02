@@ -8,7 +8,8 @@ import torch
 from torch.utils.data import Dataset
 
 from adapt_decomp.config import Config
-from adapt_decomp.preprocessing import bandpass_filter, remove_powerline
+from adapt_decomp.preprocessing import filter_kwargs
+from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
 
 
 def _extend_data_v(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tensor:
@@ -45,7 +46,7 @@ class Data(Dataset):
             emg, offset = self.preprocess_emg(emg, config)
         else:
             offset = emg.mean(axis=0)
-            emg -= offset
+            emg = emg - offset
         self.extend_data(emg, config.ext_fact)
 
         self.emg_ext = self.emg_ext.to(device=config.device, dtype=torch.float32)
@@ -63,16 +64,11 @@ class Data(Dataset):
     def preprocess_emg(
         self, emg: torch.Tensor, config: Config
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        emg = bandpass_filter(
-            emg.cpu().numpy(),
-            config.fs,
-            cutoff=[config.lowcut, config.highcut],
-            filtfilt=False,
-        )
-        if config.powerline:
-            emg = remove_powerline(
-                emg, config.fs, cutoff=config.powerline_freq, filtfilt=False
-            )
+        """Shares preprocess_emg() with CBSS._preprocess_emg (calibration) so online
+        adaptation sees EMG at the same scale/spectral content the whitening
+        reference (Rz_cal) was computed from.
+        """
+        emg = preprocess_emg_fn(emg.cpu().numpy(), config.fs, **filter_kwargs(config))
         offset = np.mean(emg, axis=0)
         emg -= offset
         return torch.from_numpy(emg), torch.from_numpy(offset)
@@ -146,6 +142,16 @@ class Decomposition:
         self.emg_calib = emg_calib.to(dtype=torch.float32)
         self.ipts_calib = ipts_calib.to(dtype=torch.float32)
         self.spikes_calib = spikes_calib.to(dtype=torch.int32)
+
+        expected_D = self.emg_calib.shape[-1] * self.ext_fact
+        if expected_D != self.D:
+            raise ValueError(
+                f"ext_fact mismatch: Config.ext_fact={self.ext_fact} on "
+                f"{self.emg_calib.shape[-1]} calibration channels gives an extended "
+                f"dimension of {expected_D}, but the whitening matrix V has dimension "
+                f"{self.D}. Check that Config.ext_fact matches the CBSSConfig.ext_fact "
+                "used to produce this calibration."
+            )
 
         self.init_wh_update()
         self.init_sv_update()
@@ -254,6 +260,13 @@ class Decomposition:
         else:
             self.sigma_K_cal = torch.tensor(1e-7, device=self.device)
 
+        # EMA of ||direction @ V|| used to normalize the whitening natural-gradient
+        # direction to unit scale (see _update_V). None = not yet seeded; the first
+        # online batch seeds it directly from its own value rather than from a
+        # calibration-time sweep. Reset here (called by __init__ and _reset_params)
+        # so each fresh Optuna trial starts cold, not carrying over EMA state.
+        self.ema_dirnorm_v: Optional[torch.Tensor] = None
+
     def _update_fifo_cov(self, emg_batch: torch.Tensor) -> None:
         """Push current batch into the extended-EMG FIFO, trimming to fifo_samples."""
         self.fifo_cov = torch.cat([self.fifo_cov, emg_batch], dim=0)[-self.fifo_samples:]
@@ -328,6 +341,13 @@ class Decomposition:
             else:
                 self.kappa_cal = kappa_seed   # fallback: full-dataset estimate
                 self.sigma_kappa_cal = torch.full((M,), 1e-7, device=self.device)
+
+        # EMA of ||grad_B_row|| (per unit) used to normalize the B natural-gradient
+        # direction to unit scale (see update_B_spike_gated). None = not yet seeded;
+        # the first online batch seeds each unit directly from its own value. Reset
+        # here (called by __init__ and _reset_params) so each fresh Optuna trial
+        # starts cold.
+        self.ema_gradnorm_b: Optional[torch.Tensor] = None
 
     # ------------------------------------------------------------------
     # Spike detection state initialisation / reset

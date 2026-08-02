@@ -1,4 +1,13 @@
-"""Functions to evaluate motor unit properties"""
+"""Functions to evaluate motor unit properties.
+
+get_discharge_rate/get_coefficient_of_variation/get_pulse_to_noise_ratio/
+get_silhouette_measure here are numpy implementations kept only because
+tutorials/_generate_sim_opt_notebooks.py still imports them; production code
+(cbss/core.py, cbss/comparison.py) uses the torch reimplementations in
+cbss/signal_props.py instead, which are the canonical versions and have
+already drifted slightly from these (e.g. baseline-peak amplitude
+constraints) -- don't assume the two are numerically interchangeable.
+"""
 
 import numpy as np
 from typing import Union, Optional, Tuple, List
@@ -467,7 +476,7 @@ def rate_of_agreement_paired(
 
     #  If there are no spikes return empty RoA
     if (not np.any(spike_trains_ref)) | (not np.any(spike_trains_test)):
-        pair_idx = np.arange(n_units)
+        pair_idx = [(unit, unit) for unit in range(n_units)]
         pair_lag = np.zeros((n_units))
         roa = np.zeros((n_units))
         return roa, pair_idx, pair_lag
@@ -597,7 +606,7 @@ def rate_of_agreement(
 
     #  If no spike trains to test are provided, return empty RoA
     if not np.any(spike_trains_test):
-        pair_idx = np.arange(n_units_test)
+        pair_idx = [(unit, unit) for unit in range(n_units_test)]
         pair_lag = np.zeros((n_units_test))
         roa = np.zeros((n_units_test))
         return roa, pair_idx, pair_lag
