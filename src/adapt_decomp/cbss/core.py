@@ -316,7 +316,6 @@ class CBSS:
                 source = emg_wh @ w
                 cov = self._cov_from_idx(spike_idx, timestamps)
             else:
-                source = emg_wh @ w
                 cov = self._cov_from_idx(spike_idx, timestamps)
 
             deflation_basis.append(w)

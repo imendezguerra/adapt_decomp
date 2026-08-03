@@ -42,7 +42,7 @@ def load_neuromotion(path_file:str) -> Dict:
     with h5py.File(path_file, 'r') as h5:
 
         for key in data.keys():
-            if key in ['staircase_phases', 'paired_units']: #, 'force_profile'
+            if key in ['staircase_phases', 'paired_units']:
                 data[key] = dict.fromkeys( h5[key].keys() )
                 for subkey in h5[key].keys():
                     data[key][subkey] = h5[key][subkey][()]
@@ -71,8 +71,8 @@ def load_example(path_emg:str, path_decomp:str, preprocess:bool) -> Dict:
 
         'whitening': torch.from_numpy(decomp['WH']),
         'sep_vectors': torch.from_numpy(decomp['BRT'].T),
-        'base_centroids': torch.from_numpy(decomp['N_CENT']),
-        'spike_centroids': torch.from_numpy(decomp['SIG_CENT']),
+        'base_centr': torch.from_numpy(decomp['N_CENT']),
+        'spikes_centr': torch.from_numpy(decomp['SIG_CENT']),
         'ext_fact': int(decomp['EXT_FACT']),
 
         'emg_calib': torch.from_numpy(decomp['EMG'].T),

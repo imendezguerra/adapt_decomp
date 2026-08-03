@@ -51,11 +51,11 @@ To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_ex
 
 ## Algorithm
 
-**Whitening update (V).**
-At each batch, the extended EMG is pushed into a FIFO buffer and the whitened covariance `Rz` is re-estimated from the buffer using the current `V`. The KL divergence between `Rz` and a reference (identity under `kl_to_identity`, or the calibration covariance under `kl_to_cal`) gives a scalar error `e_v`, z-scored by its calibration standard deviation `sigma_K_cal`. The natural-gradient direction `(Rz − I) @ V` (or its `kl_to_cal` analogue) is then scaled by `e_v` and clipped so that `‖ΔV‖_F / ‖V‖_F ≤ max_rel_delta_v`. This trust-region clip replaces a fixed learning rate and makes the step size scale-free across different contractions and electrode configurations. When `wh_b_coupling` is enabled, a first-order frame correction is also propagated to `B` after each `V` step to keep the separation matrix aligned with the new whitening frame.
+**Whitening update (wh).**
+At each batch, the extended EMG is pushed into a FIFO buffer and the whitened covariance `Rz` is re-estimated from the buffer using the current `wh`. The KL divergence between `Rz` and a reference (identity under `kl_to_identity`, or the calibration covariance under `kl_to_cal`) gives a scalar error `e_wh`, z-scored by its calibration standard deviation `sigma_K_cal`. The natural-gradient direction `(Rz − I) @ wh` (or its `kl_to_cal` analogue) is then scaled by `e_wh` and clipped so that `‖Δwh‖_F / ‖wh‖_F ≤ max_rel_delta_v`. This trust-region clip replaces a fixed learning rate and makes the step size scale-free across different contractions and electrode configurations. When `wh_b_coupling` is enabled, a first-order frame correction is also propagated to `sv` after each `wh` step to keep the separation matrix aligned with the new whitening frame.
 
-**Source update (B).**
-Source signals `Y = Z @ B.T` are computed after whitening. Spikes are detected via vectorised max-pool NMS on the source FIFO (providing left-edge context) and classified against adaptive centroids. A Tukey IQR gate (`adapt_iqr_gate`) excludes outlier spikes from adaptation. The log-cosh contrast `kappa` is computed over the current batch (`batch_based`) or only at spike times (`spike_based`). The contrast error `e_b = kappa − kappa_cal` is z-scored and used to form a gradient that updates each row of `B`. The update is clipped so that `‖ΔB‖_F / ‖B‖_F ≤ max_rel_delta_b`, and `B` is row-orthonormalised (QR decomposition by default, Gram-Schmidt optionally). For the mathematical derivation see `VB_coupling_derivation.md`.
+**Source update (sv).**
+Source signals `sources = Z @ sv.T` are computed after whitening. Spikes are detected via vectorised max-pool NMS on the source FIFO (providing left-edge context) and classified against adaptive centroids. A Tukey IQR gate (`adapt_iqr_gate`) excludes outlier spikes from adaptation. The log-cosh contrast `kappa` is computed over the current batch (`batch_based`) or only at spike times (`spike_based`). The contrast error `e_sv = kappa − kappa_cal` is z-scored and used to form a gradient that updates each row of `sv`. The update is clipped so that `‖Δsv‖_F / ‖sv‖_F ≤ max_rel_delta_b`, and `sv` is row-orthonormalised (QR decomposition by default, Gram-Schmidt optionally). For the mathematical derivation see `VB_coupling_derivation.md`.
 
 ## Package structure
 The package is composed of the following modules:
@@ -104,7 +104,7 @@ The `data_config` is a YAML wrapper with paths to the calibrated decomposition m
 
 ## Config reference
 
-All active fields in `Config`. Legacy fields (`wh_learning_rate`, `sv_learning_rate`, `max_rel_delta_v`, `max_rel_delta_b`, etc.) are accepted by the YAML loader for backward compatibility but are not used by any logic.
+All active fields in `Config`. Legacy fields (`max_rel_delta_v`, `max_rel_delta_b`, `cov_alpha`, `contrast_fun`, etc.) are accepted by the YAML loader for backward compatibility but are not used by any logic.
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -116,34 +116,34 @@ All active fields in `Config`. Legacy fields (`wh_learning_rate`, `sv_learning_r
 | `powerline_freq` | `50.0` | Powerline frequency (Hz) |
 | `ext_fact` | `10` | Time-delay embedding factor; D = channels × ext_fact |
 | `batch_ms` | `100` | Batch duration in ms; batch_size = batch_ms × fs / 1000 |
-| `adapt_wh` | `true` | Enable whitening matrix V adaptation |
-| `adapt_sv` | `true` | Enable separation matrix B adaptation |
+| `adapt_wh` | `true` | Enable whitening matrix wh adaptation |
+| `adapt_sv` | `true` | Enable separation matrix sv adaptation |
 | `adapt_sd` | `true` | Enable spike/base centroid adaptation |
-| `log_loss` | `true` | Log wh_loss, sv_loss, centroid_loss, wh_trace each batch |
-| `lr_v` | `5e-3` | Whitening learning rate: applied step ≈ `lr_v · ‖V‖ · e_v` along the (unit-normalized) natural-gradient direction |
-| `lr_b` | `1e-3` | Separation-vector learning rate: applied step ≈ `lr_b · ‖B_row‖ · e_b` along the (unit-normalized) natural-gradient direction |
-| `safety_clip_multiplier_v` | `20.0` | Rare safety-net ceiling for V, expressed as a multiple of `lr_v` (not independently tunable — scales with `lr_v` so it can't collapse to always-on during search) |
-| `safety_clip_multiplier_b` | `20.0` | Rare safety-net ceiling for B, expressed as a multiple of `lr_b` |
-| `ema_alpha` | `0.95` | Smoothing rate for the EMA of ‖direction‖/‖grad_B‖ used to normalize the natural-gradient direction to unit scale before scaling by `lr_{v,b}` |
+| `compute_loss` | `true` | Log wh_loss, sv_loss, centroid_loss, wh_trace each batch |
+| `wh_learning_rate` | `5e-3` | Whitening learning rate: applied step ≈ `wh_learning_rate · ‖wh‖ · e_wh` along the (unit-normalized) natural-gradient direction. **Reuses the v1 field name but NOT its formula** — v1 multiplied a raw gradient directly; here the direction is first unit-normalized. A value tuned against v1 does not carry over and must be re-tuned. |
+| `sv_learning_rate` | `1e-3` | Separation-vector learning rate: applied step ≈ `sv_learning_rate · ‖sv_row‖ · e_sv` along the (unit-normalized) natural-gradient direction. Same v1-name-reuse caveat as `wh_learning_rate` above. |
+| `safety_clip_multiplier_wh` | `20.0` | Rare safety-net ceiling for wh, expressed as a multiple of `wh_learning_rate` (not independently tunable — scales with `wh_learning_rate` so it can't collapse to always-on during search) |
+| `safety_clip_multiplier_sv` | `20.0` | Rare safety-net ceiling for sv, expressed as a multiple of `sv_learning_rate` |
+| `ema_alpha` | `0.95` | Smoothing rate for the EMA of ‖direction‖/‖grad_sv‖ used to normalize the natural-gradient direction to unit scale before scaling by `wh_learning_rate`/`sv_learning_rate` |
 | `wh_mode` | `"kl_to_identity"` | KL divergence target: `"kl_to_identity"` or `"kl_to_cal"` |
-| `wh_b_coupling` | `false` | Propagate V-step frame correction to B |
+| `wh_b_coupling` | `false` | Propagate wh-step frame correction to sv |
 | `shrinkage` | `1e-3` | Ledoit-Wolf shrinkage applied to FIFO covariance |
 | `fifo_length` | `0` | FIFO samples for covariance estimation (0 = auto: 2×D) |
 | `max_sigma_batches` | `300` | Max calibration windows for sigma_K/kappa estimation (0 = all) |
 | `orthonormalization` | `"qr"` | Row orthonormalisation: `"qr"`, `"gram_schmidt"`, or `"none"` |
 | `contrast_scope` | `"batch_based"` | Contrast domain: `"batch_based"` or `"spike_based"` |
-| `max_iter_b` | `1` | Fixed-point iterations per batch for B |
-| `tol_b` | `1e-4` | Early-exit threshold for B fixed-point loop |
-| `min_spikes_for_update` | `1` | Minimum trusted spikes per batch to trigger B update |
+| `sv_epochs` | `1` | Fixed-point iterations per batch for sv |
+| `sv_tol` | `1e-4` | Early-exit threshold for sv fixed-point loop |
+| `min_spikes_for_update` | `1` | Minimum trusted spikes per batch to trigger sv update |
 | `spike_dist_ms` | `10` | Minimum inter-spike interval for NMS (ms) |
 | `peak_power` | `2.0` | Exponent applied to source signal before peak detection |
 | `strict_peaks` | `true` | Reject peaks whose right neighbour equals them |
-| `use_abs_for_detection` | `true` | Use \|Y\|^peak_power rather than Y^peak_power |
-| `source_fifo_batches` | `2` | Past batches of Y prepended for left-edge NMS context |
+| `use_abs_for_detection` | `true` | Use \|sources\|^peak_power rather than sources^peak_power |
+| `source_fifo_batches` | `2` | Past batches of sources prepended for left-edge NMS context |
 | `centroid_momentum` | `0.95` | EMA momentum for centroid updates (0 = no memory) |
 | `min_spikes_for_centroid` | `1` | Min trusted spikes per batch to update spike centroid |
 | `min_base_peaks_for_centroid` | `1` | Min non-spike peaks per batch to update base centroid |
-| `adapt_iqr_gate` | `true` | Exclude outlier spikes from B and centroid updates |
+| `adapt_iqr_gate` | `true` | Exclude outlier spikes from sv and centroid updates |
 | `iqr_gate_factor` | `3.0` | Tukey fence multiplier: outlier if amplitude > Q75 + factor×IQR |
 | `trace_check` | `true` | Abort optimisation trial if whitening trace diverges |
 | `trace_check_mode` | `"median"` | `"median"` or `"last"` for trace-check aggregation |
@@ -166,14 +166,13 @@ Key differences between `main` (v1) and `feature_sim` (v2):
 
 | Aspect | v1 (`main`) | v2 (`feature_sim`) |
 |--------|-------------|---------------------|
-| Step-size control | `wh_learning_rate`, `sv_learning_rate` (scalar multipliers) | `lr_v`, `lr_b` (learning rate applied to a unit-normalized natural-gradient direction; `safety_clip_multiplier_{v,b}` sets a rare safety-net ceiling scaled to `lr_{v,b}`, replacing the earlier `max_rel_delta_{v,b}` trust-region clip that was found to engage on ~100% of batches) |
+| Step-size control | `wh_learning_rate`, `sv_learning_rate` (scalar multipliers on a raw gradient) | Same field names, but reused for a different formula: applied to a unit-normalized natural-gradient direction instead (`step ≈ wh_learning_rate · ‖ref‖ · e`); `safety_clip_multiplier_{v,b}` sets a rare safety-net ceiling scaled to `wh_learning_rate`/`sv_learning_rate`, replacing the earlier `max_rel_delta_{v,b}` trust-region clip that was found to engage on ~100% of batches. **A value tuned against v1 does not carry over — re-tune from scratch, don't reuse the old number.** |
 | Whitening update | Recursive EMA covariance + KL gradient | FIFO covariance + natural-gradient update; two KL modes (`kl_to_identity`, `kl_to_cal`) |
 | Source update | Per-unit loop, scipy `find_peaks` | Vectorised NMS + adaptive centroids, GPU-compatible |
 | Orthonormalisation | Gram-Schmidt deflation (per unit) | QR decomposition (all units at once); Gram-Schmidt available via `orthonormalization: gram_schmidt` |
 | Spike detection | scipy `find_peaks` with fixed height threshold | Vectorised max-pool NMS with adaptive thresholds and IQR outlier gate |
-| Output keys | `wh_loss`, `sv_loss`, `total_loss` | + `centroid_loss`, `wh_trace`; all optional via `log_loss` |
+| Output keys | `wh_loss`, `sv_loss`, `total_loss` | + `centroid_loss`, `wh_trace`; all optional via `compute_loss` |
 | Hyperparameter search | wandb sweep (wandb-managed) | wandb sweep + Optuna (self-contained); results optionally logged to wandb |
-| Centroid argument names | `base_centr`, `spikes_centr` | `base_centroid`, `spike_centroid` |
 
 ## Contributing
 We welcome contributions! Here's how you can contribute:

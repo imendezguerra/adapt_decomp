@@ -195,11 +195,6 @@ def _subset_cbss_result(result: CBSSResult, mask: np.ndarray) -> CBSSResult:
         muaps=_sel4d_axis0(result.muaps),
         emg=result.emg,
         timestamps=result.timestamps,
-        wh_loss=result.wh_loss,
-        sv_loss=result.sv_loss,
-        total_loss=result.total_loss,
-        centroid_loss=result.centroid_loss,
-        wh_trace=result.wh_trace,
         gt_matched_indices=_sel1d(result.gt_matched_indices),
         roa=_sel1d(result.roa),
     )

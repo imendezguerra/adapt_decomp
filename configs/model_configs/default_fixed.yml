@@ -16,13 +16,13 @@ batch_ms: 100                     # Batch duration (ms); batch_size = batch_ms �
 adapt_wh: false                   # Do not adapt whitening matrix V
 adapt_sv: false                   # Do not adapt separation matrix B
 adapt_sd: false                   # Do not adapt spike / base centroids
-log_loss: true                    # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
+compute_loss: true                    # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
 
 # Step-size (learning rate; unused when adapt_wh/sv are false). The clip ceiling
-# is now derived automatically as safety_clip_multiplier_{v,b} * lr_{v,b} (Config
+# is now derived automatically as safety_clip_multiplier_{wh,sv} * wh_learning_rate/sv_learning_rate (Config
 # defaults), not set here.
-lr_v: 5.0e-3                      # Whitening learning rate
-lr_b: 1.0e-3                      # Separation-vector learning rate
+wh_learning_rate: 5.0e-3                      # Whitening learning rate
+sv_learning_rate: 1.0e-3                      # Separation-vector learning rate
 
 # Whitening
 wh_mode: kl_to_identity           # KL target: "kl_to_identity" or "kl_to_cal"
@@ -34,8 +34,8 @@ max_sigma_batches: 300            # Max calibration windows for sigma_K estimati
 # Source separation
 orthonormalization: qr            # Row orthonormalisation: "qr", "gram_schmidt", or "none"
 contrast_scope: batch_based       # "batch_based" or "spike_based"
-max_iter_b: 1                     # Fixed-point iterations per batch for B
-tol_b: 1.0e-4                     # Early-exit threshold: ||ΔB||_F / ||B||_F < tol_b
+sv_epochs: 1                     # Fixed-point iterations per batch for B
+sv_tol: 1.0e-4                     # Early-exit threshold: ||ΔB||_F / ||B||_F < sv_tol
 min_spikes_for_update: 1          # Minimum trusted spikes per batch to trigger B update
 
 # Spike detection

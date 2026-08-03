@@ -29,11 +29,6 @@ class CBSSResult:
     muaps: Optional[np.ndarray] = None
     emg: Optional[np.ndarray] = None
     timestamps: Optional[np.ndarray] = None
-    wh_loss: Optional[np.ndarray] = None
-    sv_loss: Optional[np.ndarray] = None
-    total_loss: Optional[np.ndarray] = None
-    centroid_loss: Optional[np.ndarray] = None
-    wh_trace: Optional[np.ndarray] = None
     gt_matched_indices: Optional[np.ndarray] = None  # [n_mu] index into GT units after supervised selection
     roa: Optional[np.ndarray] = None                 # [n_mu] RoA vs gt_matched_indices, set by select_units_supervised
 
@@ -56,11 +51,6 @@ class CBSSResult:
             "muaps": self.muaps,
             "emg": self.emg,
             "timestamps": self.timestamps,
-            "wh_loss": self.wh_loss,
-            "sv_loss": self.sv_loss,
-            "total_loss": self.total_loss,
-            "centroid_loss": self.centroid_loss,
-            "wh_trace": self.wh_trace,
             "gt_matched_indices": self.gt_matched_indices,
             "roa": self.roa,
         }

@@ -5,11 +5,13 @@ using the same conventions as AdaptDecomp.__init__ (sep_vectors is [M, D]).
 
 Default search space
 --------------------
-DEFAULT_PARAM_SPACE covers the three parameters whose empirical optimal values
-cluster in well-defined ranges across simulated and experimental datasets:
+DEFAULT_PARAM_SPACE covers two of the three parameters whose empirical optimal
+values cluster in well-defined ranges across simulated and experimental
+datasets (the third, centroid_momentum, is included below but commented out
+pending further validation):
 
-    lr_v              — whitening learning rate (log-uniform)
-    lr_b              — separation-vector learning rate (log-uniform)
+    wh_learning_rate  — whitening learning rate (log-uniform)
+    sv_learning_rate  — separation-vector learning rate (log-uniform)
     centroid_momentum — EMA momentum for spike/base centroid tracking (uniform)
 
 batch_ms is intentionally excluded from the default space because changing it
@@ -29,18 +31,14 @@ from adapt_decomp.adaptation import AdaptDecomp
 from adapt_decomp.config import Config, validate_literals
 
 DEFAULT_PARAM_SPACE: dict = {
-    "lr_v":   ("log_float", 1e-4, 5e-2),
-    "lr_b":   ("log_float", 1e-4, 1e-1),
+    "wh_learning_rate":   ("log_float", 1e-4, 5e-2),
+    "sv_learning_rate":   ("log_float", 1e-4, 1e-1),
     # "centroid_momentum": ("float",     0.70, 0.98),
 }
 
 
 def _suggest_overrides(trial, param_space: dict) -> dict:
-    """Suggest one value per param_space entry for this trial.
-
-    Shared by optimize_adapt_decomp and optimize_adapt_decomp_pooled so both
-    interpret a param_space spec identically.
-    """
+    """Suggest one value per param_space entry for this trial."""
     overrides = {}
     for name, spec in param_space.items():
         kind = spec[0]
@@ -61,8 +59,8 @@ def optimize_adapt_decomp(
     emg: torch.Tensor,
     whitening: torch.Tensor,
     sep_vectors: torch.Tensor,
-    base_centroids: torch.Tensor,
-    spike_centroids: torch.Tensor,
+    base_centr: torch.Tensor,
+    spikes_centr: torch.Tensor,
     emg_calib: torch.Tensor,
     ipts_calib: torch.Tensor,
     spikes_calib: torch.Tensor,
@@ -91,8 +89,8 @@ def optimize_adapt_decomp(
     param_space format::
 
         {
-            "lr_v":   ("log_float", 1e-4, 5e-2),
-            "lr_b":   ("log_float", 1e-4, 1e-1),
+            "wh_learning_rate":   ("log_float", 1e-4, 5e-2),
+            "sv_learning_rate":   ("log_float", 1e-4, 1e-1),
             # "centroid_momentum": ("float",     0.70, 0.98),
         }
 
@@ -123,8 +121,8 @@ def optimize_adapt_decomp(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centroids=base_centroids,
-        spike_centroids=spike_centroids,
+        base_centr=base_centr,
+        spikes_centr=spikes_centr,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,
@@ -162,91 +160,12 @@ def optimize_adapt_decomp(
     return best_config, study
 
 
-def optimize_adapt_decomp_pooled(
-    recordings: list,
-    param_space: dict,
-    *,
-    base_config: Optional[dict] = None,
-    n_trials: int = 100,
-    preprocess: bool = False,
-    sampler=None,
-    config: Optional[Config] = None,
-) -> tuple:
-    """Search for hyperparameters minimising the SUMMED single-objective loss
-    across multiple recordings at once, instead of one reference recording.
-
-    Use this instead of optimize_adapt_decomp to test whether a single
-    (lr_v, lr_b) generalises across conditions rather than overfitting to
-    whichever single recording was used as reference. Recordings to hold out
-    for a generalisation check simply aren't included in `recordings`.
-
-    Each element of `recordings` is a dict with the same keys as
-    optimize_adapt_decomp's tensor arguments: emg, whitening, sep_vectors,
-    base_centroids, spike_centroids, emg_calib, ipts_calib, spikes_calib.
-
-    Single-objective only -- summing a 3-tuple (multi_obj) across recordings
-    would no longer be a meaningful Pareto problem, so multiobjective pooling
-    isn't supported here.
-
-    The divergence guard (trace_check) already returns 1e10 per recording when
-    it diverges, so a setting that blows up on even one pooled recording
-    dominates the sum rather than being averaged away.
-
-    Returns (best_config_dict, optuna.Study). Per-recording losses for each
-    trial are stored in trial.user_attrs['loss_<i>'] (index into `recordings`).
-    """
-    try:
-        import optuna
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-    except ImportError:
-        raise ImportError("optimize_adapt_decomp_pooled requires optuna: pip install optuna")
-
-    run_config_template = config if config is not None else Config()
-    if base_config:
-        for k, v in base_config.items():
-            setattr(run_config_template, k, v)
-    run_config_template.optim_loss = "single_obj"
-    validate_literals(run_config_template)
-
-    adapters = [
-        AdaptDecomp(
-            emg=rec["emg"],
-            whitening=rec["whitening"],
-            sep_vectors=rec["sep_vectors"],
-            base_centroids=rec["base_centroids"],
-            spike_centroids=rec["spike_centroids"],
-            emg_calib=rec["emg_calib"],
-            ipts_calib=rec["ipts_calib"],
-            spikes_calib=rec["spikes_calib"],
-            preprocess=preprocess,
-            config=copy.deepcopy(run_config_template),
-        )
-        for rec in recordings
-    ]
-
-    def objective(trial):
-        overrides = _suggest_overrides(trial, param_space)
-        losses = [a.run_optimisation(config_overrides=overrides) for a in adapters]
-        for i, loss_i in enumerate(losses):
-            trial.set_user_attr(f"loss_{i}", loss_i)
-        return sum(losses)
-
-    study = optuna.create_study(
-        direction="minimize",
-        sampler=sampler if sampler is not None else optuna.samplers.CmaEsSampler(n_startup_trials=15),
-    )
-    study.optimize(objective, n_trials=n_trials)
-
-    best_config = {**(base_config or {}), **study.best_params, "optim_loss": "single_obj"}
-    return best_config, study
-
-
 def run_with_optimization(
     emg: torch.Tensor,
     whitening: torch.Tensor,
     sep_vectors: torch.Tensor,
-    base_centroids: torch.Tensor,
-    spike_centroids: torch.Tensor,
+    base_centr: torch.Tensor,
+    spikes_centr: torch.Tensor,
     emg_calib: torch.Tensor,
     ipts_calib: torch.Tensor,
     spikes_calib: torch.Tensor,
@@ -269,8 +188,8 @@ def run_with_optimization(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centroids=base_centroids,
-        spike_centroids=spike_centroids,
+        base_centr=base_centr,
+        spikes_centr=spikes_centr,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,
@@ -294,8 +213,8 @@ def run_with_optimization(
         emg=emg,
         whitening=whitening,
         sep_vectors=sep_vectors,
-        base_centroids=base_centroids,
-        spike_centroids=spike_centroids,
+        base_centr=base_centr,
+        spikes_centr=spikes_centr,
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,

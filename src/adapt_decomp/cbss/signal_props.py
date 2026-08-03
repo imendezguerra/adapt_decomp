@@ -64,35 +64,6 @@ def get_base_and_spike_vals(
     return ipt2[base_idx], ipt2[spike_idx]
 
 
-def get_silhouette_measure(
-    spike_trains: torch.Tensor,
-    ipts: torch.Tensor,
-    ext_fact: int,
-    min_peak_dist: int = 0,
-    spike_centr: Optional[torch.Tensor] = None,
-    base_centr: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """Silhouette measure for each unit using resolved spike-train labels."""
-    ipts2 = ipts ** 2
-    n_mu = spike_trains.shape[1]
-    sil = torch.zeros(n_mu, dtype=ipts.dtype, device=ipts.device)
-    min_dist = max(1, int(min_peak_dist))
-    for unit in range(n_mu):
-        base_vals, spike_vals = get_base_and_spike_vals(
-            spike_trains[:, unit], ipts2[:, unit], ext_fact, min_dist
-        )
-        if spike_vals.numel() == 0 or base_vals.numel() == 0:
-            continue
-        sc = spike_vals.median() if spike_centr is None else spike_centr[unit]
-        bc = base_vals.median() if base_centr is None else base_centr[unit]
-        within = ((spike_vals - sc) ** 2).sum()
-        between = ((spike_vals - bc) ** 2).sum()
-        denom = torch.maximum(within, between)
-        if denom > 0:
-            sil[unit] = (between - within) / denom
-    return sil
-
-
 def get_pulse_to_noise_ratio(
     spike_trains: torch.Tensor,
     ipts: torch.Tensor,
@@ -168,13 +139,3 @@ def emg_to_ch_array(emg: torch.Tensor, ch_map: np.ndarray | torch.Tensor) -> tor
     valid = ch_map_t >= 0
     ch_array[valid, :] = emg[:, ch_map_t[valid]].T
     return ch_array
-
-
-# Aliases matching the parent package naming convention
-get_muaps_torch = get_muaps
-get_base_and_spike_vals_torch = get_base_and_spike_vals
-get_silhouette_measure_torch = get_silhouette_measure
-get_pulse_to_noise_ratio_torch = get_pulse_to_noise_ratio
-get_discharge_rate_torch = get_discharge_rate
-get_coefficient_of_variation_torch = get_coefficient_of_variation
-emg_to_ch_array_torch = emg_to_ch_array

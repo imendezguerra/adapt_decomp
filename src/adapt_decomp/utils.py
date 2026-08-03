@@ -2,11 +2,14 @@
 
 get_discharge_rate/get_coefficient_of_variation/get_pulse_to_noise_ratio/
 get_silhouette_measure here are numpy implementations kept only because
-tutorials/_generate_sim_opt_notebooks.py still imports them; production code
-(cbss/core.py, cbss/comparison.py) uses the torch reimplementations in
-cbss/signal_props.py instead, which are the canonical versions and have
-already drifted slightly from these (e.g. baseline-peak amplitude
+notebooks/JNE_data/ and notebooks/examples/adaptive_emg_decomp_dyn_example.ipynb
+still import them directly. Production code (cbss/core.py, cbss/comparison.py)
+uses the torch reimplementations of get_discharge_rate/get_coefficient_of_variation/
+get_pulse_to_noise_ratio in cbss/signal_props.py instead, which are the canonical
+versions and have already drifted slightly from these (e.g. baseline-peak amplitude
 constraints) -- don't assume the two are numerically interchangeable.
+get_silhouette_measure has no such production counterpart: SIL is computed
+in-pipeline via the independent implementation in cbss/spikes.py::_sil_peaks.
 """
 
 import numpy as np
@@ -699,7 +702,6 @@ def rate_of_agreement(
         firings_1 = np.nonzero(spike_trains_test[:, pair[1]])[0] + pair_lag[i]
 
         # Initialise variables
-        # len_firings_1 = len(firings_1)
         firings_common = 0
         firings_0_only = 0
         firings_1_only = 0

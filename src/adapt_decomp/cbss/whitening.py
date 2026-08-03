@@ -32,6 +32,10 @@ def pca_reduction(
 ) -> Tuple[torch.Tensor, Optional[PCA]]:
     """Optional PCA dimensionality reduction before whitening.
 
+    If pca_model is provided (already fitted), it is reused via .transform()
+    rather than refit, so the same projection learned at calibration time can
+    be applied to new data. If pca_model is None, a fresh PCA is fit here.
+
     Returns:
         (reduced_tensor, fitted_pca_model). pca_model is None when n_components is None.
     """
@@ -40,9 +44,12 @@ def pca_reduction(
     d = min(n_components, emg_ext.shape[0], emg_ext.shape[1])
     if d < 1:
         raise ValueError("PCA requires at least one sample and one feature.")
+    emg_ext_np = emg_ext.cpu().numpy()
     if pca_model is None:
         pca_model = PCA(n_components=d)
-    emg_pca_np = pca_model.fit_transform(emg_ext.cpu().numpy())
+        emg_pca_np = pca_model.fit_transform(emg_ext_np)
+    else:
+        emg_pca_np = pca_model.transform(emg_ext_np)
     emg_pca = torch.from_numpy(emg_pca_np).to(device=emg_ext.device, dtype=emg_ext.dtype)
     return emg_pca, pca_model
 

@@ -29,23 +29,23 @@ def validate_literals(obj) -> None:
 @dataclass
 class _LegacyConfig:
     """Fields retained only so old YAML files load without error. Not used by any logic."""
-    compute_loss: bool = True
     log_wh_trace: bool = False
     log_centroid_loss: bool = False
-    wh_learning_rate: float = 0.0
-    sv_learning_rate: float = 0.0
-    sv_epochs: int = 1
-    sv_tol: float = 1e-4
     contrast_fun: Literal["logcosh", "cube"] = "logcosh"
     cov_reg_eps: float = 1e-6
     wh_error_clamp: float = 1e3
     sv_error_clamp: float = 10.0
     spike_height_mult: int = 3
     spike_prev_weight: int = 5
-    # Superseded by lr_v/lr_b + safety_clip_multiplier_v/b (see Config below): these used
-    # to be both the step size AND the clip ceiling, which meant the clip was engaged on
-    # ~100% of batches and silently discarded the error term's magnitude. Kept here inert
-    # so old YAML/JSON configs still load without error.
+    # cov_alpha (EMA-style covariance regularisation) has no true replacement here --
+    # shrinkage (Config, below) is a different quantity (one-shot Tikhonov shrinkage on
+    # the FIFO covariance, not an EMA decay rate). Kept inert purely so main's tracked
+    # configs (which set cov_alpha) load without raising TypeError.
+    cov_alpha: float = 0.1
+    # Superseded by wh_learning_rate/sv_learning_rate + safety_clip_multiplier_wh/sv (see
+    # Config below): these used to be both the step size AND the clip ceiling, which meant
+    # the clip was engaged on ~100% of batches and silently discarded the error term's
+    # magnitude. Kept here inert so old YAML/JSON configs still load without error.
     max_rel_delta_v: float = 1e-1
     max_rel_delta_b: float = 1e-1
 
@@ -79,19 +79,19 @@ class Config(_LegacyConfig):
     adapt_wh: bool = True
     adapt_sv: bool = True
     adapt_sd: bool = True
-    log_loss: bool = True    # Log wh_loss, sv_loss, centroid_loss and wh_trace each batch
+    compute_loss: bool = True    # Log wh_loss, sv_loss, centroid_loss and wh_trace each batch
     save_params: bool = False
 
     # --- Whitening mode ---
     # "kl_to_identity" — drives KL(Rz ‖ I) toward the calibration value K_cal.
-    #   Update direction: (Rz − I) @ V.  Error: K − K_cal.
+    #   Update direction: (Rz − I) @ wh.  Error: K − K_cal.
     # "kl_to_cal"      — drives KL(Rz ‖ Rz_cal) to zero.
-    #   Update direction: (Rz_cal⁻¹ Rz − I) @ V.  Error: KL(Rz ‖ Rz_cal).
+    #   Update direction: (Rz_cal⁻¹ Rz − I) @ wh.  Error: KL(Rz ‖ Rz_cal).
     #   Zero update iff Rz = Rz_cal (unique fixed point at calibration statistics).
     wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"
 
-    # Propagate the first-order frame correction from each V step to B.
-    # Keeps B aligned with V's coordinate frame without waiting for the contrast
+    # Propagate the first-order frame correction from each wh step to sv.
+    # Keeps sv aligned with wh's coordinate frame without waiting for the contrast
     # gradient to discover the mismatch through kappa drift.
     wh_b_coupling: bool = False
 
@@ -100,65 +100,74 @@ class Config(_LegacyConfig):
     eps: float = 1e-7               # Numerical stability floor
 
     # --- Learning rate + safety clip ---
-    # The natural-gradient direction (direction@V for V, grad_B row for B) is normalized
-    # to unit scale (via an EMA of its own norm, so a single noisy/near-zero batch can't
-    # dominate the normalization) before being scaled by lr_{v,b} and the actual signed
-    # error e_v/e_b. This is the real, Optuna-tunable step size: actual step ~ lr * ||ref||
-    # * e, so it shrinks toward zero as e -> 0 and grows for genuine drift -- unlike the
-    # old max_rel_delta_{v,b} scheme, whose clip engaged on ~100% of batches (verified
-    # empirically) and reduced every step to a fixed size, discarding e's magnitude
-    # entirely and keeping only its sign.
-    lr_v: float = 5e-3
-    lr_b: float = 1e-3
+    # NOTE ON BACKWARD COMPATIBILITY: wh_learning_rate/sv_learning_rate are REUSED names
+    # from main (v1), but the formula behind them is NOT the same quantity. In v1 these
+    # were direct multipliers on a raw gradient. Here, the natural-gradient direction
+    # (direction@wh for wh, grad_sv row for sv) is first normalized to unit scale (via an
+    # EMA of its own norm, so a single noisy/near-zero batch can't dominate the
+    # normalization), then scaled by wh_learning_rate/sv_learning_rate and the actual
+    # signed error e_wh/e_sv.
+    # Actual step ~ lr * ||ref|| * e, so it shrinks toward zero as e -> 0 and grows for
+    # genuine drift -- unlike the old max_rel_delta_{v,b} scheme, whose clip engaged on
+    # ~100% of batches (verified empirically) and reduced every step to a fixed size,
+    # discarding e's magnitude entirely and keeping only its sign.
+    # Practical implication: a wh_learning_rate/sv_learning_rate value tuned against main
+    # (v1) does NOT carry over to this version -- it will silently run with a very
+    # different (and probably wrong) effective step size. Old configs need re-tuning,
+    # not blind reuse of the numeric value.
+    wh_learning_rate: float = 5e-3
+    sv_learning_rate: float = 1e-3
 
     # Rare safety net only -- NOT tuned by Optuna. Effective ceiling is always
-    # safety_clip_multiplier_{v,b} * lr_{v,b} * ||ref||, so it scales automatically with
-    # whatever lr gets tuned to and can never independently collapse back to a
-    # near-always-binding threshold (which fixing it at an absolute constant would risk).
-    safety_clip_multiplier_v: float = 20.0
-    safety_clip_multiplier_b: float = 20.0
+    # safety_clip_multiplier_{wh,sv} * wh_learning_rate/sv_learning_rate * ||ref||, so it
+    # scales automatically with whatever lr gets tuned to and can never independently
+    # collapse back to a near-always-binding threshold (which fixing it at an absolute
+    # constant would risk).
+    safety_clip_multiplier_wh: float = 20.0
+    safety_clip_multiplier_sv: float = 20.0
 
-    # Smoothing rate for the EMA of ||direction@V|| / ||grad_B_row|| used to normalize
+    # Smoothing rate for the EMA of ||direction@wh|| / ||grad_sv_row|| used to normalize
     # the natural-gradient direction. Keeps the normalization denominator stable across
     # batches (a single low-spike-count batch can't make the direction estimate noisy)
     # while the direction itself stays fully responsive to the current batch.
     ema_alpha: float = 0.95
 
     # --- Learning-rate-alone ablation ---
-    # False (default): current behaviour -- lr_{v,b} scales the direction-normalized
-    # natural gradient AND the signed calibration error e_v/e_b (step magnitude tracks
-    # how wrong the model currently is; sign target-tracks calibration statistics).
-    # True: drop the e_v/e_b factor -- lr_{v,b} alone sets a constant relative step
-    # applied every batch, direction-normalized but otherwise unconditional. This is
-    # the closest available reproduction of main (v1)'s fixed-learning-rate update,
-    # now built on the EMA-normalized direction rather than main's raw gradient. For
-    # B this also flips the update from error-correcting descent to natural-gradient
-    # ASCENT -- main's B update maximized contrast unconditionally (no error term at
-    # all); see ops.py::update_B_spike_gated and adaptation.py::_update_V for why V's
-    # sign is unaffected but B's must flip.
+    # False (default): current behaviour -- wh_learning_rate/sv_learning_rate scales the
+    # direction-normalized natural gradient AND the signed calibration error e_wh/e_sv (step
+    # magnitude tracks how wrong the model currently is; sign target-tracks calibration
+    # statistics).
+    # True: drop the e_wh/e_sv factor -- wh_learning_rate/sv_learning_rate alone sets a
+    # constant relative step applied every batch, direction-normalized but otherwise
+    # unconditional. This is the closest available reproduction of main (v1)'s
+    # fixed-learning-rate update, now built on the EMA-normalized direction rather than
+    # main's raw gradient. For sv this also flips the update from error-correcting descent
+    # to natural-gradient ASCENT -- main's sv update maximized contrast unconditionally (no
+    # error term at all); see ops.py::update_sv_spike_gated and adaptation.py::_update_wh
+    # for why wh's sign is unaffected but sv's must flip.
     lr_alone: bool = False
 
-    min_spikes_for_update: int = 1      # Minimum spike count to allow B row update
+    min_spikes_for_update: int = 1      # Minimum spike count to allow sv row update
 
     # --- Silence penalty (opt-in ablation of NaN-exclusion) ---
     # When a unit has fewer than min_spikes_for_update trusted spikes in a batch
     # (spike_based contrast_scope only -- batch_based never gates), its
     # contrast_error is normally excluded (NaN) from sv_loss so it doesn't bias
-    # the loss, but this also hides real failures (whitening/B-update collapse)
+    # the loss, but this also hides real failures (whitening/sv-update collapse)
     # behind indistinguishable "no spike" windows. When silence_penalty is True,
-    # a fixed z-score (silence_penalty_zscore) is used instead of NaN. The B
-    # update itself is unaffected either way -- grad_B stays masked to zero for
+    # a fixed z-score (silence_penalty_zscore) is used instead of NaN. The sv
+    # update itself is unaffected either way -- grad_sv stays masked to zero for
     # inactive units, only the reported/optimised loss value changes.
     silence_penalty: bool = False
     silence_penalty_zscore: float = -3.0
 
     orthonormalization: str = "qr"      # "qr" (default), "gram_schmidt", or "none"
 
-    # Contrast scope: how kappa and kappa_cal are computed for the B update.
-    #   "batch_based"  — log_cosh(Y).mean(dim=0) over all N samples; gradient is also
-    #                    batch-averaged (tanh(Y).T @ Z / N), decoupled from spike detection
-    #   "spike_based"  — log_cosh(Y) averaged only at detected spike times; gradient
-    #                    is spike-gated (tanh(Y[spike_mask]).T @ Z / spike_counts)
+    # Contrast scope: how kappa and kappa_cal are computed for the sv update.
+    #   "batch_based"  — log_cosh(sources).mean(dim=0) over all N samples; gradient is also
+    #                    batch-averaged (tanh(sources).T @ Z / N), decoupled from spike detection
+    #   "spike_based"  — log_cosh(sources) averaged only at detected spike times; gradient
+    #                    is spike-gated (tanh(sources[spike_mask]).T @ Z / spike_counts)
     # Calibration kappa_cal is computed the same way for consistency.
     contrast_scope: Literal["batch_based", "spike_based"] = "batch_based"
 
@@ -174,7 +183,7 @@ class Config(_LegacyConfig):
     # fifo_length: number of samples to keep for whitening covariance estimation.
     # 0 means auto = 2 × D (extended channels). Hard floor = D.
     fifo_length: int = 0
-    source_fifo_batches: int = 2    # Past batches of Y prepended for edge spike support
+    source_fifo_batches: int = 2    # Past batches of sources prepended for edge spike support
 
     # --- Calibration sigma estimation ---
     # Maximum number of calibration windows used to estimate sigma_K_cal and sigma_kappa_cal.
@@ -187,9 +196,9 @@ class Config(_LegacyConfig):
     min_spikes_for_centroid: int = 1
     min_base_peaks_for_centroid: int = 1
 
-    # --- B fixed-point iterations ---
-    max_iter_b: int = 1       # Max ICA fixed-point iterations per batch for B (1 = single step)
-    tol_b: float = 1e-4       # Early-exit threshold: ‖B_new − B_old‖_F / ‖B_old‖_F < tol_b
+    # --- sv fixed-point iterations ---
+    sv_epochs: int = 1       # Max ICA fixed-point iterations per batch for sv (1 = single step)
+    sv_tol: float = 1e-4     # Early-exit threshold: ‖sv_new − sv_old‖_F / ‖sv_old‖_F < sv_tol
 
     # --- Optimisation ---
     trace_check: bool = True                                    # Reject diverged trials in run_optimisation via trace ratio guard

@@ -66,8 +66,8 @@ def run(model_config, data_config, wandb_project_name, wandb_config=None,
     config.ext_fact = data['ext_fact']
 
     run_name = (
-        f'adapt_decomp_dv{config.lr_v:.0e}'
-        f'_db{config.lr_b:.0e}'
+        f'adapt_decomp_dv{config.wh_learning_rate:.0e}'
+        f'_db{config.sv_learning_rate:.0e}'
     )
 
     if wandb.run is None:
@@ -79,8 +79,8 @@ def run(model_config, data_config, wandb_project_name, wandb_config=None,
         emg=data['emg'].clone(),
         whitening=data['whitening'].clone(),
         sep_vectors=data['sep_vectors'].clone(),
-        base_centroids=data['base_centroids'].clone(),
-        spike_centroids=data['spike_centroids'].clone(),
+        base_centr=data['base_centr'].clone(),
+        spikes_centr=data['spikes_centr'].clone(),
         emg_calib=data['emg_calib'].clone(),
         ipts_calib=data['ipts_calib'].clone(),
         spikes_calib=data['spikes_calib'].clone(),
@@ -133,7 +133,8 @@ def main():
         def sweep_run():
             wandb.init(project=args.wandb_project_name, name="temp_run")
             run(args.model_config, args.data_config, args.wandb_project_name,
-                wandb_config=dict(wandb.config))
+                wandb_config=dict(wandb.config),
+                optim_config=args.optim_config, n_trials=args.n_trials)
 
         wandb.agent(sweep_id, function=sweep_run, count=args.sweep_counts)
     else:
