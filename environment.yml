@@ -8,6 +8,10 @@ dependencies:
   - numpy<2.0.0
   - scipy
   - seaborn
+  - pandas
+  - scikit-learn
+  - pyyaml
+  - pytest
   - ipykernel
   - pip
   - pip:
@@ -15,3 +19,5 @@ dependencies:
     - wandb
     - optuna
     - cmaes
+    - loguru
+    - plotly

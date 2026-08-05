@@ -21,9 +21,15 @@ dependencies = [
     "numpy<2.0.0",
     "scipy",
     "seaborn",
+    "pandas",
+    "scikit-learn",
+    "pyyaml",
+    "pytest",
     "ipykernel",
     "torch",                   # pip version (CPU by default)
     "wandb",
     "optuna",
     "cmaes",                   # required by optuna.samplers.CmaEsSampler
+    "loguru",
+    "plotly",
 ]
