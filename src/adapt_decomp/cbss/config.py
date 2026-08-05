@@ -16,9 +16,8 @@ class CBSSConfig:
     """Configuration for the CBSS decomposition algorithm."""
 
     # Preprocessing
-    # Shares preprocessing.preprocess_emg with the online AdaptDecomp Config -- these
-    # field names are kept identical to Config's equivalents (lowcut/highcut/powerline/
-    # powerline_freq) so the two configs stay directly comparable/copyable.
+    # Shares preprocessing.preprocess_emg with the online AdaptDecomp Config
+
     fs: float = 2048.0
     preprocess_emg: bool = True
     lowcut: Optional[float] = 20.0
@@ -26,9 +25,7 @@ class CBSSConfig:
     filter_order: int = 4
     powerline: bool = True
     powerline_freq: float = 50.0
-    notch_width_hz: float = 1.0      # half-bandwidth per notch, in Hz (was mislabelled
-                                      # notch_quality_factor and fed straight into a
-                                      # Hz-half-bandwidth parameter as if it were 30 Hz)
+    notch_width_hz: float = 1.0      # half-bandwidth per notch, in Hz
     notch_n_harmonics: int = 3
     notch_order: int = 2
     replace_bad_channels: bool = False
@@ -76,7 +73,7 @@ class CBSSConfig:
     compute_properties: bool = True
 
     # Result storage
-    save_emg: bool = False
+    save_emg: bool = True
 
     # Compute device (None = auto: CUDA > MPS > CPU)
     device: Optional[str] = None

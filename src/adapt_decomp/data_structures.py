@@ -89,14 +89,16 @@ class Decomposition:
 
     def __init__(
         self,
-        whitening: torch.Tensor,   # whitening matrix [D, D]
-        sep_vectors: torch.Tensor, # separation matrix [M, D]
+        whitening: torch.Tensor,   # whitening matrix [D, D] (or [n, D] when pca_components is set)
+        sep_vectors: torch.Tensor, # separation matrix [M, D] (or [M, n] when pca_components is set)
         base_centr: torch.Tensor,  # baseline centroids [M]
         spikes_centr: torch.Tensor,  # spike centroids [M]
         emg_calib: torch.Tensor,
         ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
         config: Optional[Config] = None,
+        pca_components: Optional[torch.Tensor] = None,    # [n, D] sklearn PCA.components_ convention
+        pca_mean: Optional[torch.Tensor] = None,          # [D]
     ) -> None:
         """Initialise the decomposition model from precalibrated matrices.
 
@@ -105,6 +107,15 @@ class Decomposition:
         and init_sd_update to compute the calibration statistics needed for online
         adaptation.  After construction, adaptive state (whitening, sep_vectors,
         spikes_centr, base_centr, fifo_cov, source_fifo) is ready for per-batch updates.
+
+        pca_components/pca_mean (from CBSSResult, when CBSSConfig.n_components was
+        set): if given, every extended-EMG batch is projected through this fitted
+        PCA transform -- (X_ext - pca_mean) @ pca_components.T -- immediately after
+        per-batch centering and before whitening is applied (see _apply_pca and its
+        call sites in _update_wh/init_wh_update), matching the CBSS calibration
+        pipeline's own center -> extend -> PCA -> whiten order. whitening/sep_vectors
+        must then be dimensioned for the PCA-reduced space (n), not the raw extended
+        space (D = channels*ext_fact).
         """
         if config is None:
             config = Config()
@@ -126,6 +137,16 @@ class Decomposition:
         self.whitening = whitening.to(dtype=torch.float32, device=self.device)
         self.sep_vectors = sep_vectors.to(dtype=torch.float32, device=self.device)
 
+        # --- Immutable PCA projection (None = identity, i.e. no reduction) ---
+        self.pca_components = (
+            pca_components.to(dtype=torch.float32, device=self.device)
+            if pca_components is not None else None
+        )
+        self.pca_mean = (
+            pca_mean.to(dtype=torch.float32, device=self.device)
+            if pca_mean is not None else None
+        )
+
         # --- Immutable calibration centroid references ---
         self.spikes_centr_cal = spikes_centr.to(
             dtype=torch.float32, device=self.device
@@ -134,7 +155,8 @@ class Decomposition:
             dtype=torch.float32, device=self.device
         )
 
-        # n: extended channel count (whitening space dimension)
+        # n: whitening-space dimension (extended channel count, or PCA-reduced
+        # count when pca_components is set)
         self.n = self.whitening.shape[0]
         self.I = torch.eye(self.n, dtype=torch.float32, device=self.device)
 
@@ -143,12 +165,26 @@ class Decomposition:
         self.ipts_calib = ipts_calib.to(dtype=torch.float32)
         self.spikes_calib = spikes_calib.to(dtype=torch.int32)
 
-        expected_D = self.emg_calib.shape[-1] * self.ext_fact
-        if expected_D != self.n:
+        expected_ext_D = self.emg_calib.shape[-1] * self.ext_fact
+        if self.pca_components is not None:
+            if self.pca_components.shape[1] != expected_ext_D:
+                raise ValueError(
+                    f"pca_components mismatch: Config.ext_fact={self.ext_fact} on "
+                    f"{self.emg_calib.shape[-1]} calibration channels gives an extended "
+                    f"dimension of {expected_ext_D}, but pca_components' input dimension "
+                    f"is {self.pca_components.shape[1]}. Check that Config.ext_fact matches "
+                    "the CBSSConfig.ext_fact used to produce this calibration."
+                )
+            if self.pca_components.shape[0] != self.n:
+                raise ValueError(
+                    f"pca_components output dimension ({self.pca_components.shape[0]}) "
+                    f"doesn't match the whitening matrix dimension ({self.n})."
+                )
+        elif expected_ext_D != self.n:
             raise ValueError(
                 f"ext_fact mismatch: Config.ext_fact={self.ext_fact} on "
                 f"{self.emg_calib.shape[-1]} calibration channels gives an extended "
-                f"dimension of {expected_D}, but the whitening matrix has dimension "
+                f"dimension of {expected_ext_D}, but the whitening matrix has dimension "
                 f"{self.n}. Check that Config.ext_fact matches the CBSSConfig.ext_fact "
                 "used to produce this calibration."
             )
@@ -156,6 +192,17 @@ class Decomposition:
         self.init_wh_update()
         self.init_sv_update()
         self.init_sd_update()
+
+    def _apply_pca(self, X_ext: torch.Tensor) -> torch.Tensor:
+        """Project a (centered) extended-EMG batch through the fitted PCA transform.
+
+        Identity when pca_components is None. Must be called after per-batch/
+        per-window centering and before whitening (self.whitening is dimensioned
+        for the PCA-reduced space whenever pca_components is set).
+        """
+        if self.pca_components is None:
+            return X_ext
+        return (X_ext - self.pca_mean) @ self.pca_components.T
 
     # ------------------------------------------------------------------
     # Whitening state initialisation
@@ -175,6 +222,7 @@ class Decomposition:
         """
         X_cal = _extend_data_wh(self.emg_calib, self.ext_fact).to(device=self.device)
         X_cal = X_cal - X_cal.mean(0, keepdim=True)
+        X_cal = self._apply_pca(X_cal)
 
         # FIFO length: at least D to keep Rz full-rank; default = 2×D
         auto_fifo = 2 * self.n

@@ -42,15 +42,10 @@ class AdaptDecomp:
 
         calibration.emg must be set (guaranteed when using calibrate_from_indices()).
         calibration.gt_matched_indices (if present) is stored on the instance and
-        propagated through format_outputs().
-
-        Args:
-            emg:          [T, C] online EMG recording (the segment after calibration).
-            calibration:  CBSSResult from calibrate_from_indices() (optionally filtered
-                          by select_units_unsupervised() / select_units_supervised()).
-            config:       Config for the online adaptation (default Config()).
-            preprocess:   Whether Data should apply bandpass pre-processing.
-            save_path:    Optional HDF5 path for persisting adaptive parameters.
+        propagated through format_outputs(). calibration.pca_components/pca_mean
+        (set when CBSSConfig.n_components was used) are threaded through to
+        Decomposition so the online path re-derives the same PCA-reduced space
+        calibration used -- see Decomposition._apply_pca.
         """
         from adapt_decomp.cbss import CBSSResult  # local import to avoid circular
 
@@ -90,6 +85,8 @@ class AdaptDecomp:
             preprocess=preprocess,
             config=config,
             save_path=save_path,
+            pca_components=_t(calibration.pca_components),
+            pca_mean=_t(calibration.pca_mean),
         )
         instance.gt_matched_indices = calibration.gt_matched_indices  # None if unsupervised
         return instance
@@ -107,6 +104,8 @@ class AdaptDecomp:
         preprocess: Optional[bool] = True,
         config: Optional[Config] = None,
         save_path: Optional[str] = None,
+        pca_components: Optional[torch.Tensor] = None,
+        pca_mean: Optional[torch.Tensor] = None,
     ) -> None:
         if config is None:
             config = Config()
@@ -123,6 +122,7 @@ class AdaptDecomp:
         self.decomp = Decomposition(
             whitening, sep_vectors, base_centr, spikes_centr,
             emg_calib, ipts_calib, spikes_calib, self.config,
+            pca_components=pca_components, pca_mean=pca_mean,
         )
         self.data = Data(emg, preprocess, config)
         self.save_path = save_path
@@ -415,6 +415,12 @@ class AdaptDecomp:
         """
         cfg = self.config
         decomp = self.decomp
+
+        # Project through the fitted PCA transform (identity when calibration didn't
+        # use one) -- must happen after centering (X is already centered by the
+        # caller) and before any use of decomp.whitening, which is dimensioned for
+        # the post-PCA space whenever decomp.pca_components is set.
+        X = decomp._apply_pca(X)
 
         coupling_matrix = None
         if cfg.adapt_wh or cfg.compute_loss:
