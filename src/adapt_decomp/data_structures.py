@@ -1,7 +1,7 @@
 """Data structures for input EMG and the precalibrated decomposition model."""
 
 import warnings
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -12,7 +12,12 @@ from adapt_decomp.preprocessing import filter_kwargs
 from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
 
 
-def _extend_data_wh(data: torch.Tensor, ext_fact: int, device=None) -> torch.Tensor:
+def _extend_data_wh(
+    data: torch.Tensor,
+    ext_fact: int,
+    device=None,
+    ext_mode: Literal["block", "toeplitz"] = "block",
+) -> torch.Tensor:
     """Build a time-delay-embedded matrix from raw EMG.
 
     Each of the ext_fact column blocks is the raw channel matrix shifted by one
@@ -20,6 +25,12 @@ def _extend_data_wh(data: torch.Tensor, ext_fact: int, device=None) -> torch.Ten
     D = channels * ext_fact dimensional space lets the whitening matrix wh capture
     temporal correlations across ext_fact consecutive samples in a single linear
     projection.
+
+    ext_mode:
+        "block"    (default) — column block i holds ALL channels shifted by i.
+        "toeplitz" — each channel's own ext_fact delayed copies are kept
+                   together, so each channel's block of columns is itself a
+                   Toeplitz (constant-diagonal) matrix.
     """
     if device is None:
         device = data.device
@@ -27,6 +38,16 @@ def _extend_data_wh(data: torch.Tensor, ext_fact: int, device=None) -> torch.Ten
     data_ext = torch.zeros((samples, int(chs * ext_fact)), device=device)
     for i in range(ext_fact):
         data_ext[i:samples, chs * i: chs * (i + 1)] = data[0:(samples - i), :]
+    if ext_mode == "toeplitz":
+        data_ext = (
+            data_ext.view(samples, ext_fact, chs)
+            .permute(0, 2, 1)
+            .reshape(samples, chs * ext_fact)
+        )
+    elif ext_mode != "block":
+        raise ValueError(
+            f"Unknown ext_mode: {ext_mode!r}. Expected 'block' or 'toeplitz'."
+        )
     return data_ext
 
 
@@ -47,7 +68,7 @@ class Data(Dataset):
         else:
             offset = emg.mean(axis=0)
             emg = emg - offset
-        self.extend_data(emg, config.ext_fact)
+        self.extend_data(emg, config.ext_fact, config.ext_mode)
 
         self.emg_ext = self.emg_ext.to(device=config.device, dtype=torch.float32)
         self.labels = torch.arange(emg.shape[0]).to(device=config.device)
@@ -73,8 +94,13 @@ class Data(Dataset):
         emg -= offset
         return torch.from_numpy(emg), torch.from_numpy(offset)
 
-    def extend_data(self, emg: torch.Tensor, ext_fact: int) -> None:
-        self.emg_ext = _extend_data_wh(emg, ext_fact)
+    def extend_data(
+        self,
+        emg: torch.Tensor,
+        ext_fact: int,
+        ext_mode: Literal["block", "toeplitz"] = "block",
+    ) -> None:
+        self.emg_ext = _extend_data_wh(emg, ext_fact, ext_mode=ext_mode)
 
 
 class Decomposition:
@@ -122,6 +148,7 @@ class Decomposition:
 
         self.device = config.device
         self.ext_fact = config.ext_fact
+        self.ext_mode = config.ext_mode
         self.batch_size = config.batch_size
         self.shrinkage = config.shrinkage
         self.contrast_scope = config.contrast_scope
@@ -188,6 +215,12 @@ class Decomposition:
                 f"{self.n}. Check that Config.ext_fact matches the CBSSConfig.ext_fact "
                 "used to produce this calibration."
             )
+        # NOTE: ext_mode ("block" vs "toeplitz") has no shape signature to
+        # validate against -- both produce the same D = channels*ext_fact width,
+        # just with columns in a different order. Config.ext_mode must be
+        # set to match the CBSSConfig.ext_mode used to produce this
+        # calibration's whitening/sep_vectors, or online adaptation will silently
+        # apply a mis-ordered whitening matrix.
 
         self.init_wh_update()
         self.init_sv_update()
@@ -220,7 +253,9 @@ class Decomposition:
         applied to the FIFO to produce Rz, keeping Rz full-rank even when the
         batch is smaller than D.
         """
-        X_cal = _extend_data_wh(self.emg_calib, self.ext_fact).to(device=self.device)
+        X_cal = _extend_data_wh(
+            self.emg_calib, self.ext_fact, ext_mode=self.ext_mode
+        ).to(device=self.device)
         X_cal = X_cal - X_cal.mean(0, keepdim=True)
         X_cal = self._apply_pca(X_cal)
 

@@ -74,6 +74,14 @@ class Config(_LegacyConfig):
     # Decomposition parameters
     ext_fact: int = 10
 
+    # --- Extension mode ---
+    # "block"    — column block i holds ALL channels shifted by i samples (default).
+    # "toeplitz" — each channel's own ext_fact delayed copies are kept together, so
+    #              each channel's block of columns is itself a Toeplitz
+    #              (constant-diagonal) matrix.
+    # Must match CBSSConfig.ext_mode used to produce the calibration.
+    ext_mode: Literal["block", "toeplitz"] = "block"
+
     # Decomposition adaptation flags
     batch_ms: int = 100
     adapt_wh: bool = True

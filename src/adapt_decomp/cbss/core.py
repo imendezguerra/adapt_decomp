@@ -184,7 +184,7 @@ class CBSS:
         timestamps_t = self._make_timestamps(timestamps, emg_t.shape[0])
 
         # 1. Extend
-        emg_ext = extend_emg(emg_t, self.config.ext_fact)
+        emg_ext = extend_emg(emg_t, self.config.ext_fact, self.config.ext_mode)
         extension_mean = emg_ext.mean(dim=0, keepdim=True)
         emg_ext = emg_ext - extension_mean
         emg_ext[: self.config.ext_fact, :] = 0
@@ -372,7 +372,7 @@ class CBSS:
         emg_original = emg_t
         timestamps_t = self._make_timestamps(timestamps, emg_t.shape[0])
 
-        emg_ext = extend_emg(emg_t, self.config.ext_fact)
+        emg_ext = extend_emg(emg_t, self.config.ext_fact, self.config.ext_mode)
         ext_mean = torch.from_numpy(result.extension_mean).to(device=self._device, dtype=self._dtype)
         emg_ext = emg_ext - ext_mean
         emg_ext[: self.config.ext_fact, :] = 0

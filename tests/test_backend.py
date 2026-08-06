@@ -1157,3 +1157,98 @@ def test_wh_b_coupling_matches_frame_correction_identity_lr_alone():
     delta_wh = decomp.whitening - wh_before
     expected_coupling = -delta_wh @ torch.linalg.inv(wh_before)
     assert_close(coupling_matrix, expected_coupling, atol=1e-4, rtol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# 27. ext_mode: "block" vs "toeplitz"
+# ---------------------------------------------------------------------------
+
+def test_extend_data_wh_toeplitz_matches_manual_construction():
+    """toeplitz mode must place each channel's own delays in contiguous columns,
+    forming a per-channel Toeplitz (constant-diagonal) block -- i.e. column
+    c*ext_fact+i holds channel c delayed by i samples."""
+    from adapt_decomp.data_structures import _extend_data_wh
+
+    samples, chs, ext_fact = 20, 3, 4
+    data = torch.randn(samples, chs)
+
+    out = _extend_data_wh(data, ext_fact, ext_mode="toeplitz")
+    assert out.shape == (samples, chs * ext_fact)
+
+    expected = torch.zeros_like(out)
+    for c in range(chs):
+        for i in range(ext_fact):
+            col = c * ext_fact + i
+            expected[i:, col] = data[: samples - i, c]
+    assert_close(out, expected)
+
+
+def test_extend_data_wh_toeplitz_is_permutation_of_block():
+    """block and toeplitz modes must carry the same information, just reordered
+    (delay-major vs channel-major) -- neither mode invents or drops content."""
+    from adapt_decomp.data_structures import _extend_data_wh
+
+    samples, chs, ext_fact = 15, 2, 3
+    data = torch.randn(samples, chs)
+
+    block = _extend_data_wh(data, ext_fact, ext_mode="block")
+    toeplitz = _extend_data_wh(data, ext_fact, ext_mode="toeplitz")
+
+    reordered = (
+        block.view(samples, ext_fact, chs).permute(0, 2, 1).reshape(samples, chs * ext_fact)
+    )
+    assert_close(toeplitz, reordered)
+
+
+def test_extend_data_wh_unknown_mode_raises():
+    from adapt_decomp.data_structures import _extend_data_wh
+
+    with pytest.raises(ValueError):
+        _extend_data_wh(torch.randn(10, 2), 2, ext_mode="bogus")
+
+
+def test_extend_emg_toeplitz_matches_extend_data_wh():
+    """cbss.whitening.extend_emg (calibration) and data_structures._extend_data_wh
+    (online adaptation) must agree on both modes, so a Config.ext_mode that
+    matches CBSSConfig.ext_mode really does keep them in sync."""
+    from adapt_decomp.cbss.whitening import extend_emg
+    from adapt_decomp.data_structures import _extend_data_wh
+
+    samples, chs, ext_fact = 12, 3, 3
+    data = torch.randn(samples, chs)
+
+    for mode in ("block", "toeplitz"):
+        a = _extend_data_wh(data, ext_fact, ext_mode=mode)
+        b = extend_emg(data, ext_fact, ext_mode=mode)
+        assert_close(a, b)
+
+
+def test_decomposition_uses_configured_ext_mode():
+    """Decomposition.init_wh_update must extend emg_calib with Config.ext_mode,
+    not silently fall back to 'block' -- verified via the FIFO buffer it seeds."""
+    from adapt_decomp.config import Config
+    from adapt_decomp.data_structures import Decomposition, _extend_data_wh
+
+    ext_fact, raw_chs, M, N_cal = 2, 3, 2, 300
+
+    cfg = Config()
+    cfg.device = "cpu"
+    cfg.ext_fact = ext_fact
+    cfg.ext_mode = "toeplitz"
+    cfg.__post_init__()
+
+    D = raw_chs * ext_fact
+    wh = torch.eye(D)
+    sv = orthonormalize_rows_qr(torch.randn(M, D))
+    emg_cal = torch.randn(N_cal, raw_chs)
+    ipts_cal = torch.randn(N_cal, M)
+    spikes_cal = torch.zeros(N_cal, M, dtype=torch.int32)
+    spikes_cal[::40] = 1
+    spike_cal = torch.rand(M) + 2.0
+    base_cal = torch.rand(M) * 0.5
+
+    decomp = Decomposition(wh, sv, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
+
+    expected = _extend_data_wh(emg_cal, ext_fact, ext_mode="toeplitz")
+    expected = expected - expected.mean(0, keepdim=True)
+    assert_close(decomp.fifo_cov, expected[-decomp.fifo_samples:])

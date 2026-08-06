@@ -2,26 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Literal, Optional, Tuple
 
 import torch
 from sklearn.decomposition import PCA
 
 
-def extend_emg(emg: torch.Tensor, ext_fact: int) -> torch.Tensor:
+def extend_emg(
+    emg: torch.Tensor,
+    ext_fact: int,
+    ext_mode: Literal["block", "toeplitz"] = "block",
+) -> torch.Tensor:
     """Extend EMG with time-delayed copies for convolutive mixing.
 
     Args:
-        emg:      [T, C] EMG tensor.
-        ext_fact: Extension factor.
+        emg:            [T, C] EMG tensor.
+        ext_fact:       Extension factor.
+        ext_mode: "block" (default) — column block i holds ALL channels
+            shifted by i samples: cols = [ch0..chC @ delay0, ch0..chC @ delay1, ...].
+            "toeplitz" — each channel's own ext_fact delayed copies are kept
+            together, so each channel's block of columns is itself a Toeplitz
+            (constant-diagonal) matrix: cols = [ch0 @ delay0..delay(L-1), ch1 @
+            delay0..delay(L-1), ...]. Standard convolutive-EMG-mixing convention
+            (Negro et al. 2016). Must match Config.ext_mode used downstream
+            by any online adaptation applied to this calibration's output.
 
     Returns:
-        [T, C * ext_fact] — column block i holds emg shifted forward by i samples.
+        [T, C * ext_fact], column order set by ext_mode.
     """
     T, C = emg.shape
     out = torch.zeros(T, C * ext_fact, dtype=emg.dtype, device=emg.device)
     for i in range(ext_fact):
         out[i:, C * i : C * (i + 1)] = emg[: T - i, :]
+    if ext_mode == "toeplitz":
+        out = out.view(T, ext_fact, C).permute(0, 2, 1).reshape(T, C * ext_fact)
+    elif ext_mode != "block":
+        raise ValueError(
+            f"Unknown ext_mode: {ext_mode!r}. Expected 'block' or 'toeplitz'."
+        )
     return out
 
 

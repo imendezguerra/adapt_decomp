@@ -37,6 +37,14 @@ class CBSSConfig:
     # calibration's output (Decomposition.__init__ validates this at construction).
     ext_fact: int = 10
 
+    # "block" (default) — column block i holds ALL channels shifted by i samples.
+    # "toeplitz" — each channel's own ext_fact delays are grouped together, so
+    # each channel's block of columns is itself a Toeplitz matrix (standard
+    # convolutive-EMG-mixing convention). Same extended width (C*ext_fact)
+    # either way, so a mismatch against Config.ext_mode used downstream
+    # is NOT caught by shape validation -- keep the two in sync manually.
+    ext_mode: Literal["block", "toeplitz"] = "block"
+
     # PCA dimensionality reduction before whitening (None = skip PCA)
     n_components: Optional[int] = None
 
