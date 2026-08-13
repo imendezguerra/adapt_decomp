@@ -149,8 +149,6 @@ class AdaptDecomp:
         self.decomp.wh_mode = self.config.wh_mode
         self.decomp.batch_size = self.config.batch_size
         self.decomp.max_sigma_batches = self.config.max_sigma_batches
-        self.decomp.peak_power = self.config.peak_power
-        self.decomp.use_abs_for_detection = self.config.use_abs_for_detection
         self.decomp.eps = self.config.eps
 
         self.decomp.whitening = self._wh_orig.clone().to(device=self.config.device)
@@ -266,13 +264,13 @@ class AdaptDecomp:
         # --- IQR spike gate: compute trusted_spike_mask for adaptation ---
         # Outlier spikes (amplitude above Tukey upper fence) must NOT update
         # centroids or sv. They are still present in spike_mask for output.
-        if self.config.adapt_iqr_gate and (self.config.adapt_sd or self.config.adapt_sv):
+        if self.config.adapt_sd or self.config.adapt_sv:
             trusted_spike_mask = gate_spikes_by_iqr(
                 sources, spike_mask,
                 self.decomp.Q75_cal, self.decomp.IQR_cal,
-                gate_factor=self.config.iqr_gate_factor,
-                peak_power=self.config.peak_power,
-                use_abs_for_detection=self.config.use_abs_for_detection,
+                gate_factor=3.0,
+                peak_power=2.0,
+                use_abs_for_detection=True,
                 eps=self.config.eps,
             )
         else:
@@ -284,11 +282,11 @@ class AdaptDecomp:
                 update_centroids_from_peaks(
                     sources, peak_mask, trusted_spike_mask,
                     self.decomp.spikes_centr, self.decomp.base_centr,
-                    peak_power=self.config.peak_power,
+                    peak_power=2.0,
                     centroid_momentum=self.config.centroid_momentum,
-                    min_spikes_for_centroid=self.config.min_spikes_for_centroid,
-                    min_base_peaks_for_centroid=self.config.min_base_peaks_for_centroid,
-                    use_abs_for_detection=self.config.use_abs_for_detection,
+                    min_spikes_for_centroid=1,
+                    min_base_peaks_for_centroid=1,
+                    use_abs_for_detection=True,
                     eps=self.config.eps,
                 )
             )
@@ -320,15 +318,9 @@ class AdaptDecomp:
                     kappa_cal=self.decomp.contrast_calib_mean,
                     spike_mask=trusted_spike_mask,
                     max_rel_delta_sv=eff_max_rel_delta_sv,
-                    min_spikes_for_update=self.config.min_spikes_for_update,
-                    orthonormalization=self.config.orthonormalization,
                     contrast_scope=self.config.contrast_scope,
                     eps=self.config.eps,
                     sigma_kappa_cal=getattr(self.decomp, "contrast_calib_std", None),
-                    contrast_error_silent=(
-                        self.config.silence_penalty_zscore
-                        if self.config.silence_penalty else None
-                    ),
                     lr_sv=self.config.sv_learning_rate,
                     lr_alone=self.config.lr_alone,
                     ema_gradnorm_sv=ema_gradnorm_sv_batch,
@@ -546,9 +538,8 @@ class AdaptDecomp:
         peak_mask_full, sources_det_full = find_peaks_multisource(
             sources_full,
             min_dist=cfg.spike_dist,
-            peak_power=cfg.peak_power,
-            strict=cfg.strict_peaks,
-            use_abs=cfg.use_abs_for_detection,
+            peak_power=2.0,
+            use_abs=True,
         )
         spike_mask_full = classify_peaks_from_adaptive_centroids(
             sources_det_full, peak_mask_full,
@@ -594,15 +585,12 @@ class AdaptDecomp:
         spike_counts = spike_mask.to(sources.dtype).sum(dim=0)
         if cfg.contrast_scope == "batch_based":
             # Mirrors ops.py::update_sv_spike_gated's batch_based branch, which never
-            # gates by min_spikes_for_update -- only spike_based mode does.
+            # gates by trusted-spike count -- only spike_based mode does.
             active = torch.ones_like(spike_counts, dtype=torch.bool)
         else:
-            active = spike_counts >= cfg.min_spikes_for_update
+            active = spike_counts >= 1
         _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
-        _fallback = (
-            torch.full_like(e_sv, cfg.silence_penalty_zscore)
-            if cfg.silence_penalty else _nan
-        )
+        _fallback = torch.full_like(e_sv, -3.0)
         return {
             "kappa":          torch.where(active, kappa,  _nan),
             "contrast_error": torch.where(active, e_sv,   _fallback),
@@ -707,16 +695,12 @@ class AdaptDecomp:
                 self.spikes[idx_labels, :] = spikes
                 self.ipts[idx_labels, :] = ipts
 
-            if self.config.trace_check:
-                trace_ratios = self.wh_trace / self.decomp.trace_cal
-                agg = trace_ratios.median() if self.config.trace_check_mode == "median" else trace_ratios[-1]
-                if not (0.1 < agg.item() < 50.0):
-                    return 1e10 if self.config.optim_loss == "single_obj" else (1e10, 1e10, 1e10)
+            trace_ratios = self.wh_trace / self.decomp.trace_cal
+            agg = trace_ratios.median()
+            if not (0.1 < agg.item() < 50.0):
+                return 1e10
 
-            wh = self._compute_total_wh_loss()
-            if self.config.optim_loss == "single_obj":
-                return wh + self._compute_total_sv_loss()
-            return (wh, self._compute_total_sv_loss(), self._compute_total_centroid_loss())
+            return self._compute_total_wh_loss() + self._compute_total_sv_loss()
         finally:
             self.config.compute_loss = prev_log_loss
 

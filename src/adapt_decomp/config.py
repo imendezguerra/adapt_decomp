@@ -155,22 +155,6 @@ class Config(_LegacyConfig):
     # for why wh's sign is unaffected but sv's must flip.
     lr_alone: bool = False
 
-    min_spikes_for_update: int = 1      # Minimum spike count to allow sv row update
-
-    # --- Silence penalty (opt-in ablation of NaN-exclusion) ---
-    # When a unit has fewer than min_spikes_for_update trusted spikes in a batch
-    # (spike_based contrast_scope only -- batch_based never gates), its
-    # contrast_error is normally excluded (NaN) from sv_loss so it doesn't bias
-    # the loss, but this also hides real failures (whitening/sv-update collapse)
-    # behind indistinguishable "no spike" windows. When silence_penalty is True,
-    # a fixed z-score (silence_penalty_zscore) is used instead of NaN. The sv
-    # update itself is unaffected either way -- grad_sv stays masked to zero for
-    # inactive units, only the reported/optimised loss value changes.
-    silence_penalty: bool = False
-    silence_penalty_zscore: float = -3.0
-
-    orthonormalization: str = "qr"      # "qr" (default), "gram_schmidt", or "none"
-
     # Contrast scope: how kappa and kappa_cal are computed for the sv update.
     #   "batch_based"  — log_cosh(sources).mean(dim=0) over all N samples; gradient is also
     #                    batch-averaged (tanh(sources).T @ Z / N), decoupled from spike detection
@@ -180,10 +164,6 @@ class Config(_LegacyConfig):
     contrast_scope: Literal["batch_based", "spike_based"] = "batch_based"
 
     # --- Spike detection ---
-    peak_power: float = 2.0
-    strict_peaks: bool = True
-    use_abs_for_detection: bool = True
-
     spike_dist_ms: int = 10         # Minimum inter-spike distance in ms
     spike_dist: int = field(init=False)  # Derived: samples
 
@@ -201,26 +181,13 @@ class Config(_LegacyConfig):
 
     # --- Centroid adaptation ---
     centroid_momentum: float = 0.95
-    min_spikes_for_centroid: int = 1
-    min_base_peaks_for_centroid: int = 1
 
     # --- sv fixed-point iterations ---
     sv_epochs: int = 1       # Max ICA fixed-point iterations per batch for sv (1 = single step)
     sv_tol: float = 1e-4     # Early-exit threshold: ‖sv_new − sv_old‖_F / ‖sv_old‖_F < sv_tol
 
-    # --- Optimisation ---
-    trace_check: bool = True                                    # Reject diverged trials in run_optimisation via trace ratio guard
-    trace_check_mode: Literal["last", "median"] = "median"     # "last": endpoint batch only; "median": robust to tail extremes
-    # "single_obj": wh_loss + sv_loss combined scalar (single-objective, unchanged behaviour)
-    # "multi_obj":  (wh_loss, sv_loss, centroid_loss) 3-objective tuple (multi-objective)
-    optim_loss: Literal["single_obj", "multi_obj"] = "single_obj"
-
     # --- Debug ---
     debug: bool = False
-
-    # --- IQR spike gate ---
-    adapt_iqr_gate: bool = True
-    iqr_gate_factor: float = 3.0
 
     def __post_init__(self) -> None:
         self.spike_dist = int(self.spike_dist_ms * self.fs / 1000)

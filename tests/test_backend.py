@@ -101,8 +101,8 @@ def test_find_peaks_strict_suppresses_plateau():
     sources = torch.zeros(N, M)
     # Insert a flat plateau in rows 10-15 for both sources
     sources[10:16, :] = 5.0
-    peak_mask, _ = find_peaks_multisource(sources, min_dist=3, strict=True)
-    # Plateau should yield 0 or 1 peak per source (strict mode)
+    peak_mask, _ = find_peaks_multisource(sources, min_dist=3)
+    # Plateau should yield 0 or 1 peak per source (always strict)
     for m in range(M):
         assert peak_mask[:, m].sum() <= 1
 
@@ -278,7 +278,7 @@ def test_no_sv_update_no_spikes():
 
     sv_new, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
     # active should all be False → grad_sv = 0 → delta_sv = 0
@@ -304,7 +304,7 @@ def test_only_active_sources_get_delta_sv():
 
     _, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
     # Sources 1 and 3: inactive → zero delta
@@ -410,7 +410,7 @@ def test_debug_mode_returns_diagnostics():
 
     _, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
     )
     required_keys = {
         "kappa", "contrast_error",
@@ -475,12 +475,12 @@ def test_contrast_scope_batch_vs_spike():
 
     _, diag_batch = update_sv_spike_gated(
         sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=0.0, min_spikes_for_update=1,
+        max_rel_delta_sv=0.0,
         contrast_scope="batch_based",
     )
     _, diag_spike = update_sv_spike_gated(
         sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=0.0, min_spikes_for_update=1,
+        max_rel_delta_sv=0.0,
         contrast_scope="spike_based",
     )
     # kappa values should differ when the subsets differ
@@ -503,7 +503,7 @@ def test_sv_update_requires_at_least_one_spike():
 
     sv_new, _ = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
     # delta_sv = 0, so sv_new = orth(sv_orig) = sv_orig (already orthonormal)
@@ -771,7 +771,7 @@ def test_delta_sv_scales_with_error_magnitude():
         kappa_cal = kappa - e_b_target
         _, diag = update_sv_spike_gated(
             sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-            max_rel_delta_sv=1e6, min_spikes_for_update=1,   # effectively unclipped
+            max_rel_delta_sv=1e6,   # effectively unclipped
             contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
             lr_sv=1e-3,
         )
@@ -801,7 +801,7 @@ def test_safety_clip_engages_only_for_extreme_error():
         kappa_cal = kappa - e_b_target
         return update_sv_spike_gated(
             sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-            max_rel_delta_sv=safety_ceiling, min_spikes_for_update=1,
+            max_rel_delta_sv=safety_ceiling,
             contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
             lr_sv=lr_sv,
         )
@@ -831,7 +831,7 @@ def test_ema_gradnorm_cold_start_seeds_directly():
 
     _, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
         contrast_scope="batch_based", ema_gradnorm_sv=None,
     )
     G = torch.tanh(sources)
@@ -854,7 +854,7 @@ def test_ema_gradnorm_blends_on_subsequent_call():
 
     _, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1.0, min_spikes_for_update=1,
+        max_rel_delta_sv=1.0,
         contrast_scope="batch_based", ema_gradnorm_sv=prior_ema, ema_alpha=alpha,
     )
     G = torch.tanh(sources)
@@ -1018,7 +1018,7 @@ def test_lr_alone_ignores_error_magnitude_sv():
         kappa_cal = kappa - e_b_target
         _, diag = update_sv_spike_gated(
             sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-            max_rel_delta_sv=1e6, min_spikes_for_update=1,   # effectively unclipped
+            max_rel_delta_sv=1e6,   # effectively unclipped
             contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
             lr_sv=1e-3, lr_alone=True,
         )
@@ -1044,7 +1044,7 @@ def test_lr_alone_is_natural_gradient_ascent_for_sv():
 
     _, diag = update_sv_spike_gated(
         sv, Z, sources, kappa_cal, spike_mask=spike_mask,
-        max_rel_delta_sv=1e6, min_spikes_for_update=1,
+        max_rel_delta_sv=1e6,
         contrast_scope="batch_based", lr_sv=lr_sv, lr_alone=True,
     )
     G = torch.tanh(sources)

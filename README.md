@@ -55,7 +55,7 @@ To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_ex
 At each batch, the extended EMG is pushed into a FIFO buffer and the whitened covariance `Rz` is re-estimated from the buffer using the current `wh`. The KL divergence between `Rz` and a reference (identity under `kl_to_identity`, or the calibration covariance under `kl_to_cal`) gives a scalar error `e_wh`, z-scored by its calibration standard deviation `sigma_K_cal`. The natural-gradient direction `(Rz − I) @ wh` (or its `kl_to_cal` analogue) is then scaled by `e_wh` and clipped so that `‖Δwh‖_F / ‖wh‖_F ≤ max_rel_delta_v`. This trust-region clip replaces a fixed learning rate and makes the step size scale-free across different contractions and electrode configurations. When `wh_b_coupling` is enabled, a first-order frame correction is also propagated to `sv` after each `wh` step to keep the separation matrix aligned with the new whitening frame.
 
 **Source update (sv).**
-Source signals `sources = Z @ sv.T` are computed after whitening. Spikes are detected via vectorised max-pool NMS on the source FIFO (providing left-edge context) and classified against adaptive centroids. A Tukey IQR gate (`adapt_iqr_gate`) excludes outlier spikes from adaptation. The log-cosh contrast `kappa` is computed over the current batch (`batch_based`) or only at spike times (`spike_based`). The contrast error `e_sv = kappa − kappa_cal` is z-scored and used to form a gradient that updates each row of `sv`. The update is clipped so that `‖Δsv‖_F / ‖sv‖_F ≤ max_rel_delta_b`, and `sv` is row-orthonormalised (QR decomposition by default, Gram-Schmidt optionally). For the mathematical derivation see `VB_coupling_derivation.md`.
+Source signals `sources = Z @ sv.T` are computed after whitening. Spikes are detected via vectorised max-pool NMS on the source FIFO (providing left-edge context) and classified against adaptive centroids. A Tukey IQR gate excludes outlier spikes from adaptation. The log-cosh contrast `kappa` is computed over the current batch (`batch_based`) or only at spike times (`spike_based`). The contrast error `e_sv = kappa − kappa_cal` is z-scored and used to form a gradient that updates each row of `sv`. The update is clipped so that `‖Δsv‖_F / ‖sv‖_F ≤ max_rel_delta_b`, and `sv` is row-orthonormalised (QR decomposition). For the mathematical derivation see `VB_coupling_derivation.md`.
 
 ## Package structure
 The package is composed of the following modules:
@@ -130,24 +130,12 @@ All active fields in `Config`. Legacy fields (`max_rel_delta_v`, `max_rel_delta_
 | `shrinkage` | `1e-3` | Ledoit-Wolf shrinkage applied to FIFO covariance |
 | `fifo_length` | `0` | FIFO samples for covariance estimation (0 = auto: 2×D) |
 | `max_sigma_batches` | `300` | Max calibration windows for sigma_K/kappa estimation (0 = all) |
-| `orthonormalization` | `"qr"` | Row orthonormalisation: `"qr"`, `"gram_schmidt"`, or `"none"` |
 | `contrast_scope` | `"batch_based"` | Contrast domain: `"batch_based"` or `"spike_based"` |
 | `sv_epochs` | `1` | Fixed-point iterations per batch for sv |
 | `sv_tol` | `1e-4` | Early-exit threshold for sv fixed-point loop |
-| `min_spikes_for_update` | `1` | Minimum trusted spikes per batch to trigger sv update |
 | `spike_dist_ms` | `10` | Minimum inter-spike interval for NMS (ms) |
-| `peak_power` | `2.0` | Exponent applied to source signal before peak detection |
-| `strict_peaks` | `true` | Reject peaks whose right neighbour equals them |
-| `use_abs_for_detection` | `true` | Use \|sources\|^peak_power rather than sources^peak_power |
 | `source_fifo_batches` | `2` | Past batches of sources prepended for left-edge NMS context |
 | `centroid_momentum` | `0.95` | EMA momentum for centroid updates (0 = no memory) |
-| `min_spikes_for_centroid` | `1` | Min trusted spikes per batch to update spike centroid |
-| `min_base_peaks_for_centroid` | `1` | Min non-spike peaks per batch to update base centroid |
-| `adapt_iqr_gate` | `true` | Exclude outlier spikes from sv and centroid updates |
-| `iqr_gate_factor` | `3.0` | Tukey fence multiplier: outlier if amplitude > Q75 + factor×IQR |
-| `trace_check` | `true` | Abort optimisation trial if whitening trace diverges |
-| `trace_check_mode` | `"median"` | `"median"` or `"last"` for trace-check aggregation |
-| `optim_loss` | `"single_obj"` | Loss mode for `run_optimisation`: `"single_obj"` or `"multi_obj"` |
 | `debug` | `false` | Store per-batch diagnostics in `outputs["diagnostics"]` |
 
 ## Data loaders
@@ -169,7 +157,7 @@ Key differences between `main` (v1) and `feature_sim` (v2):
 | Step-size control | `wh_learning_rate`, `sv_learning_rate` (scalar multipliers on a raw gradient) | Same field names, but reused for a different formula: applied to a unit-normalized natural-gradient direction instead (`step ≈ wh_learning_rate · ‖ref‖ · e`); `safety_clip_multiplier_{v,b}` sets a rare safety-net ceiling scaled to `wh_learning_rate`/`sv_learning_rate`, replacing the earlier `max_rel_delta_{v,b}` trust-region clip that was found to engage on ~100% of batches. **A value tuned against v1 does not carry over — re-tune from scratch, don't reuse the old number.** |
 | Whitening update | Recursive EMA covariance + KL gradient | FIFO covariance + natural-gradient update; two KL modes (`kl_to_identity`, `kl_to_cal`) |
 | Source update | Per-unit loop, scipy `find_peaks` | Vectorised NMS + adaptive centroids, GPU-compatible |
-| Orthonormalisation | Gram-Schmidt deflation (per unit) | QR decomposition (all units at once); Gram-Schmidt available via `orthonormalization: gram_schmidt` |
+| Orthonormalisation | Gram-Schmidt deflation (per unit) | QR decomposition (all units at once, fixed); Gram-Schmidt still available as a standalone `ops.py` utility (`orthonormalize_rows_gram_schmidt`) for ablations, no longer Config-driven |
 | Spike detection | scipy `find_peaks` with fixed height threshold | Vectorised max-pool NMS with adaptive thresholds and IQR outlier gate |
 | Output keys | `wh_loss`, `sv_loss`, `total_loss` | + `centroid_loss`, `wh_trace`; all optional via `compute_loss` |
 | Hyperparameter search | wandb sweep (wandb-managed) | wandb sweep + Optuna (self-contained); results optionally logged to wandb |

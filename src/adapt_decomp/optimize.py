@@ -23,7 +23,7 @@ dedicated experiments. To include it, add it to the param_space dict explicitly:
 from __future__ import annotations
 
 import copy
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 
@@ -71,20 +71,18 @@ def optimize_adapt_decomp(
     preprocess: bool = False,
     sampler=None,
     config: Optional[Config] = None,
-    optim_mode: Literal["single", "multiobjective"] = "single",
 ) -> tuple:
     """Search for optimal AdaptDecomp hyperparameters using Bayesian optimisation.
 
     Reuses a single AdaptDecomp instance across all Optuna trials, resetting
-    calibration state between runs via _reset_params(). The single-objective
-    loss is wh_loss + sv_loss (centroid_loss excluded — it is 0-2% of total
-    and has a mild anti-signal correlation with RoA). For multiobjective,
-    returns (wh_loss, sv_loss, centroid_loss) as a 3-objective Pareto problem.
+    calibration state between runs via _reset_params(). The loss is
+    wh_loss + sv_loss (centroid_loss excluded — it is 0-2% of total and has a
+    mild anti-signal correlation with RoA).
 
-    Default sampler for single-objective: CmaEsSampler (n_startup_trials=15).
-    CMA-ES is preferred over TPE because the optimal (delta_v, delta_b,
-    centroid_momentum) configurations are jointly constrained along a ridge
-    in parameter space; CMA-ES learns this covariance, TPE cannot.
+    Default sampler: CmaEsSampler (n_startup_trials=15). CMA-ES is preferred
+    over TPE because the optimal (delta_v, delta_b, centroid_momentum)
+    configurations are jointly constrained along a ridge in parameter space;
+    CMA-ES learns this covariance, TPE cannot.
 
     param_space format::
 
@@ -98,8 +96,6 @@ def optimize_adapt_decomp(
     batch_ms, extend it: {**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}.
 
     Returns (best_config_dict, optuna.Study).
-    For multiobjective, study.best_trials returns the full Pareto front;
-    best_config_dict is selected by minimum sum of objective values.
     """
     try:
         import optuna
@@ -111,10 +107,6 @@ def optimize_adapt_decomp(
     if base_config:
         for k, v in base_config.items():
             setattr(run_config, k, v)
-    # optim_mode is the single source of truth for how many values
-    # run_optimisation() returns -- keep run_config.optim_loss in sync so a
-    # caller never has to separately/correctly set both.
-    run_config.optim_loss = "multi_obj" if optim_mode == "multiobjective" else "single_obj"
     validate_literals(run_config)
 
     adapter = AdaptDecomp(
@@ -134,29 +126,17 @@ def optimize_adapt_decomp(
         overrides = _suggest_overrides(trial, param_space)
         return adapter.run_optimisation(config_overrides=overrides)
 
-    if optim_mode == "multiobjective":
-        study = optuna.create_study(
-            directions=["minimize", "minimize", "minimize"],
-            sampler=sampler if sampler is not None else optuna.samplers.NSGAIISampler(),
-        )
-    else:
-        study = optuna.create_study(
-            direction="minimize",
-            sampler=sampler if sampler is not None else optuna.samplers.CmaEsSampler(
-                n_startup_trials=15,
-            ),
-        )
+    study = optuna.create_study(
+        direction="minimize",
+        sampler=sampler if sampler is not None else optuna.samplers.CmaEsSampler(
+            n_startup_trials=15,
+        ),
+    )
 
     study.optimize(objective, n_trials=n_trials)
 
-    if optim_mode == "multiobjective":
-        # Select the Pareto-front trial with minimum sum of objective values
-        best_trial = min(study.best_trials, key=lambda t: sum(t.values))
-        best_params = best_trial.params
-    else:
-        best_params = study.best_params
-
-    best_config = {**(base_config or {}), **best_params, "optim_loss": run_config.optim_loss}
+    best_params = study.best_params
+    best_config = {**(base_config or {}), **best_params}
     return best_config, study
 
 
@@ -176,13 +156,11 @@ def run_with_optimization(
     preprocess: bool = False,
     sampler=None,
     config: Optional[Config] = None,
-    optim_mode: Literal["single", "multiobjective"] = "single",
 ) -> tuple:
     """Optimise hyperparameters then run the full decomposition with the best config.
 
     Returns (outputs_dict, best_config_dict, optuna.Study).
     outputs_dict is the raw AdaptDecomp.run() output (keys: spikes, ipts, wh_loss, …).
-    For multiobjective, study.best_trials exposes the full Pareto front.
     """
     best_config, study = optimize_adapt_decomp(
         emg=emg,
@@ -199,7 +177,6 @@ def run_with_optimization(
         preprocess=preprocess,
         sampler=sampler,
         config=config,
-        optim_mode=optim_mode,
     )
 
     run_config = copy.deepcopy(config) if config is not None else Config()

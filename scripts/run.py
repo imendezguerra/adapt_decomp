@@ -91,7 +91,6 @@ def run(model_config, data_config, wandb_project_name, wandb_config=None,
     if optim_config is not None:
         param_space_raw = load_yaml(optim_config)
         param_space = {k: tuple(v) for k, v in param_space_raw.items()}
-        config.optim_loss = "single_obj"
         outputs, best_config, _ = run_with_optimization(
             param_space=param_space,
             n_trials=n_trials,

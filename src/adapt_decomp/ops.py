@@ -100,14 +100,14 @@ def find_peaks_multisource(
     sources: torch.Tensor,
     min_dist: int,
     peak_power: float = 2.0,
-    strict: bool = True,
     use_abs: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Vectorized multi-source peak detector using 1-D max-pool NMS.
 
     sources: [N, M] source matrix.
 
-    Strict mode suppresses flat plateaus so tied runs cannot emit multiple peaks.
+    Suppresses flat plateaus (requires a strict local max on both neighbours)
+    so tied runs cannot emit multiple peaks.
     Returns:
         peak_mask:   [N, M] bool — candidate peak locations
         sources_det: [N, M] — detection-domain values (|sources|^peak_power or sources^peak_power)
@@ -128,13 +128,10 @@ def find_peaks_multisource(
         .T.to(sources_det.dtype)
     )
 
-    if strict:
-        strict_mask = torch.zeros_like(sources_det, dtype=torch.bool)
-        if N >= 3:
-            strict_mask[1:-1] = (sources_det[1:-1] > sources_det[:-2]) & (sources_det[1:-1] > sources_det[2:])
-        peak_mask = strict_mask & (sources_det == pooled) & (sources_det > 0)
-    else:
-        peak_mask = (sources_det == pooled) & (sources_det > 0)
+    strict_mask = torch.zeros_like(sources_det, dtype=torch.bool)
+    if N >= 3:
+        strict_mask[1:-1] = (sources_det[1:-1] > sources_det[:-2]) & (sources_det[1:-1] > sources_det[2:])
+    peak_mask = strict_mask & (sources_det == pooled) & (sources_det > 0)
 
     return peak_mask, sources_det
 
@@ -219,12 +216,9 @@ def update_sv_spike_gated(
     kappa_cal: torch.Tensor,
     spike_mask: torch.Tensor,
     max_rel_delta_sv: float,
-    min_spikes_for_update: int,
-    orthonormalization: str = "qr",
     contrast_scope: str = "batch_based",
     eps: float = 1e-8,
     sigma_kappa_cal: Optional[torch.Tensor] = None,
-    contrast_error_silent: Optional[float] = None,
     lr_sv: float = 1e-3,
     ema_gradnorm_sv: Optional[torch.Tensor] = None,
     ema_alpha: float = 0.95,
@@ -239,14 +233,14 @@ def update_sv_spike_gated(
                         gradient = tanh(sources).T @ Z / N  (full-batch ICA step,
                         decoupled from spike detection)
         "spike_based" — kappa = log_cosh(sources[spike_mask]).mean per source;
-                        gradient is spike-gated; sources with fewer than
-                        min_spikes_for_update spikes get zero delta
+                        gradient is spike-gated; sources with fewer than 1
+                        trusted spike get zero delta
 
-    contrast_error_silent, when given, replaces NaN as the reported
-    contrast_error for inactive sources (fewer than min_spikes_for_update
-    trusted spikes) -- a fixed penalty instead of exclusion from the loss.
-    Does not affect grad_sv, which stays masked to zero for inactive sources
-    regardless: only the loss/diagnostic value changes, never the sv update.
+    The reported contrast_error for inactive sources (spike_based mode, no
+    trusted spikes) is always a fixed -3.0 penalty rather than exclusion
+    (NaN) from the loss. Does not affect grad_sv, which stays masked to zero
+    for inactive sources regardless: only the loss/diagnostic value changes,
+    never the sv update.
 
     The natural-gradient direction (grad_sv, per row) is normalized to unit scale by
     an EMA of its own norm (ema_gradnorm_sv, updated here and returned in diag for the
@@ -290,7 +284,7 @@ def update_sv_spike_gated(
 
         # Spike-gated natural-gradient direction
         G = mask_f * torch.tanh(sources)
-        active = spike_counts >= min_spikes_for_update
+        active = spike_counts >= 1
         grad_sv = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
         grad_sv = grad_sv * active[:, None]
 
@@ -319,13 +313,10 @@ def update_sv_spike_gated(
     delta_sv = clip_rowwise_delta(delta_sv_target, sv, max_rel_delta_sv, eps)  # rare safety net
 
     sv_new = sv + delta_sv
-    sv_new = orthonormalize_rows(sv_new, method=orthonormalization)
+    sv_new = orthonormalize_rows_qr(sv_new)
 
     _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
-    _fallback = (
-        torch.full_like(e_sv, contrast_error_silent)
-        if contrast_error_silent is not None else _nan
-    )
+    _fallback = torch.full_like(e_sv, -3.0)
     diag = {
         "kappa":          torch.where(active, kappa,  _nan),
         "contrast_error": torch.where(active, e_sv,   _fallback),

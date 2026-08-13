@@ -32,31 +32,16 @@ fifo_length: 0                    # FIFO samples for covariance (0 = auto: 2×D)
 max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
 
 # Source separation
-orthonormalization: qr            # Row orthonormalisation: "qr", "gram_schmidt", or "none"
 contrast_scope: batch_based       # "batch_based" or "spike_based"
 sv_epochs: 1                     # Fixed-point iterations per batch for B
 sv_tol: 1.0e-4                     # Early-exit threshold: ||ΔB||_F / ||B||_F < sv_tol
-min_spikes_for_update: 1          # Minimum trusted spikes per batch to trigger B update
 
 # Spike detection
 spike_dist_ms: 10                 # Minimum inter-spike interval for NMS (ms)
-peak_power: 2.0                   # Exponent applied to source signal before peak detection
-strict_peaks: true                # Reject peaks whose right neighbour equals them
-use_abs_for_detection: true       # Use |Y|^peak_power rather than Y^peak_power
 source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
 
 # Centroid adaptation (inactive when adapt_sd is false)
 centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
-min_spikes_for_centroid: 1        # Min trusted spikes per batch to update spike centroid
-min_base_peaks_for_centroid: 3    # Min non-spike peaks per batch to update base centroid
-
-# IQR outlier gate
-adapt_iqr_gate: true              # Exclude outlier spikes from B and centroid updates
-iqr_gate_factor: 3.0              # Tukey fence: outlier if amplitude > Q75 + factor×IQR
-
-# Optimisation / trial checks
-trace_check: false                # Abort optimisation trial if whitening trace diverges
-trace_check_mode: median          # "median" or "last" for trace-check aggregation
 
 # Debug
 debug: false                      # Store per-batch diagnostics in outputs["diagnostics"]

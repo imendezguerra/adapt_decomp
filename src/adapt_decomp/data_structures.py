@@ -156,8 +156,6 @@ class Decomposition:
         self.source_fifo_batches = config.source_fifo_batches
         self.wh_mode = config.wh_mode
         self.max_sigma_batches = config.max_sigma_batches
-        self.peak_power = config.peak_power
-        self.use_abs_for_detection = config.use_abs_for_detection
         self.eps = config.eps
 
         # --- Adaptive matrices ---
@@ -448,7 +446,7 @@ class Decomposition:
         ipts   = self.ipts_calib.to(self.device)    # [N_cal, M]
         spikes = self.spikes_calib.to(self.device)  # [N_cal, M] int32
 
-        sources_det = ipts.abs().pow(self.peak_power) if self.use_abs_for_detection else ipts.pow(self.peak_power)
+        sources_det = ipts.abs().pow(2.0)
 
         M = ipts.shape[1]
         Q75_cal = torch.zeros(M, dtype=torch.float32, device=self.device)
