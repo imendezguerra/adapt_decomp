@@ -1,13 +1,102 @@
-"""PyTorch motor-unit property functions (canonical implementations)."""
+"""Functions to measure MU properties."""
 
-from __future__ import annotations
-
-from typing import Optional
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
 
-from adapt_decomp.ops import find_peaks_multisource
+from adapt_decomp.spikes.detection import find_peaks_multisource
+
+
+def _check_mu_format(data: np.ndarray) -> np.ndarray:
+    """Check data is 2D and return it.
+
+    Args:
+        data (np.ndarray): Input data array.
+
+    Returns:
+        np.ndarray: 2D data array.
+    """
+    if len(data.shape) == 1:
+        data = np.expand_dims(data, axis=-1)
+    return data
+
+
+def firings_to_spikes(
+    firings: Union[np.ndarray, List[np.ndarray]],
+    ipts: np.ndarray,
+    matlab_index: bool = False,
+) -> np.ndarray:
+    """Convert per-unit firing sample indices to a dense binary spike matrix.
+
+    Args:
+        firings (Union[np.ndarray, List[np.ndarray]]): One array of firing
+            sample indices per motor unit (e.g. as loaded from a MATLAB
+            decomposition struct via scipy.io.loadmat).
+        ipts (np.ndarray): Innervated pulse trains with shape (units,
+            samples), used only as a shape/dtype template for the output.
+        matlab_index (bool, optional): Whether firings uses 1-based (MATLAB)
+            indexing, which is converted to 0-based. Defaults to False.
+
+    Returns:
+        np.ndarray: Binary spike matrix with shape (units, samples), same
+        shape as ipts.
+    """
+    spikes = np.zeros_like(ipts)
+    for i, firing in enumerate(firings):
+        if matlab_index:
+            firing = firing - 1
+        spikes[i, firing.astype(int)] = 1
+
+    return spikes
+
+
+def get_number_of_spikes(spike_train: np.ndarray) -> np.ndarray:
+    """Compute the number of spikes per motor unit.
+
+    Args:
+        spike_train (np.ndarray): Binary spike train matrix of shape (n, m),
+            where n is the number of time points and m is the number of
+            motor units.
+
+    Returns:
+        np.ndarray: Number of spikes for each motor unit, with shape (m,).
+    """
+    return np.sum(spike_train.astype(int), axis=0)
+
+
+def get_inst_discharge_rate(
+    spike_train: np.ndarray,
+    fs: Optional[int] = 2048,
+) -> np.ndarray:
+    """Compute the instantaneous discharge rate of motor units.
+
+    Args:
+        spike_train (np.ndarray): Binary spike train matrix of shape (n, m),
+            where n is the number of time points and m is the number of
+            motor units.
+        fs (Optional[int], optional): Sampling frequency in Hz. Defaults to
+            2048.
+
+    Returns:
+        np.ndarray: Instantaneous discharge rate with shape (n, m).
+    """
+    # Get number of motor units and initialise inst_dr
+    spike_train = _check_mu_format(spike_train.astype(bool))
+    units = spike_train.shape[-1]
+    inst_dr = np.zeros(spike_train.shape)
+
+    # Define hanning window
+    dur = 1  # (s) for the moving average
+    hann_win = np.hanning(np.round(dur * fs))
+
+    for unit in range(units):
+        # Convolve the hanning window and the binary spikes
+        inst_dr[:, unit] = np.convolve(
+            spike_train[:, unit], hann_win, mode="same"
+        ) * 2
+
+    return inst_dr
 
 
 def get_muaps(
@@ -116,7 +205,7 @@ def get_coefficient_of_variation(
 ) -> torch.Tensor:
     """Coefficient of variation of ISI as a ratio (e.g. 0.35 = 35%)."""
     n_mu = spike_trains.shape[1]
-    cov = torch.full((n_mu,), float("nan"), dtype=timestamps.dtype, device=timestamps.device)
+    cov_isi = torch.full((n_mu,), float("nan"), dtype=timestamps.dtype, device=timestamps.device)
     for unit in range(n_mu):
         times = timestamps[spike_trains[:, unit].bool()]
         if times.numel() < 2:
@@ -126,8 +215,8 @@ def get_coefficient_of_variation(
             isi = isi[isi < discard_peri_isi]
         if isi.numel() < 2 or isi.mean() == 0:
             continue
-        cov[unit] = isi.std() / isi.mean()
-    return cov
+        cov_isi[unit] = isi.std() / isi.mean()
+    return cov_isi
 
 
 def emg_to_ch_array(emg: torch.Tensor, ch_map: np.ndarray | torch.Tensor) -> torch.Tensor:
@@ -139,3 +228,5 @@ def emg_to_ch_array(emg: torch.Tensor, ch_map: np.ndarray | torch.Tensor) -> tor
     valid = ch_map_t >= 0
     ch_array[valid, :] = emg[:, ch_map_t[valid]].T
     return ch_array
+
+

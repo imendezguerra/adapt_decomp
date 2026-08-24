@@ -4,7 +4,7 @@ import h5py
 import torch
 from scipy.io import loadmat
 from typing import Dict
-from adapt_decomp.utils import firings_to_spikes
+from adapt_decomp.spikes import firings_to_spikes
 
 def load_neuromotion(path_file:str) -> Dict:
     """

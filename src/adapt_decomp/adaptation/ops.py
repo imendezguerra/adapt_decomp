@@ -1,23 +1,105 @@
-"""Pure tensor utility functions for adaptive EMG decomposition.
+"""Pure tensor utility functions for online adaptive EMG decomposition.
 
 All functions operate without autograd. Heavy functions are wrapped in
 @torch.no_grad() to prevent accidental graph construction in the online path.
+
+log_cosh/contrast_fn (used by update_sv_spike_gated below) and
+find_peaks_multisource (used by find_peaks_multisource-calling code below)
+are NOT defined here even though they're pure tensor math too: log_cosh/
+contrast_fn live in adapt_decomp.cbss.ica (their primary consumer, the
+fixed-point ICA solve) and find_peaks_multisource lives in
+adapt_decomp.spikes.detection (spike-detection code, consumed by both cbss
+and adaptation) -- both are imported below rather than duplicated, so this
+module stays adaptation-only and cbss/spikes never need to depend on it.
+
+stable_cov, conversely, moved IN from adapt_decomp.spikes.metrics: despite
+living in a "shared" module, its only real consumer was always
+adaptation/data_structures.py::Decomposition's covariance-with-shrinkage
+computations -- cbss/whitening.py::whiten computes its own covariance with a
+different (unshrunk, eigenvalue-regularised) scheme and never called it. Since
+nothing outside adaptation actually used it, it belongs with the rest of this
+module's adaptation-only tensor primitives instead of spikes/, which is
+reserved for genuinely cbss+adaptation-shared spike-detection/metrics code.
 """
 
-import math
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 
 import torch
-import torch.nn.functional as F
+
+from adapt_decomp.cbss.ica import log_cosh
+from adapt_decomp.spikes.detection import find_peaks_multisource
+
+__all__ = [
+    "clip_global_delta",
+    "clip_rowwise_delta",
+    "stable_cov",
+    "orthonormalize_rows_qr",
+    "orthonormalize_rows_gram_schmidt",
+    "orthonormalize_rows",
+    "find_peaks_multisource",
+    "classify_peaks_from_adaptive_centroids",
+    "update_centroids_from_peaks",
+    "compute_contrast_error",
+    "update_sv_spike_gated",
+    "gate_spikes_by_iqr",
+]
 
 
-def log_cosh(x: torch.Tensor) -> torch.Tensor:
-    """Stable log(cosh(x)) = x + softplus(-2x) - log(2).
+@torch.no_grad()
+def stable_cov(
+    X: torch.Tensor,
+    rowvar: bool = False,
+    rho: Optional[float] = None,
+    I: Optional[torch.Tensor] = None,
+    ddof: int = 1,
+) -> torch.Tensor:
+    """Compute a symmetric, optionally shrunk, sample covariance matrix.
 
-    Avoids overflow at large |x| that naive log(cosh(x)) would produce.
-    tanh(x) is the exact derivative, used in the gradient of sv.
+    Used wherever a covariance-with-shrinkage-toward-identity is needed --
+    e.g. Decomposition's Rz_cal/Rz computations in data_structures.py.
+    Accepts either a single 2-D matrix or a batch of them (leading batch
+    dimension), so the same call covers both a one-off covariance and a
+    batched sliding-window sweep (previously bmm'd inline).
+
+    Args:
+        X (torch.Tensor): Data with shape (..., samples, feats) if rowvar is
+            False, or (..., feats, samples) if rowvar is True. A leading
+            batch dimension (or several) is supported and broadcasts through.
+        rowvar (bool, optional): Whether each row of X is a variable (True)
+            or each column is (False). Defaults to False.
+        rho (Optional[float], optional): Shrinkage weight toward the
+            identity matrix, in [0, 1]. None disables shrinkage. Defaults
+            to None.
+        I (Optional[torch.Tensor], optional): Identity matrix to shrink
+            toward, with shape (feats, feats). Defaults to None, which
+            builds one on X's device/dtype when rho is set.
+        ddof (int, optional): Delta degrees of freedom -- the covariance
+            divisor is samples - ddof (floored at 1). 1 (default)
+            gives the usual unbiased sample covariance; pass 0 to divide
+            by the raw sample count instead (e.g. to match a caller's
+            existing, already-validated normalisation exactly).
+
+    Returns:
+        torch.Tensor: Symmetric covariance matrix with shape (..., feats, feats).
     """
-    return x + F.softplus(-2.0 * x) - math.log(2.0)
+    if rowvar:
+        samples = X.shape[-1]
+        Xc = X - X.mean(dim=-1, keepdim=True)
+        C = (Xc @ Xc.transpose(-1, -2)) / max(1, samples - ddof)
+    else:
+        samples = X.shape[-2]
+        Xc = X - X.mean(dim=-2, keepdim=True)
+        C = (Xc.transpose(-1, -2) @ Xc) / max(1, samples - ddof)
+
+    # Make symmetric
+    C = 0.5 * (C + C.transpose(-1, -2))
+
+    # Shrinkage towards identity
+    if rho is not None:
+        if I is None:
+            I = torch.eye(C.shape[-1], device=C.device, dtype=C.dtype)
+        C = (1 - rho) * C + rho * I
+    return C
 
 
 @torch.no_grad()
@@ -96,47 +178,6 @@ def orthonormalize_rows(
 
 
 @torch.no_grad()
-def find_peaks_multisource(
-    sources: torch.Tensor,
-    min_dist: int,
-    peak_power: float = 2.0,
-    use_abs: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Vectorized multi-source peak detector using 1-D max-pool NMS.
-
-    sources: [N, M] source matrix.
-
-    Suppresses flat plateaus (requires a strict local max on both neighbours)
-    so tied runs cannot emit multiple peaks.
-    Returns:
-        peak_mask:   [N, M] bool — candidate peak locations
-        sources_det: [N, M] — detection-domain values (|sources|^peak_power or sources^peak_power)
-    """
-    N, M = sources.shape
-    sources_det = sources.abs().pow(peak_power) if use_abs else sources.pow(peak_power)
-
-    win = 2 * min_dist + 1
-    # Apply max-pool across time for all sources simultaneously: input [1, M, N]
-    pooled = (
-        F.max_pool1d(
-            sources_det.T.unsqueeze(0).float(),
-            kernel_size=win,
-            stride=1,
-            padding=min_dist,
-        )
-        .squeeze(0)
-        .T.to(sources_det.dtype)
-    )
-
-    strict_mask = torch.zeros_like(sources_det, dtype=torch.bool)
-    if N >= 3:
-        strict_mask[1:-1] = (sources_det[1:-1] > sources_det[:-2]) & (sources_det[1:-1] > sources_det[2:])
-    peak_mask = strict_mask & (sources_det == pooled) & (sources_det > 0)
-
-    return peak_mask, sources_det
-
-
-@torch.no_grad()
 def classify_peaks_from_adaptive_centroids(
     sources_det: torch.Tensor,
     peak_mask: torch.Tensor,
@@ -209,6 +250,63 @@ def update_centroids_from_peaks(
 
 
 @torch.no_grad()
+def compute_contrast_error(
+    sources: torch.Tensor,
+    spike_mask: torch.Tensor,
+    kappa_cal: torch.Tensor,
+    contrast_scope: str = "batch_based",
+    sigma_kappa_cal: Optional[torch.Tensor] = None,
+    eps: float = 1e-8,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compute the z-scored contrast error against calibration.
+
+    Shared by update_sv_spike_gated (where e_sv drives the natural-gradient
+    step) and _compute_sv_diag in adaptation/core.py (where it is only
+    logged, on the adapt_sv=False path) -- one formula instead of two
+    independently-maintained copies.
+
+    contrast_scope controls the estimator:
+        "batch_based" — kappa = log_cosh(sources).mean(dim=0) over all N
+                        samples; every source is reported active.
+        "spike_based" — kappa = log_cosh(sources[spike_mask]).mean per
+                        source; a source with zero trusted spikes is
+                        reported inactive (kappa/e_sv are still computed,
+                        just not meaningful for it -- callers decide what
+                        to do with active).
+
+    Args:
+        sources (torch.Tensor): Estimated source signals, with shape (N, M).
+        spike_mask (torch.Tensor): Trusted spike mask, with shape (N, M),
+            bool. Only consumed when contrast_scope is "spike_based".
+        kappa_cal (torch.Tensor): Calibration contrast mean, with shape (M,).
+        contrast_scope (str, optional): "batch_based" or "spike_based".
+            Defaults to "batch_based".
+        sigma_kappa_cal (Optional[torch.Tensor], optional): Calibration
+            contrast std, with shape (M,). Defaults to None, which disables
+            z-scoring (equivalent to a std of 1).
+        eps (float, optional): Floor applied to sigma_kappa_cal before
+            dividing, so a degenerate (near-zero) calibration std can't blow
+            up e_sv. Defaults to 1e-8.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        (kappa, e_sv, active, spike_counts), each with shape (M,) --
+        kappa/e_sv float, active bool, spike_counts float.
+    """
+    sigma_kappa_cal = sigma_kappa_cal if sigma_kappa_cal is not None else torch.ones_like(kappa_cal)
+    spike_counts = spike_mask.to(sources.dtype).sum(dim=0)
+    if contrast_scope == "batch_based":
+        kappa = log_cosh(sources).mean(dim=0)
+        active = torch.ones(sources.shape[1], dtype=torch.bool, device=sources.device)
+    else:
+        mask_f = spike_mask.to(sources.dtype)
+        kappa = (log_cosh(sources) * mask_f).sum(dim=0) / spike_counts.clamp_min(1.0)
+        active = spike_counts >= 1
+    e_sv = (kappa - kappa_cal) / sigma_kappa_cal.clamp_min(eps)
+    return kappa, e_sv, active, spike_counts
+
+
+@torch.no_grad()
 def update_sv_spike_gated(
     sv: torch.Tensor,
     Z: torch.Tensor,
@@ -222,7 +320,7 @@ def update_sv_spike_gated(
     lr_sv: float = 1e-3,
     ema_gradnorm_sv: Optional[torch.Tensor] = None,
     ema_alpha: float = 0.95,
-    lr_alone: bool = False,
+    lr_mode: Literal["fixed", "rel_error"] = "rel_error",
 ) -> tuple[torch.Tensor, dict]:
     """Separation matrix update with retained contrast error.
 
@@ -249,7 +347,7 @@ def update_sv_spike_gated(
     clipped to a fixed size (max_rel_delta_sv is now a rare safety net only; pass
     ema_gradnorm_sv=None to seed cold, e.g. the first batch of a fresh trial).
 
-    lr_alone=True drops the signed e_sv factor entirely, flips the sign, and skips the
+    lr_mode="fixed" drops the signed e_sv factor entirely, flips the sign, and skips the
     EMA direction-normalization below -- giving the raw, un-normalized
     natural-gradient ASCENT sv += lr_sv * grad_sv, reproducing main (v1)'s
     fixed-learning-rate sv update (main had no error term and no normalization
@@ -266,60 +364,49 @@ def update_sv_spike_gated(
     """
     N, M = sources.shape
 
-    sigma_kappa_cal = sigma_kappa_cal if sigma_kappa_cal is not None else torch.ones_like(kappa_cal)
+    kappa, e_sv, active, spike_counts = compute_contrast_error(
+        sources, spike_mask, kappa_cal, contrast_scope, sigma_kappa_cal, eps,
+    )
     if contrast_scope == "batch_based":
-        kappa = log_cosh(sources).mean(dim=0)
-        e_sv = (kappa - kappa_cal) / sigma_kappa_cal
-
         # Full-batch ICA natural-gradient direction — no spike gating
         G = torch.tanh(sources)
         grad_sv = (G.T @ Z) / N
-        active = torch.ones(M, dtype=torch.bool, device=sources.device)
-        spike_counts = spike_mask.to(sources.dtype).sum(dim=0)   # kept for diagnostics only
     else:
-        mask_f = spike_mask.to(sources.dtype)
-        spike_counts = mask_f.sum(dim=0)
-        kappa = (log_cosh(sources) * mask_f).sum(dim=0) / spike_counts.clamp_min(1.0)
-        e_sv = (kappa - kappa_cal) / sigma_kappa_cal
-
         # Spike-gated natural-gradient direction
+        mask_f = spike_mask.to(sources.dtype)
         G = mask_f * torch.tanh(sources)
-        active = spike_counts >= 1
         grad_sv = (G.T @ Z) / spike_counts.clamp_min(1.0)[:, None]
         grad_sv = grad_sv * active[:, None]
 
-    # Normalize the natural-gradient direction to unit scale via an EMA of its own
-    # norm (per unit), then scale by lr_sv and the full signed e_sv -- restores step
-    # size proportional to how wrong the model is, instead of a fixed-size step.
-    # (lr_alone bypasses this normalization entirely -- see docstring above; the EMA
-    # is still tracked/returned below so state stays consistent if the flag changes
-    # between runs.)
+    # Compute the gradient norm via EMA for relative error normalisation
     grad_sv_norm = torch.linalg.norm(grad_sv, dim=1)   # [M], instantaneous
     new_ema_gradnorm_sv = (
         grad_sv_norm.detach() if ema_gradnorm_sv is None
         else (ema_alpha * ema_gradnorm_sv + (1 - ema_alpha) * grad_sv_norm).detach()
     )
     sv_row_norm = torch.linalg.norm(sv, dim=1, keepdim=True)
-    if lr_alone:
-        # Main (v1)'s raw, un-normalized natural-gradient ASCENT: no EMA
-        # direction-normalization, no error term (see docstring above).
+    if lr_mode == "fixed": # Fixed learning rate
         delta_sv_target = lr_sv * grad_sv
-    else:
+    else: # learning rate with relative error and norm normalisation via EMA
         delta_sv_target = (
             -lr_sv * sv_row_norm * e_sv[:, None]
             * grad_sv / (new_ema_gradnorm_sv[:, None] + eps)
         )
+
+    # Clip update 
     delta_sv_raw_norm = torch.linalg.norm(delta_sv_target, dim=1)   # pre-safety-clip target norm
     delta_sv = clip_rowwise_delta(delta_sv_target, sv, max_rel_delta_sv, eps)  # rare safety net
 
+    # Compute new separation vectors and orthonormalise
     sv_new = sv + delta_sv
     sv_new = orthonormalize_rows_qr(sv_new)
 
+    # Diagnostics
     _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
     _fallback = torch.full_like(e_sv, -3.0)
     diag = {
-        "kappa":          torch.where(active, kappa,  _nan),
-        "contrast_error": torch.where(active, e_sv,   _fallback),
+        "kappa":          torch.where(active, kappa,  _nan),        
+        "contrast_error": torch.where(active, e_sv,   _fallback),  
         "spike_counts":   spike_counts,
         "active":         active,
         "delta_sv_norm":     torch.linalg.norm(delta_sv, dim=1),
@@ -330,71 +417,6 @@ def update_sv_spike_gated(
         ),
     }
     return sv_new, diag
-
-
-@torch.no_grad()
-def kmeans2_1d(vals: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Globally optimal 1-D k=2 clustering via sorted threshold sweep.
-
-    For 1-D data the optimal 2-means partition is always a single threshold.
-    Sorting + prefix sums evaluate all N-1 split points in O(N) after the
-    O(N log N) sort — guaranteed global optimum, no random restarts needed.
-
-    Returns:
-        labels:    [N] LongTensor — 0 for lower cluster, 1 for upper cluster.
-        centroids: [2] tensor    — [c_lower, c_upper].
-    """
-    sorted_vals, sort_idx = vals.sort()
-    N = sorted_vals.shape[0]
-    cs  = sorted_vals.cumsum(0)
-    cs2 = (sorted_vals ** 2).cumsum(0)
-    ks  = torch.arange(1, N, device=vals.device, dtype=vals.dtype)
-    n0, n1  = ks, N - ks
-    s0, s2_0 = cs[:-1], cs2[:-1]
-    s1, s2_1 = cs[-1] - s0, cs2[-1] - s2_0
-    cost = (s2_0 - s0 ** 2 / n0) + (s2_1 - s1 ** 2 / n1)
-    k = int(cost.argmin().item()) + 1
-    labels_sorted = torch.zeros(N, dtype=torch.long, device=vals.device)
-    labels_sorted[k:] = 1
-    labels = torch.empty_like(labels_sorted)
-    labels[sort_idx] = labels_sorted
-    c0 = sorted_vals[:k].median()
-    c1 = sorted_vals[k:].median()
-    return labels, torch.stack([c0, c1])
-
-
-@torch.no_grad()
-def contrast_fn(
-    u: torch.Tensor,
-    fn: Literal["logcosh", "square", "cube", "smooth_abs"] = "logcosh",
-    *,
-    contrast_exp: float = 3.0,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Evaluate a contrast function and its derivative.
-
-    The ``logcosh`` branch uses :func:`log_cosh` for numerical stability.
-
-    Args:
-        u:            [T] estimated source signal.
-        fn:           Which contrast function to use.
-        contrast_exp: Exponent for ``smooth_abs`` (default 3.0).
-
-    Returns:
-        ``(g_u, dg_u)`` — contrast value and derivative, both ``[T]``.
-    """
-    if fn == "logcosh":
-        tanh_u = torch.tanh(u)
-        return tanh_u, 1.0 - tanh_u ** 2
-    if fn == "square":
-        return u ** 2, 2.0 * u
-    if fn == "smooth_abs":
-        eps = 1e-3
-        a = contrast_exp
-        g_u  = (eps + u ** 2) ** ((a - 3) / 2) * (a * u ** 2 + eps)
-        dg_u = (a - 1) * u * (eps + u ** 2) ** ((a - 5) / 2) * (a * u ** 2 + 3 * eps)
-        return g_u, dg_u
-    # cube
-    return u ** 3, 3.0 * u ** 2
 
 
 @torch.no_grad()

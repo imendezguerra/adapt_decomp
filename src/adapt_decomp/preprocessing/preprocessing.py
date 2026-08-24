@@ -48,7 +48,7 @@ def preprocess_emg(
 
 
 def filter_kwargs(cfg) -> dict:
-    """Build preprocess_emg() kwargs from a Config or CBSSConfig.
+    """Build preprocess_emg() kwargs from an AdaptConfig or CBSSConfig.
 
     Both config dataclasses declare identically-named lowcut/highcut/powerline/
     powerline_freq/notch_* fields for this shared filter, so this one mapping
@@ -77,11 +77,11 @@ def replace_bad_channels(
 
     Args:
         data:    EMG array. Layouts:
-                   ``samples_first`` = ``[T, C]``,
-                   ``channels_first`` = ``[C, T]``,
-                   ``grid`` = ``[rows, cols, T]``.
+                   samples_first = [T, C],
+                   channels_first = [C, T],
+                   grid = [rows, cols, T].
         bad_ch:  0-based indices of bad channels, processed in order.
-        ch_map:  ``[rows, cols]`` 0-based channel map; empty cells are ``-1``.
+        ch_map:  [rows, cols] 0-based channel map; empty cells are -1.
         layout:  Data layout.
 
     Returns:

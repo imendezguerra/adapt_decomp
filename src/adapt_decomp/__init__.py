@@ -1,25 +1,33 @@
-__version__ = "1.0"
+__version__ = "2.0"
 
 from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
-from adapt_decomp.calibration import (
-    calibrate_from_indices,
-    select_units_supervised,
-    select_units_unsupervised,
+from adapt_decomp.adaptation import (
+    AdaptDecomp,
+    AdaptationResult,
+    optimize_adapt_decomp,
+    optimize_adapt_decomp_pooled,
 )
-from adapt_decomp.adaptation import AdaptDecomp
-from adapt_decomp.optimize import optimize_adapt_decomp, run_with_optimization
+from adapt_decomp.utils.plots import (
+    plot_sep_vectors_comp,
+    plot_whitening_comp,
+    plot_sep_vectors_diff
+)
+from adapt_decomp.utils.loaders import load_data
 
 __all__ = [
     # CBSS calibration
     "CBSS",
     "CBSSConfig",
     "CBSSResult",
-    # Calibration pipeline
-    "calibrate_from_indices",
-    "select_units_unsupervised",
-    "select_units_supervised",
     # Online adaptation
     "AdaptDecomp",
+    "AdaptationResult",
     "optimize_adapt_decomp",
-    "run_with_optimization",
+    "optimize_adapt_decomp_pooled",
+    # Plots 
+    plot_sep_vectors_comp,
+    plot_whitening_comp,
+    plot_sep_vectors_diff,
+    # Loaders
+    load_data
 ]

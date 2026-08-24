@@ -8,14 +8,14 @@ from typing import Dict, Tuple, Literal, Union
 
 class H5ParamsBatchWriter:
     """Class to store adaptive deocomposition parameters in HDF5 format per batch."""
-    
-    def __init__(self, 
+
+    def __init__(self,
         path: Union[str, Path],
         wh_shape: Tuple,
         sv_shape: Tuple,
         sd_shape: Tuple,
         batches: int = None,
-        dtype: str = 'float32', 
+        dtype: str = 'float32',
         compression: Literal['gzip', None] = None
     ) -> None:
         self.path = path
@@ -43,16 +43,16 @@ class H5ParamsBatchWriter:
                     chunks=True,
                     compression=self.compression
                 )
-    
+
     def _append(self, batch_data:Dict) -> None:
         with h5py.File(self.path, 'a') as f:
-            for k, v in batch_data.items(): 
+            for k, v in batch_data.items():
                 f[k].resize(f[k].shape[0] + 1, axis=0)
                 f[k][-1:] = np.asarray(v, dtype=self.dtype)
 
     def _append_batch(self, batch_data:Dict) -> None:
         with h5py.File(self.path, 'a') as f:
-            for k, v in batch_data.items(): 
+            for k, v in batch_data.items():
                 batch_len = v.shape[0]
                 fk_len = f[k].shape[0]
                 f[k].resize(fk_len + batch_len, axis=0)
