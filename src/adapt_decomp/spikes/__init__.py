@@ -2,6 +2,7 @@
 
 from adapt_decomp.spikes.detection import detect_spikes, find_peaks_multisource
 from adapt_decomp.spikes.comparison import (
+    pair_ground_truth,
     rate_of_agreement_paired,
     rate_of_agreement,
     remove_duplicates,
@@ -12,6 +13,7 @@ from adapt_decomp.spikes.metrics import firings_to_spikes
 __all__ = [
     "detect_spikes",
     "find_peaks_multisource",
+    "pair_ground_truth",
     "rate_of_agreement_paired",
     "rate_of_agreement",
     "remove_duplicates",

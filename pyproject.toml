@@ -35,6 +35,7 @@ dependencies = [
     "loguru",
     "plotly",
     "tqdm",
+    "typer",                   # scripts/run.py's CLI
 ]
 
 [tool.pytest.ini_options]

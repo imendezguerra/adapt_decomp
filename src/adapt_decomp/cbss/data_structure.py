@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional, Union
 
 import numpy as np
+import torch
 
 
 @dataclass
@@ -57,6 +58,48 @@ class CBSSResult:
             "timestamps": self.timestamps,
             "gt_matched_indices": self.gt_matched_indices,
             "roa": self.roa,
+        }
+
+    # ------------------------------------------------------------------
+    # Conversion for online adaptation
+    # ------------------------------------------------------------------
+
+    def to_adapt_tensors(self) -> Dict[str, Optional[torch.Tensor]]:
+        """Unpack this result into the raw calibration tensors AdaptDecomp/optimize.py need.
+
+        Returns:
+            Dict[str, Optional[torch.Tensor]]: "whitening", "sep_vectors"
+            ([n_mu, dim], transposed from this result's stored [dim, n_mu]),
+            "base_centr", "spikes_centr", "emg_calib", "ipts_calib",
+            "spikes_calib", and "pca_components"/"pca_mean" (None if this
+            calibration did not use PCA reduction).
+
+        Raises:
+            ValueError: If self.emg is None -- calibration EMG is required to
+                build emg_calib (the same requirement
+                AdaptDecomp.from_calibration() enforces up front, with a more
+                specific message, before ever reaching this method).
+        """
+        if self.emg is None:
+            raise ValueError(
+                "CBSSResult.emg is None; to_adapt_tensors() needs the calibration EMG "
+                "to build emg_calib. Build/load a CBSSResult with emg set (e.g. "
+                "CBSS(..., save_emg=True) or CBSSResult.load())."
+            )
+
+        def _t(arr: np.ndarray) -> torch.Tensor:
+            return torch.as_tensor(np.asarray(arr), dtype=torch.float32)
+
+        return {
+            "whitening": _t(self.whitening),
+            "sep_vectors": _t(self.sep_vectors).T.contiguous(),
+            "base_centr": _t(self.base_centr),
+            "spikes_centr": _t(self.spikes_centr),
+            "emg_calib": _t(self.emg),
+            "ipts_calib": _t(self.sources),
+            "spikes_calib": _t(self.spikes),
+            "pca_components": _t(self.pca_components) if self.pca_components is not None else None,
+            "pca_mean": _t(self.pca_mean) if self.pca_mean is not None else None,
         }
 
     # ------------------------------------------------------------------
@@ -238,8 +281,8 @@ class CBSSResult:
         self,
         gt_spikes: np.ndarray,
         *,
-        roa_th: float = 0.5,
-        tol_spike_ms: float = 0.5,
+        roa_th: float = 0.9,
+        tol_spike_ms: float = 2,
         fs: Optional[float] = None,
     ) -> CBSSResult:
         """Match each decomposed unit to the best GT unit by RoA; keep matches above roa_th.
@@ -248,8 +291,8 @@ class CBSSResult:
             gt_spikes: [T_calib, M_gt] binary (int or bool) spike matrix aligned to the
                        calibration window. Must have the same number of samples as
                        self.sources.
-            roa_th:    Minimum rate-of-agreement to keep a unit (default 0.5).
-            tol_spike_ms: Tolerance window for coincident spikes in milliseconds (default 0.5).
+            roa_th:    Minimum rate-of-agreement to keep a unit (default 0.9).
+            tol_spike_ms: Tolerance window for coincident spikes in milliseconds (default 2).
             fs:        Sampling frequency in Hz. If None, inferred from self.fs
                        (which requires self.timestamps to be set).
 

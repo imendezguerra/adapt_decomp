@@ -1,0 +1,18 @@
+# Default wandb parameter space, for scripts/run.py's run_wandb command.
+
+sweep_counts: 20  # Overridable via run_wandb's --sweep_counts; popped before being
+                  # passed to wandb.sweep() itself, which doesn't know this key.
+
+method: "bayes"  # Bayesian optimization for efficient searching
+metric:
+  name: "sv_loss"
+  goal: "minimize"
+parameters:
+  wh_learning_rate:
+    min: 1.0e-4
+    max: 5.0e-2
+    distribution: log_uniform_values
+  sv_learning_rate:
+    min: 1.0e-4
+    max: 1.0e-1
+    distribution: log_uniform_values

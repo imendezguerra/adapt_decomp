@@ -1,239 +1,341 @@
+from typing import Optional
+
 import wandb
-import argparse
+import copy
 import torch
 import numpy as np
+import typer
 from dataclasses import asdict
 from adapt_decomp.adaptation.config import load_yaml, load_config
 from adapt_decomp.utils import load_data
+from adapt_decomp.utils.loaders import PooledDatasetMemory
 from adapt_decomp.adaptation import AdaptDecomp
-from adapt_decomp.adaptation.optimize import optimize_adapt_decomp
-from adapt_decomp.spikes import rate_of_agreement, rate_of_agreement_paired
+from adapt_decomp.adaptation.optimize import optimize_adapt_decomp_pooled_memory, ObjectiveName
+from adapt_decomp.spikes import rate_of_agreement_paired
+
+app = typer.Typer(help="Adaptive EMG decomposition.")
 
 
-def _log_outputs(outputs, data, config):
-    """Log decomposition outputs and mean RoA (if ground truth is available) to
-    the active wandb run.
+def _run_pooled(pool, config):
+    """Run one AdaptDecomp per pooled dataset, sharing the same config.
 
-    Only the mean RoA across units is logged, as wandb.summary -- a single
-    scalar per run, directly comparable across sweep runs in wandb's
-    parallel-coordinates/scatter views. Per-unit RoA is deliberately not
-    logged individually: wandb has no good way to visualise a per-motor-unit
-    breakdown alongside per-run hyperparameters, so it would just add noise
-    to the sweep comparison this is actually used for.
+    Args:
+        pool: Dataset name -> PooledDatasetMemory (from load_data()/load_pooled_cbss_memory()).
+        config: The resolved AdaptConfig, applied to every dataset (deep-copied
+            per dataset so one run can't mutate another's).
 
-    If outputs already carries a non-None .roa (set by
-    optimize_adapt_decomp(..., compute_roa=True) on the winning trial), it is
-    logged directly instead of being recomputed here. The recompute path
-    (rate_of_agreement_paired against a freshly reordered spikes_gt) stays for
-    the plain, non-optimised run path, whose AdaptationResult has no .roa.
+    Returns:
+        Dict: Dataset name -> its AdaptationResult.
     """
-    if 'spikes_gt' in data:
-        roa_calib, pair_calib, _ = rate_of_agreement(
-            data['spikes_gt'].numpy()[0:data['spikes_calib'].shape[0]],
-            data['spikes_calib'].numpy(),
-            fs=data['fs'],
-            tol_spike_ms=2,
+    outputs = {}
+    for name, dataset in pool.items():
+        adapter = AdaptDecomp.from_calibration(
+            dataset.emg, calibration=dataset.calibration, cbss_config=dataset.cbss_config,
+            adapt_config=copy.deepcopy(config), preprocess=dataset.preprocess,
         )
-        if 'roa' in outputs:
-            roa_adapt = outputs['roa']
-        else:
-            spikes_gt = data['spikes_gt'].numpy()[:, np.array(pair_calib)[:, 0]]
+        outputs[name] = adapter.run()
+    return outputs
+
+
+def _log_pooled_outputs(outputs_by_dataset, pool, config):
+    """Log per-batch time series plus per-dataset/pooled summary stats to the active wandb run.
+
+    One dataset or many alike.
+
+    Args:
+        outputs_by_dataset: Dataset name -> AdaptationResult, from _run_pooled()
+            or optimize_adapt_decomp_pooled_memory(best_result_path=...).
+        pool: The same pool passed in (needs .calibration/.gt_paired_bin per dataset).
+        config: The resolved AdaptConfig for this run.
+
+    Returns:
+        None
+    """
+
+    max_batches = max(len(outputs['wh_loss']) for outputs in outputs_by_dataset.values())
+    for batch in range(max_batches):
+        log_dict = {}
+        for name, outputs in outputs_by_dataset.items():
+            if batch < len(outputs['wh_loss']):
+                log_dict[f'{name}/wh_loss'] = outputs['wh_loss'][batch]
+                log_dict[f'{name}/sv_loss'] = outputs['sv_loss'][batch].nansum()
+                log_dict[f'{name}/total_time_ms'] = outputs['total_time_ms'][batch]
+        wandb.log(log_dict)
+
+    roa_adapt_means = []
+    roa_calib_means = []
+    total_time_ms_means = []
+    for name, outputs in outputs_by_dataset.items():
+        wandb.summary[f'{name}/wh_loss'] = torch.median(outputs['wh_loss']).item()
+        wandb.summary[f'{name}/sv_loss'] = torch.median(outputs['sv_loss'].nansum(dim=1)).item()
+        wandb.summary[f'{name}/total_loss'] = outputs['total_loss'].item()
+        total_time_ms_mean = torch.mean(outputs['total_time_ms']).item()
+        wandb.summary[f'{name}/total_time_ms'] = total_time_ms_mean
+        total_time_ms_means.append(total_time_ms_mean)
+
+        gt_full_bin = pool[name].gt_paired_bin
+        if gt_full_bin is not None:
             roa_adapt, _, _ = rate_of_agreement_paired(
-                spikes_gt,
-                outputs['spikes'].numpy(),
-                fs=data['fs'],
-                tol_spike_ms=2,
+                gt_full_bin, outputs['spikes'].numpy(), fs=config.fs, tol_spike_ms=2,
             )
-        wandb.summary['roa_calib'] = np.mean(roa_calib)
-        wandb.summary['roa_adapt'] = np.mean(roa_adapt)
+            roa_mean = float(np.mean(roa_adapt))
+            wandb.summary[f'{name}/roa_adapt'] = roa_mean
+            roa_adapt_means.append(roa_mean)
 
-    batches = len(outputs['wh_loss'])
-    for batch in range(batches):
-        wandb.log({
-            'wh_loss': outputs['wh_loss'][batch],
-            'sv_loss': outputs['sv_loss'][batch].nansum(),
-            'total_loss': outputs['total_loss'][batch],
-            'total_time_ms': outputs['total_time_ms'][batch],
-        })
+            # Calibration-window RoA, set on calibration by select_supervised() --
+            # the pooled-loading equivalent of load_example's roa_calib.
+            calib_roa = pool[name].calibration.roa
+            if calib_roa is not None:
+                roa_calib_mean = float(np.mean(calib_roa))
+                wandb.summary[f'{name}/roa_calib'] = roa_calib_mean
+                roa_calib_means.append(roa_calib_mean)
 
-    wandb.summary['total_time_ms'] = torch.mean(outputs['total_time_ms'])
-    wandb.summary['wh_loss'] = torch.median(outputs['wh_loss'])
-    wandb.summary['sv_loss'] = torch.median(outputs['sv_loss'].nansum(dim=1))
-    wandb.summary['total_loss'] = torch.median(outputs['total_loss'])
+    wandb.summary['wh_loss'] = float(
+        sum(outputs['wh_loss_median'].item() for outputs in outputs_by_dataset.values())
+    )
+    wandb.summary['sv_loss'] = float(
+        sum(outputs['sv_loss_median'].item() for outputs in outputs_by_dataset.values())
+    )
+    wandb.summary['total_loss'] = float(
+        sum(outputs['total_loss'].item() for outputs in outputs_by_dataset.values())
+    )
+    wandb.summary['total_time_ms'] = float(np.mean(total_time_ms_means))
+    if roa_adapt_means:
+        wandb.summary['roa_adapt'] = float(np.mean(roa_adapt_means))
+    if roa_calib_means:
+        wandb.summary['roa_calib'] = float(np.mean(roa_calib_means))
 
 
 def _log_trial_to_wandb(log_vars):
     """on_trial hook: log one completed trial's loss/params/mean RoA to the active wandb run.
 
-    log_vars is the single dict optimize_adapt_decomp()/optimize_adapt_decomp_pooled()
-    build once per trial (trial_number/loss/params, plus roa_mean/roa_per_unit,
-    and for pooled a "per_condition" breakdown, when compute_roa=True) --
-    keeps optimize.py itself free of any wandb dependency and this function
-    free of any need to know Optuna's Study/Trial API.
+    Args:
+        log_vars: Per-trial dict from optimize_adapt_decomp_pooled_memory()
+            (trial_number/loss/objective/sv_loss/wh_loss/total_loss/params, plus roa
+            (guarded, inverted-for-minimisation) /roa_mean/roa_per_unit when compute_roa=True,
+            i.e. whenever ground truth is available or objective="roa").
 
-    Deliberately logs only the top-level "roa_mean" -- never "roa_per_unit"
-    (a per-motor-unit breakdown has no good wandb visualisation) or
-    "per_condition" (pooled's per-condition detail). This is enough for both
-    shapes unchanged: for optimize_adapt_decomp, "roa_mean" is that trial's
-    mean RoA; for optimize_adapt_decomp_pooled, it's already the mean of the
-    per-condition mean RoAs for that trial's (shared) hyperparameter set --
-    exactly the one number needed to compare loss vs. RoA per hyperparameter
-    value when defining a sweep.
+    Returns:
+        None
     """
-    log_dict = {"optuna/trial_number": log_vars["trial_number"], "optuna/loss": log_vars["loss"]}
+    log_dict = {
+        "optuna/trial_number": log_vars["trial_number"],
+        "optuna/loss": log_vars["loss"],
+        "optuna/objective": log_vars["objective"],
+        "optuna/sv_loss": log_vars["sv_loss"],
+        "optuna/wh_loss": log_vars["wh_loss"],
+        "optuna/total_loss": log_vars["total_loss"],
+    }
     log_dict.update({f"optuna/param_{k}": v for k, v in log_vars["params"].items()})
+    if "roa" in log_vars:
+        log_dict["optuna/roa_loss"] = log_vars["roa"]
     if "roa_mean" in log_vars:
         log_dict["optuna/roa_mean"] = log_vars["roa_mean"]
     wandb.log(log_dict)
 
 
-def run(model_config, data_config, wandb_project_name, wandb_config=None,
-        optim_config=None, n_trials=100, best_result_path=None):
-    """Run adaptive decomposition, optionally with Optuna hyperparameter search.
+def _setup(adapt_config, data_config, wandb_project_name, wandb_config=None):
+    """Load data_config into a pool, resolve config, and start/rename the active wandb run.
 
     Args:
-        model_config: Path to model config YAML.
+        adapt_config: Path to model config YAML.
         data_config: Path to data config YAML.
-        wandb_project_name: WandB project name for logging.
+        wandb_project_name: WandB project name, used only if no wandb run is active yet.
         wandb_config: Optional dict of wandb sweep overrides.
-        optim_config: Path to Optuna param-space YAML. When provided, runs
-            single-objective hyperparameter search, with every trial's
-            loss/params/RoA logged live to wandb (see _log_trial_to_wandb).
-        n_trials: Number of Optuna trials (used when optim_config is set).
-        best_result_path: Optional directory to also persist the winning
-            trial's full AdaptationResult/config/study to disk (used when
-            optim_config is set). When omitted, only trial-level summaries
-            are logged to wandb -- no per-batch trace of the winning trial
-            is saved or logged.
+
+    Returns:
+        Tuple[Dict[str, PooledDatasetMemory], AdaptConfig]: pool, config.
     """
     data_config = load_yaml(data_config)
     data = load_data(data_config)
 
-    config = load_config(model_config, wandb_config)
-    config.ext_fact = data['ext_fact']
+    if isinstance(data, dict) and data and isinstance(next(iter(data.values())), PooledDatasetMemory):
+        pool = data
+    else:
+        # load_example's legacy flat-dict shape -- wrapped into a one-entry pool
+        # so everything downstream has exactly one code path to go through.
+        pool = {"dataset": PooledDatasetMemory(
+            emg=data['emg'], calibration=data['cbss_result'], cbss_config=data['cbss_config'],
+            preprocess=data['preprocess'], gt_paired_bin=data.get('gt_full_bin'),
+        )}
+
+    config = load_config(adapt_config, wandb_config)
+    config.ext_fact = next(iter(pool.values())).calibration.ext_fact
 
     run_name = (
         f'adapt_decomp_dv{config.wh_learning_rate:.0e}'
         f'_db{config.sv_learning_rate:.0e}'
     )
-
     if wandb.run is None:
         wandb.init(project=wandb_project_name, name=run_name, config=asdict(config))
     else:
         wandb.run.name = run_name
 
-    # base_config= vs adapt_config=: optimize_adapt_decomp() names this
-    # parameter "base_config", AdaptDecomp's own constructor uses
-    # "adapt_config" -- kept out of common_kwargs and passed explicitly per
-    # branch below so each call gets the keyword its own signature expects.
-    common_kwargs = dict(
-        emg=data['emg'].clone(),
-        whitening=data['whitening'].clone(),
-        sep_vectors=data['sep_vectors'].clone(),
-        base_centr=data['base_centr'].clone(),
-        spikes_centr=data['spikes_centr'].clone(),
-        emg_calib=data['emg_calib'].clone(),
-        ipts_calib=data['ipts_calib'].clone(),
-        spikes_calib=data['spikes_calib'].clone(),
-        preprocess=data['preprocess'],
-    )
+    return pool, config
 
-    if optim_config is not None:
-        param_space_raw = load_yaml(optim_config)
-        param_space = {k: tuple(v) for k, v in param_space_raw.items()}
 
-        # Ground truth, if the data config's loader supplies it -- reordered to match
-        # the calibration's matched-unit ordering, exactly as _log_outputs already does
-        # for the plain (non-optimised) path's own RoA computation.
-        compute_roa = 'spikes_gt' in data
-        gt_full_bin = None
-        if compute_roa:
-            _, pair_calib, _ = rate_of_agreement(
-                data['spikes_gt'].numpy()[0:data['spikes_calib'].shape[0]],
-                data['spikes_calib'].numpy(),
-                fs=data['fs'],
-                tol_spike_ms=2,
-            )
-            gt_full_bin = data['spikes_gt'].numpy()[:, np.array(pair_calib)[:, 0]]
+def _run(adapt_config, data_config, wandb_project_name, wandb_config=None):
+    """One plain adaptive-decomposition pass, no search -- one dataset or many alike.
 
-        result = optimize_adapt_decomp(
-            param_space=param_space,
-            n_trials=n_trials,
-            base_config=config,
-            on_trial=_log_trial_to_wandb,
-            compute_roa=compute_roa,
-            gt_full_bin=gt_full_bin,
-            best_result_path=best_result_path,
-            **common_kwargs,
-        )
+    Args:
+        adapt_config: Path to model config YAML.
+        data_config: Path to data config YAML.
+        wandb_project_name: WandB project name, used only if no wandb run is active yet.
+        wandb_config: Optional dict of wandb sweep overrides.
 
-        # best_result_path set -> optimize_adapt_decomp prepends the winning trial's
-        # full AdaptationResult, so it can go through the same _log_outputs() path as
-        # a plain run. Left unset -> no per-batch AdaptationResult exists; log the
-        # study-level summary instead.
-        if best_result_path is not None:
-            outputs, best_config, study = result
-            _log_outputs(outputs, data, config)
-        else:
-            best_config, study = result
-            wandb.summary['best_loss'] = study.best_value
-            if compute_roa:
-                wandb.summary['best_roa_mean'] = study.best_trial.user_attrs.get('roa_mean')
-        wandb.log({'best_config': best_config.to_dict()})
-    else:
-        adapter = AdaptDecomp(adapt_config=config, **common_kwargs)
-        outputs = adapter.run()
-        _log_outputs(outputs, data, config)
-
+    Returns:
+        None
+    """
+    pool, config = _setup(adapt_config, data_config, wandb_project_name, wandb_config)
+    outputs = _run_pooled(pool, config)
+    _log_pooled_outputs(outputs, pool, config)
     wandb.finish()
 
 
-def main():
-    """CLI entry point for adaptive EMG decomposition."""
-    parser = argparse.ArgumentParser(description="Adaptive EMG decomposition.")
-    parser.add_argument("--data_config", type=str, required=True,
-                        help="Path to data config YAML")
-    parser.add_argument("--model_config", type=str, required=True,
-                        help="Path to model config YAML")
-    parser.add_argument("--sweep_config", type=str, default=None,
-                        help="Path to wandb sweep config YAML (wandb-managed sweep)")
-    parser.add_argument("--sweep_counts", type=int, default=20,
-                        help="Number of wandb sweep trials")
-    parser.add_argument("--optim_config", type=str, default=None,
-                        help="Path to Optuna param-space YAML (single-obj optimisation)")
-    parser.add_argument("--n_trials", type=int, default=100,
-                        help="Number of Optuna trials (used with --optim_config)")
-    parser.add_argument("--best_result_path", type=str, default=None,
-                        help="Optional directory to save the winning Optuna trial's full "
-                             "AdaptationResult/config/study (used with --optim_config). If "
-                             "omitted, only trial-level summaries are logged to wandb.")
-    parser.add_argument("--wandb_project_name", type=str,
-                        default="adaptive_emg_decomp_dyn",
-                        help="WandB project name")
-    args = parser.parse_args()
+@app.command(name="run")
+def run(
+    adapt_config: str = typer.Option(..., "--adapt_config", help="Path to model config YAML"),
+    data_config: str = typer.Option(..., "--data_config", help="Path to data config YAML"),
+    wandb_project_name: str = typer.Option(
+        "adaptive_emg_decomp_dyn", "--wandb_project_name", help="WandB project name",
+    ),
+) -> None:
+    """One plain adaptive-decomposition pass, no search -- one dataset or many alike."""
+    _run(adapt_config, data_config, wandb_project_name)
 
-    if args.sweep_config:
-        sweep_config = load_yaml(args.sweep_config)
-        sweep_id = wandb.sweep(sweep_config, project=args.wandb_project_name)
 
-        def sweep_run():
-            wandb.init(project=args.wandb_project_name, name="temp_run")
-            run(args.model_config, args.data_config, args.wandb_project_name,
-                wandb_config=dict(wandb.config),
-                optim_config=args.optim_config, n_trials=args.n_trials,
-                best_result_path=args.best_result_path)
+def _run_optuna(adapt_config, data_config, wandb_project_name, optim_config,
+                 objective=None, n_trials=None, best_result_path=None,
+                 compute_roa=None, roa_kwargs=None):
+    """Optuna hyperparameter search -- one dataset or many alike.
 
-        wandb.agent(sweep_id, function=sweep_run, count=args.sweep_counts)
+    Args:
+        adapt_config: Path to model config YAML.
+        data_config: Path to data config YAML.
+        wandb_project_name: WandB project name, used only if no wandb run is active yet.
+        optim_config: Path to Optuna search-settings YAML.
+        objective: Overrides optim_config's own objective. None -> optim_config's value,
+            else "total_loss".
+        n_trials: Overrides optim_config's own n_trials. None -> optim_config's value,
+            else 100.
+        best_result_path: Directory to save the winning trial's AdaptationResult/config/
+            study. None -> only trial-level summaries logged to wandb.
+        compute_roa: Forces RoA scoring on/off. None -> auto: True iff every dataset in
+            the pool has ground truth.
+        roa_kwargs: Extra keyword arguments forwarded to rate_of_agreement_paired()
+            (e.g. tol_spike_ms). None -> optimize_adapt_decomp_pooled_memory's own default.
+
+    Returns:
+        None
+    """
+    pool, config = _setup(adapt_config, data_config, wandb_project_name)
+
+    optim_settings = load_yaml(optim_config)
+    param_space = {k: tuple(v) for k, v in optim_settings.get("param_space", {}).items()}
+    resolved_objective = objective if objective is not None else optim_settings.get("objective", "total_loss")
+    resolved_n_trials = n_trials if n_trials is not None else optim_settings.get("n_trials", 100)
+    resolved_n_jobs = optim_settings.get("n_jobs", 1)
+    resolved_random_seed = optim_settings.get("random_seed", 1909)
+    if compute_roa is None:
+        compute_roa = all(dataset.gt_paired_bin is not None for dataset in pool.values())
+
+    result = optimize_adapt_decomp_pooled_memory(
+        pool=pool,
+        param_space=param_space,
+        objective=resolved_objective,
+        n_trials=resolved_n_trials,
+        n_jobs=resolved_n_jobs,
+        random_seed=resolved_random_seed,
+        base_config=config,
+        on_trial=_log_trial_to_wandb,
+        compute_roa=compute_roa,
+        roa_kwargs=roa_kwargs,
+        best_result_path=best_result_path,
+    )
+
+    # best_result_path set -> also got the winning trial's AdaptationResult(s);
+    # otherwise just log study-level summaries.
+    if best_result_path is not None:
+        outputs, best_config, study = result
+        _log_pooled_outputs(outputs, pool, config)
     else:
-        run(
-            args.model_config,
-            args.data_config,
-            args.wandb_project_name,
-            optim_config=args.optim_config,
-            n_trials=args.n_trials,
-            best_result_path=args.best_result_path,
-        )
+        best_config, study = result
+        wandb.summary['best_loss'] = study.best_value
+        if compute_roa:
+            wandb.summary['best_roa_mean'] = study.best_trial.user_attrs.get('roa_mean_pooled')
+    wandb.log({'best_config': best_config.to_dict()})
+    wandb.finish()
+
+
+@app.command(name="run_optuna")
+def run_optuna(
+    adapt_config: str = typer.Option(..., "--adapt_config", help="Path to model config YAML"),
+    data_config: str = typer.Option(..., "--data_config", help="Path to data config YAML"),
+    optim_config: str = typer.Option(
+        ..., "--optim_config",
+        help="Path to Optuna search-settings YAML -- param_space/objective/n_trials/n_jobs/"
+             "random_seed. See configs/adapt_configs/sweep_optuna.yaml.",
+    ),
+    wandb_project_name: str = typer.Option(
+        "adaptive_emg_decomp_dyn", "--wandb_project_name", help="WandB project name",
+    ),
+    objective: Optional[ObjectiveName] = typer.Option(
+        None, "--objective",
+        help="Overrides optim_config's own objective if set. Falls back to total_loss if "
+             "neither is set.",
+    ),
+    n_trials: Optional[int] = typer.Option(
+        None, "--n_trials",
+        help="Overrides optim_config's own n_trials if set. Falls back to 100 if neither "
+             "is set.",
+    ),
+    best_result_path: Optional[str] = typer.Option(
+        None, "--best_result_path",
+        help="Directory to save the winning trial's AdaptationResult/config/study. Omitted "
+             "-> only trial-level summaries are logged to wandb.",
+    ),
+) -> None:
+    """Optuna hyperparameter search -- one dataset or many alike. compute_roa/roa_kwargs
+    have no CLI flags -- call _run_optuna() directly (not via this CLI command) to set them.
+    """
+    _run_optuna(adapt_config, data_config, wandb_project_name, optim_config,
+                objective=objective, n_trials=n_trials, best_result_path=best_result_path)
+
+
+@app.command(name="run_wandb")
+def run_wandb(
+    adapt_config: str = typer.Option(..., "--adapt_config", help="Path to model config YAML"),
+    data_config: str = typer.Option(..., "--data_config", help="Path to data config YAML"),
+    sweep_config: str = typer.Option(
+        ..., "--sweep_config",
+        help="Path to wandb sweep config YAML. See configs/adapt_configs/sweep_wandb.yaml.",
+    ),
+    wandb_project_name: str = typer.Option(
+        "adaptive_emg_decomp_dyn", "--wandb_project_name", help="WandB project name",
+    ),
+    sweep_counts: Optional[int] = typer.Option(
+        None, "--sweep_counts",
+        help="Overrides sweep_config's own sweep_counts if set. Falls back to 20 if "
+             "neither is set.",
+    ),
+) -> None:
+    """wandb-managed sweep -- each iteration is a plain run() call, hyperparameters chosen
+    by wandb itself (no nested Optuna search, by design)."""
+    sweep_settings = load_yaml(sweep_config)
+    yaml_sweep_counts = sweep_settings.pop("sweep_counts", None)  # popped either way --
+                                                                    # wandb.sweep() must never see it
+    resolved_sweep_counts = sweep_counts if sweep_counts is not None else (
+        yaml_sweep_counts if yaml_sweep_counts is not None else 20
+    )
+
+    sweep_id = wandb.sweep(sweep_settings, project=wandb_project_name)
+
+    def sweep_run():
+        wandb.init(project=wandb_project_name, name="temp_run")
+        _run(adapt_config, data_config, wandb_project_name, wandb_config=dict(wandb.config))
+
+    wandb.agent(sweep_id, function=sweep_run, count=resolved_sweep_counts)
 
 
 if __name__ == "__main__":
-    main()
+    app()

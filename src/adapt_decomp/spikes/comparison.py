@@ -311,6 +311,45 @@ def rate_of_agreement(
     return roa_sorted, pair_idx_sorted, pair_lag_sorted
 
 
+def pair_ground_truth(
+    spikes_gt: np.ndarray,
+    spikes_calib: np.ndarray,
+    fs: int,
+    tol_spike_ms: float = 2.0,
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Match ground truth spikes to calibration window
+
+    Args:
+        spikes_gt (np.ndarray): Ground-truth binary spike train for the full
+            recording, with shape (samples, n_gt).
+        spikes_calib (np.ndarray): Calibration binary spike train (e.g.
+            CBSSResult.spikes), with shape (samples_calib, n_dec).
+        fs (int): Sampling frequency in Hz.
+        tol_spike_ms (float, optional): Spike-coincidence tolerance in ms,
+            forwarded to rate_of_agreement. Defaults to 2.0.
+
+    Returns:
+        Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+            - gt_full_bin with matched spikes_gt to spikes_calib's units, shape
+            (samples, n_matched) (n_matched <= n_dec if rate_of_agreement's
+            leaves some decomposed units unmatched))
+            - roa_calib: per-matched-unit rate of agreement over the calibration
+             window with shape (, n_matched)
+        (None, None) if spikes_calib has no units or none is matched.
+    """
+    if spikes_calib.shape[1] == 0:
+        return None, None
+
+    roa_calib, pair_calib, _ = rate_of_agreement(
+        spikes_gt[: spikes_calib.shape[0]], spikes_calib, fs=fs, tol_spike_ms=tol_spike_ms,
+    )
+    if not pair_calib:
+        return None, None
+
+    gt_idx = np.array(pair_calib)[:, 0]
+    return spikes_gt[:, gt_idx], roa_calib
+
+
 def spikes_dict_to_binary(
     spikes_dict: Dict[int, np.ndarray],
     n_samples: int,

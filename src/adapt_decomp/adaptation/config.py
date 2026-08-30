@@ -72,7 +72,7 @@ class AdaptConfig(_LegacyConfig):
 
     # Whitening
     wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"  # Reference point for calibration
-    wh_b_coupling: bool = False     # Propagate the first-order frame correction from each wh step to sv.
+    wh_sv_coupling: bool = False    # Propagate the first-order frame correction from each wh step to sv.
 
     # Separation vectors 
     contrast_scope: Literal["batch_based", "spike_based"] = "batch_based" # Samples to use for separation vector update

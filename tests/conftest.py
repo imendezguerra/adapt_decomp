@@ -12,12 +12,15 @@ built under the same torch.manual_seed).
 
 from typing import Optional
 
+import numpy as np
 import pytest
 import torch
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import Decomposition
 from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
+from adapt_decomp.cbss.config import CBSSConfig
+from adapt_decomp.cbss.data_structure import CBSSResult
 
 
 @pytest.fixture
@@ -97,7 +100,10 @@ def make_adapter():
     Returns:
         Callable[[Decomposition, AdaptConfig], "AdaptDecomp"]: Call with the
         decomposition and the AdaptConfig it was built with (matching config
-        matters -- several of decomp's derived fields depend on it).
+        matters -- several of decomp's derived fields depend on it). The
+        returned adapter's wh_loss/sv_loss/wh_trace are single-batch stubs
+        (shape (1,)/(1, M)/(1,)) -- for tests exercising _compute_losses()
+        directly, overwrite them first.
     """
     def _make(decomp: Decomposition, config: AdaptConfig):
         from adapt_decomp.adaptation import AdaptDecomp
@@ -108,25 +114,26 @@ def make_adapter():
         adapter.units = decomp.sep_vectors.shape[0]
         adapter.diagnostics = {}
         adapter.wh_loss = torch.zeros(1)
+        adapter.sv_loss = torch.zeros(1, adapter.units)
         adapter.wh_trace = torch.zeros(1)
-        adapter.total_loss = torch.zeros(1)
         return adapter
     return _make
 
 
 @pytest.fixture
 def make_optimize_kwargs():
-    """Factory fixture: tiny synthetic AdaptDecomp inputs for
+    """Factory fixture: tiny synthetic CBSSResult/CBSSConfig for
     adaptation/optimize.py smoke tests -- no real EMG data needed.
 
     Returns:
         Callable[[], Tuple[Dict, int]]: Call with no arguments; reseeds
         torch.manual_seed(42) on every call, so repeated calls (e.g. building
-        two pooled conditions) reproduce identical synthetic data. Returns
-        (kwargs, M): kwargs is the dict of AdaptDecomp/optimize_adapt_decomp
-        constructor arguments (emg, whitening, sep_vectors, base_centr,
-        spikes_centr, emg_calib, ipts_calib, spikes_calib, preprocess,
-        base_config), M is the number of motor units.
+        two pooled datasets) reproduce identical synthetic data. Returns
+        (kwargs, M): kwargs is emg/calibration/cbss_config/preprocess/
+        base_config -- exactly the pieces needed to build a
+        PooledDatasetMemory (plus base_config, forwarded separately to
+        optimize_adapt_decomp_pooled_memory's own base_config parameter);
+        M is the number of motor units.
     """
     def _make():
         torch.manual_seed(42)
@@ -141,7 +148,6 @@ def make_optimize_kwargs():
         cfg.batch_ms = 100
         cfg.__post_init__()
 
-        wh = torch.eye(D)
         sv = orthonormalize_rows_qr(torch.randn(M, D))
         base_centroids = torch.rand(M) * 0.5
         spike_centroids = torch.rand(M) + 2.0
@@ -151,10 +157,25 @@ def make_optimize_kwargs():
         spikes_calib[::20] = 1
         emg_online = torch.randn(600, raw_chs)
 
+        spikes_calib_np = spikes_calib.numpy()
+        calibration = CBSSResult(
+            sources=ipts_calib.numpy(),
+            spikes=spikes_calib_np,
+            spikes_dict={i: np.where(spikes_calib_np[:, i])[0] for i in range(M)},
+            sep_vectors=sv.numpy().T,  # CBSSResult stores [dim, n_mu]; to_adapt_tensors() transposes back
+            whitening=np.eye(D, dtype=np.float32),
+            extension_mean=np.zeros((1, D), dtype=np.float32),
+            spikes_centr=spike_centroids.numpy(),
+            base_centr=base_centroids.numpy(),
+            sil=np.full(M, 0.9, dtype=np.float32),
+            cov_isi=np.full(M, 0.1, dtype=np.float32),
+            ext_fact=ext_fact,
+            emg=emg_calib.numpy(),
+        )
+        cbss_config = CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True)
+
         return dict(
-            emg=emg_online, whitening=wh, sep_vectors=sv,
-            base_centr=base_centroids, spikes_centr=spike_centroids,
-            emg_calib=emg_calib, ipts_calib=ipts_calib, spikes_calib=spikes_calib,
+            emg=emg_online, calibration=calibration, cbss_config=cbss_config,
             preprocess=False, base_config=cfg,
         ), M
     return _make

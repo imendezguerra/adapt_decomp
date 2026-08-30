@@ -1,0 +1,30 @@
+# data_config for optimize_adapt_decomp_pooled_memory -- works the same whether
+# datasets has one entry or several (a single dataset is just a one-entry pool).
+# Every dataset's calibration is preloaded and held resident for the whole search --
+# see fdsi_pool_disk_example.yaml for the lazy, memory-lean counterpart.
+
+root: 'C:/Users/Irene/Documents/work_local/fdsi_benchmark'  # Base directory
+loader: 'load_pooled_cbss_memory'                           # Loading function to use
+preprocess: true                                            # Default for every dataset below (overridable per-dataset)
+# calib_loader: class    # Optional; default for every dataset below (overridable per-dataset)
+# emg_loader: npz        # Optional; default for every dataset below (overridable per-dataset)
+# gt_loader: npz         # Optional; default for every dataset below (overridable per-dataset)
+
+datasets:
+  - name: triangular-ramp40s                                # Dataset name for labelling
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz'
+    path_calib: 'calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss.pkl'
+    path_calib_config: 'calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz'   # Optional; omit for no RoA
+
+  - name: triangular-ramp10s
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp10s_snr30dB_emg.npz'
+    path_calib: 'calibration/sub-01/sub-01_FDSI_triangular-ramp10s_snr30dB_cbss.pkl'
+    path_calib_config: 'calibration/sub-01/sub-01_FDSI_triangular-ramp10s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp10s_spikes.npz'
+
+  - name: triangular-ramp5s
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp5s_snr30dB_emg.npz'
+    path_calib: 'calibration/sub-01/sub-01_FDSI_triangular-ramp5s_snr30dB_cbss.pkl'
+    path_calib_config: 'calibration/sub-01/sub-01_FDSI_triangular-ramp5s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp5s_spikes.npz'

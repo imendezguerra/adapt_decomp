@@ -617,8 +617,16 @@ class AdaptationResult:
             shape (batches, M). Set only when config.compute_loss is True.
         wh_trace (Optional[torch.Tensor]): Trace of the whitened covariance
             with shape (batches,). Set only when config.compute_loss is True.
-        total_loss (Optional[torch.Tensor]): Combined loss with shape
-            (batches,). Set only when config.compute_loss is True.
+        wh_loss_median (Optional[torch.Tensor]): Guarded scalar median(wh_loss)
+            for the whole run -- see AdaptDecomp._compute_losses(). Set only
+            when config.compute_loss is True.
+        sv_loss_median (Optional[torch.Tensor]): Guarded scalar nanmedian(sv_loss)
+            for the whole run -- see AdaptDecomp._compute_losses(). Set only
+            when config.compute_loss is True.
+        total_loss (Optional[torch.Tensor]): Guarded scalar score for the
+            whole run -- wh_loss_median + sv_loss_median, see
+            AdaptDecomp._compute_losses(). Set only when config.compute_loss
+            is True.
         diagnostics (Optional[Dict[Any, Any]]): Per-batch diagnostic tensors,
             keyed by batch index. Set only when config.debug is True.
         gt_matched_indices (Optional[np.ndarray]): Index into a ground-truth
@@ -631,7 +639,7 @@ class AdaptationResult:
             (per-unit, not built here) -- callers set it after computing
             their own comparison (e.g.
             adapt_decomp.spikes.comparison.rate_of_agreement_paired), such
-            as adaptation/optimize.py's optimize_adapt_decomp_pooled(compute_roa=True).
+            as adaptation/optimize.py's optimize_adapt_decomp_pooled_memory(compute_roa=True).
     """
 
     spikes: torch.Tensor
@@ -644,6 +652,8 @@ class AdaptationResult:
     sv_loss: Optional[torch.Tensor] = None
     centroid_loss: Optional[torch.Tensor] = None
     wh_trace: Optional[torch.Tensor] = None
+    wh_loss_median: Optional[torch.Tensor] = None
+    sv_loss_median: Optional[torch.Tensor] = None
     total_loss: Optional[torch.Tensor] = None
     diagnostics: Optional[Dict[Any, Any]] = None
     gt_matched_indices: Optional[np.ndarray] = None
@@ -669,7 +679,8 @@ class AdaptationResult:
             "total_time_ms": self.total_time_ms,
         }
         for key in (
-            "wh_loss", "sv_loss", "centroid_loss", "wh_trace", "total_loss",
+            "wh_loss", "sv_loss", "centroid_loss", "wh_trace",
+            "wh_loss_median", "sv_loss_median", "total_loss",
             "diagnostics", "gt_matched_indices", "roa",
         ):
             value = getattr(self, key)

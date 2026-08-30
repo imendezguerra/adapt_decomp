@@ -1,0 +1,8 @@
+# Single-recording data_config
+root: 'data/JNE_data/sim'                     # Base directory
+loader: 'load_example'                        # Loading function to use
+preprocess: false                             # Whether to preprocess the data
+
+path_decomp: 'decomp_sim.mat'                 # Legacy MATLAB decomposition
+path_emg: 'data_sim.hdf5'                     # EMG for decomposition adaptation
+path_gt: 'data_sim.hdf5'                      # Ground truth spikes; same file as path_emg here

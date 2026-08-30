@@ -1,0 +1,63 @@
+# General
+fs: 2048                          # Sampling frequency (Hz)
+device: null                      # Compute device: null (auto), "cpu", "cuda", "mps"
+
+# Preprocessing
+lowcut: 20.0                      # High-pass cutoff (Hz)
+highcut: 500.0                    # Low-pass cutoff (Hz)
+filter_order: 4                   # Butterworth filter order (band-pass + notch)
+powerline: true                   # Remove powerline artefact
+powerline_freq: 50.0              # Powerline frequency (Hz)
+notch_width_hz: 1.0               # Notch filter width around each harmonic (Hz)
+notch_n_harmonics: 3              # Number of powerline harmonics to notch out
+notch_order: 2                    # Notch filter order
+
+# Extension
+ext_fact: 10                      # Time-delay embedding: D = channels × ext_fact
+ext_mode: block                   # Extension layout: "block" or "toeplitz" -- must match the calibration
+
+# Adaptation flags
+batch_ms: 100                     # Batch duration (ms); batch_size = batch_ms × fs / 1000
+adapt_wh: true                    # Adapt whitening matrix V
+adapt_sv: true                    # Adapt separation matrix B
+adapt_sd: true                    # Adapt spike / base centroids
+compute_loss: true                # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
+save_params: false                # Save newly adapted parameters per batch (HDF5)
+
+# Main adaptation hyperparameters
+wh_learning_rate: 7.0e-3          # Whitening learning rate -- NeuroMotion-tuned (v1)
+sv_learning_rate: 3.0e-3          # Separation-vector learning rate -- NeuroMotion-tuned (v1)
+
+# Adaptation behaviour
+lr_mode: fixed                    # Step-size formula: "fixed" (v1's raw gradient) or "rel_error" (natural-gradient direction, needs its own tuning)
+
+# Whitening
+wh_mode: kl_to_identity           # KL target: "kl_to_identity" or "kl_to_cal"
+wh_sv_coupling: false              # Propagate V-step frame correction to B
+
+# Separation vectors
+contrast_scope: spike_based       # Samples used for contrast: "batch_based" or "spike_based"
+sv_epochs: 1                      # Fixed-point iterations per batch for B
+sv_tol: 1.0e-4                    # Early-exit threshold: ||ΔB||_F / ||B||_F < sv_tol
+
+# Spike detection
+spike_min_dist_ms: 10             # Minimum inter-spike interval for NMS (ms)
+spike_det_exp: 2.0                # Power source amplitude is raised to before peak detection/IQR gating/centroid updates
+centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
+
+# Constants -- numerical stability
+shrinkage: 1.0e-3                 # Tikhonov/Ledoit-Wolf shrinkage on FIFO covariance
+eps: 1.0e-7                       # Numerical stability floor
+
+# Constants -- safety clips
+safety_clip_multiplier_wh: 20.0   # Max whitening step, as a multiple of wh_learning_rate
+safety_clip_multiplier_sv: 20.0   # Max separation-vector step, as a multiple of sv_learning_rate
+ema_alpha: 0.95                   # EMA momentum used for update scaling by gradient norm
+
+# Constants -- FIFO covariance estimation
+fifo_length: null                 # FIFO samples for covariance (null = auto: 2×D)
+source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
+max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
+
+# Debug
+debug: false                      # Store per-batch diagnostics in outputs["diagnostics"]

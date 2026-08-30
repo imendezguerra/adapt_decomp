@@ -1,0 +1,13 @@
+# Optuna search settings for scripts/run.py's run_optuna command --
+# param_space plus the rest of optimize_adapt_decomp_pooled_memory's search-strategy
+# arguments (reusable across datasets/runs). best_result_path/compute_roa/roa_kwargs
+# are run-specific instead, so they live as run_optuna's own inputs, not here.
+
+param_space:
+  wh_learning_rate: ["log_float", 1.0e-4, 5.0e-2]
+  sv_learning_rate: ["log_float", 1.0e-4, 1.0e-1]
+
+objective: "sv_loss"   # "sv_loss" | "wh_loss" | "total_loss" | "roa"
+n_trials: 20
+n_jobs: 2
+random_seed: 1909
