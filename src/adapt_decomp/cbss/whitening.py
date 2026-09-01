@@ -1,10 +1,4 @@
-"""Whitening functions for EMG data.
-
-Called only from cbss/core.py at calibration time -- online adaptation
-(adaptation.py/data_structures.py) never calls this function again,
-it only consumes the fitted whitening matrix stored on CBSSResult/
-Decomposition.
-"""
+"""Whitening functions for EMG data."""
 
 from typing import Literal, Tuple
 import torch

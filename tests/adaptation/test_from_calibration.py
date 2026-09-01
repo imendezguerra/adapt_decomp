@@ -56,10 +56,8 @@ def test_missing_adapt_config_is_seeded_entirely_from_cbss_config():
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         adapter = AdaptDecomp.from_calibration(
-            emg=np.random.randn(300, 2).astype(np.float32),
             calibration=calibration,
             cbss_config=cbss_config,
-            preprocess=False,
         )
 
     assert not any("adapt_config disagreed" in str(w.message) for w in caught)
@@ -78,11 +76,9 @@ def test_disagreeing_adapt_config_is_overwritten_and_warns():
 
     with pytest.warns(UserWarning, match="spike_det_exp"):
         adapter = AdaptDecomp.from_calibration(
-            emg=np.random.randn(300, 2).astype(np.float32),
             calibration=calibration,
             cbss_config=cbss_config,
             adapt_config=adapt_config,
-            preprocess=False,
         )
 
     assert adapter.config.spike_det_exp == 1.5   # cbss_config won
@@ -164,7 +160,6 @@ def test_cbss_config_calibration_ext_fact_mismatch_raises():
 
     with pytest.raises(ValueError, match="ext_fact"):
         AdaptDecomp.from_calibration(
-            emg=np.random.randn(300, 2).astype(np.float32),
             calibration=calibration,
             cbss_config=cbss_config,
         )

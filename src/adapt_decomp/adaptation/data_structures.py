@@ -154,6 +154,36 @@ class Data(Dataset):
         self.emg_ext = _extend_data(emg, ext_fact, ext_mode=ext_mode)
 
 
+class RawData(Dataset):
+    """Dataset wrapper for raw, unpreprocessed EMG.
+
+    Used for the streaming mode (data_preprocessed=False): process_batch
+    filters/selects/centres/extends each batch itself, so this class does
+    none of that -- it only serves raw rows. Kept separate from Data
+    rather than added as a mode flag on it, since none of Data's
+    preprocessing/extension methods apply here.
+    """
+
+    def __init__(self, emg: torch.Tensor, config: Optional[AdaptConfig] = None) -> None:
+        """Wrap raw EMG for batch serving.
+
+        Args:
+            emg (torch.Tensor): Raw EMG data with shape (samples, channels).
+            config (Optional[AdaptConfig], optional): Online adaptation
+                configuration. Defaults to None, which builds AdaptConfig().
+        """
+        if config is None:
+            config = AdaptConfig()
+        self.emg = emg.to(device=config.device, dtype=torch.float32)
+        self.labels = torch.arange(emg.shape[0]).to(device=config.device)
+
+    def __len__(self) -> int:
+        return self.emg.shape[0]
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        return self.emg[idx, :], self.labels[idx]
+
+
 class Decomposition:
     """Precalibrated decomposition model with adaptive online state."""
 

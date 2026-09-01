@@ -1,5 +1,6 @@
 """Tests for adaptation/data_structures.py: Decomposition's calibration-time
-state, Data's channel selection, and AdaptationResult's save/load contract.
+state, Data's channel selection, RawData's minimal batch-serving contract,
+and AdaptationResult's save/load contract.
 """
 
 import numpy as np
@@ -8,7 +9,7 @@ import pytest
 from torch.testing import assert_close
 
 from adapt_decomp.adaptation.config import AdaptConfig
-from adapt_decomp.adaptation.data_structures import Data
+from adapt_decomp.adaptation.data_structures import Data, RawData
 from adapt_decomp.preprocessing import extend_data
 
 
@@ -162,12 +163,13 @@ def test_decomposition_uses_configured_ext_mode(make_decomposition):
 
 def test_data_ch_mask_drop_shrinks_emg_ext_width():
     """ch_mask set (drop mode): Data.emg_ext's channel width reflects the
-    surviving (good) channels only, not the raw channel count."""
+    surviving (good) channels only, not the raw channel count. preprocess=True,
+    since channel selection only runs alongside filtering (see Data.__init__)."""
     ext_fact, raw_chs = 2, 4
     emg = torch.randn(100, raw_chs)
     ch_mask = np.array([True, False, True, True])   # 3 good channels
     config = AdaptConfig(ext_fact=ext_fact, ch_mask=ch_mask)
-    data = Data(emg, preprocess=False, config=config)
+    data = Data(emg, preprocess=True, config=config)
     assert data.emg_ext.shape[1] == 3 * ext_fact
 
 
@@ -183,21 +185,49 @@ def test_data_ch_mask_none_keeps_raw_width():
 
 def test_data_replace_bad_channels_without_ch_map_raises():
     """replace_bad_channels=True with ch_map unset must raise ValueError --
-    interpolation is impossible without the electrode grid."""
+    interpolation is impossible without the electrode grid. preprocess=True,
+    since channel selection only runs alongside filtering (see Data.__init__)."""
     emg = torch.randn(50, 3)
     config = AdaptConfig(ext_fact=2, replace_bad_channels=True, ch_map=None)
     with pytest.raises(ValueError, match="ch_map"):
-        Data(emg, preprocess=False, config=config)
+        Data(emg, preprocess=True, config=config)
 
 
 def test_data_ch_mask_length_mismatch_raises():
     """ch_mask whose length disagrees with the raw emg's channel count must
-    raise ValueError, not silently misalign or crash deep in extend_data."""
+    raise ValueError, not silently misalign or crash deep in extend_data.
+    preprocess=True, since channel selection only runs alongside filtering
+    (see Data.__init__)."""
     emg = torch.randn(50, 4)
     ch_mask = np.array([True, False, True])   # length 3, emg has 4 channels
     config = AdaptConfig(ext_fact=2, ch_mask=ch_mask)
     with pytest.raises(ValueError, match="ch_mask"):
-        Data(emg, preprocess=False, config=config)
+        Data(emg, preprocess=True, config=config)
+
+
+# ---------------------------------------------------------------------------
+# RawData: minimal Dataset contract for the streaming mode
+# ---------------------------------------------------------------------------
+
+def test_raw_data_length_matches_emg_rows():
+    emg = torch.randn(37, 4)
+    raw = RawData(emg, AdaptConfig(device="cpu"))
+    assert len(raw) == 37
+
+
+def test_raw_data_getitem_returns_raw_row_and_label():
+    emg = torch.randn(10, 3)
+    raw = RawData(emg, AdaptConfig(device="cpu"))
+    row, label = raw[4]
+    assert_close(row, emg[4, :].float())
+    assert label.item() == 4
+
+
+def test_raw_data_dtype_and_device():
+    emg = torch.randn(5, 2, dtype=torch.float64)
+    raw = RawData(emg, AdaptConfig(device="cpu"))
+    assert raw.emg.dtype == torch.float32
+    assert raw.emg.device.type == "cpu"
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,4 @@
-"""Shared, domain-agnostic helpers with no natural home in one subpackage:
-data loaders (loaders.py), comparison plots (plots.py), and small
-dataclass/YAML helpers (utils.py) shared by CBSSConfig
-(cbss/config.py) and AdaptConfig (adaptation/config.py).
-"""
+"""Shared, domain-agnostic helpers."""
 
 from adapt_decomp.utils.utils import dtype_from_string, to_yaml_safe, validate_literals
 from adapt_decomp.utils.loaders import (

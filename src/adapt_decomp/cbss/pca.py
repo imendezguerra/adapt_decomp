@@ -1,10 +1,4 @@
-"""PCA dimensionality reduction for extended EMG data.
-
-Called only from cbss/core.py at calibration time -- online adaptation
-(adaptation.py/data_structures.py) never calls this function again,
-it only consumes the fitted pca_components/pca_mean outputs stored on
-CBSSResult and threaded through Decomposition._apply_pca.
-"""
+"""PCA dimensionality reduction for extended EMG data."""
 
 import torch
 from sklearn.decomposition import PCA

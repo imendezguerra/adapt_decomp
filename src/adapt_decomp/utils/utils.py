@@ -1,14 +1,4 @@
-"""Small, domain-agnostic helpers with no natural home in one subpackage.
-
-Unlike the old flat adapt_decomp/utils.py (retired during the cbss/adaptation
-split: it held numpy motor-unit-metric duplicates that had drifted from the
-canonical torch versions in spikes/), this module holds only generic,
-non-EMG-specific logic -- dataclass validation and YAML-serialisation coercion
-shared by CBSSConfig (cbss/config.py) and AdaptConfig
-(adaptation/config.py). Keep it that way: anything EMG/motor-unit-specific
-belongs in spikes/, preprocessing/, cbss/, or adaptation/, never
-here.
-"""
+"""Small, domain-agnostic helpers."""
 
 import dataclasses
 from pathlib import Path

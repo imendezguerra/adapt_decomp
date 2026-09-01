@@ -282,10 +282,9 @@ def _run_one_dataset(
     trial_config = _build_trial_config(run_config, overrides)
 
     adapter = AdaptDecomp.from_calibration(
-        emg, calibration=calibration, cbss_config=cbss_config,
-        adapt_config=trial_config, preprocess=preprocess,
+        calibration=calibration, cbss_config=cbss_config, adapt_config=trial_config,
     )
-    outputs = adapter.process_data()
+    outputs = adapter.process_data(emg, preprocess=preprocess)
 
     losses = _base_losses(outputs)
     diverged = losses["total_loss"] >= 1e10

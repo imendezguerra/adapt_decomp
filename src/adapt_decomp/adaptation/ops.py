@@ -1,26 +1,4 @@
-"""Pure tensor utility functions for online adaptive EMG decomposition.
-
-All functions operate without autograd. Heavy functions are wrapped in
-@torch.no_grad() to prevent accidental graph construction in the online path.
-
-log_cosh/contrast_fn (used by update_sv_spike_gated below) and
-find_peaks_multisource (used by find_peaks_multisource-calling code below)
-are NOT defined here even though they're pure tensor math too: log_cosh/
-contrast_fn live in adapt_decomp.cbss.ica (their primary consumer, the
-fixed-point ICA solve) and find_peaks_multisource lives in
-adapt_decomp.spikes.detection (spike-detection code, consumed by both cbss
-and adaptation) -- both are imported below rather than duplicated, so this
-module stays adaptation-only and cbss/spikes never need to depend on it.
-
-stable_cov, conversely, moved IN from adapt_decomp.spikes.metrics: despite
-living in a "shared" module, its only real consumer was always
-adaptation/data_structures.py::Decomposition's covariance-with-shrinkage
-computations -- cbss/whitening.py::whiten computes its own covariance with a
-different (unshrunk, eigenvalue-regularised) scheme and never called it. Since
-nothing outside adaptation actually used it, it belongs with the rest of this
-module's adaptation-only tensor primitives instead of spikes/, which is
-reserved for genuinely cbss+adaptation-shared spike-detection/metrics code.
-"""
+"""Pure tensor utility functions for online adaptive EMG decomposition."""
 
 from typing import Literal, Optional, Tuple
 

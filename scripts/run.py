@@ -30,10 +30,10 @@ def _run_pooled(pool, config):
     outputs = {}
     for name, dataset in pool.items():
         adapter = AdaptDecomp.from_calibration(
-            dataset.emg, calibration=dataset.calibration, cbss_config=dataset.cbss_config,
-            adapt_config=copy.deepcopy(config), preprocess=dataset.preprocess,
+            calibration=dataset.calibration, cbss_config=dataset.cbss_config,
+            adapt_config=copy.deepcopy(config),
         )
-        outputs[name] = adapter.process_data()
+        outputs[name] = adapter.process_data(dataset.emg, preprocess=dataset.preprocess)
     return outputs
 
 

@@ -22,15 +22,6 @@ class FastICAResult:
 
 # ---------------------------------------------------------------------------
 # Contrast function -- shared math primitive.
-#
-# log_cosh/contrast_fn have no CBSS-specific meaning (pure tensor math), but
-# live here rather than in a flat top-level module because contrast_fn's only
-# real consumer is _fast_fixed_point_ica below. adaptation.ops.update_sv_spike_gated
-# and adaptation.data_structures.Decomposition.init_sv_update compute the same
-# logcosh contrast online and import log_cosh from here directly -- this is the
-# one deliberate exception to "adaptation never imports cbss", accepted because
-# the math is identical in both places and duplicating it would drift the two
-# implementations apart (see CBSS_derivation.md Sec. 5).
 # ---------------------------------------------------------------------------
 
 def log_cosh(x: torch.Tensor) -> torch.Tensor:

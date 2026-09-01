@@ -171,7 +171,6 @@ def test_multibatch_stability_and_rare_safety_clip():
     emg_online = torch.randn(600, raw_chs)
 
     adapter = AdaptDecomp(
-        emg=emg_online,
         whitening=wh,
         sep_vectors=sv,
         base_centr=base_centroids,
@@ -179,10 +178,9 @@ def test_multibatch_stability_and_rare_safety_clip():
         emg_calib=emg_calib,
         ipts_calib=ipts_calib,
         spikes_calib=spikes_calib,
-        preprocess=False,
         adapt_config=cfg,
     )
-    outputs = adapter.run()
+    outputs = adapter.process_data(emg_online, preprocess=False)
 
     assert torch.isfinite(adapter.decomp.whitening).all()
     assert torch.isfinite(adapter.decomp.sep_vectors).all()
@@ -299,7 +297,7 @@ def test_reconcile_with_calib_config_agreeing_fields_stay_silent():
 
 
 # ---------------------------------------------------------------------------
-# Construction: two-step (init_data) vs one-shot (deprecated), process_data(emg=...)
+# Construction: process_data(emg, ...) is the only place emg ever enters
 # ---------------------------------------------------------------------------
 
 def _make_construction_kwargs():
@@ -336,71 +334,84 @@ def _make_construction_kwargs():
     return kwargs, emg_online
 
 
-def test_construct_with_emg_directly_warns_future_warning():
-    """Passing emg to __init__ directly (defer_preprocessing not set) must
-    raise FutureWarning and still build a fully-initialised instance."""
+def test_init_without_emg_does_not_warn():
+    """Normal construction (no emg) must not warn -- it's the recommended
+    pattern, not the deprecated v1-compatible one."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        adapter = AdaptDecomp(**kwargs)
+    assert not any(issubclass(w.category, FutureWarning) for w in caught)
+    assert adapter._emg_raw is None
+
+
+def test_init_with_emg_warns_future_warning_and_stores_it():
+    """Passing emg to __init__ (the deprecated v1-compatible pattern) must
+    warn FutureWarning and store it on self._emg_raw, without building
+    self.data (process_data()/init_data() are never called here -- only
+    .run() consumes it)."""
     from adapt_decomp.adaptation import AdaptDecomp
 
     kwargs, emg_online = _make_construction_kwargs()
     with pytest.warns(FutureWarning, match="deprecated"):
-        adapter = AdaptDecomp(emg=emg_online, preprocess=False, **kwargs)
-    assert adapter.data_preprocessed is True
-    assert adapter.data.emg_ext.shape[0] == emg_online.shape[0]
+        adapter = AdaptDecomp(emg=emg_online, **kwargs)
+    assert_close(adapter._emg_raw, emg_online)
+    assert not hasattr(adapter, "data")
 
 
-def test_construct_with_emg_and_defer_preprocessing_does_not_warn():
-    """defer_preprocessing=True is a new capability, not a deprecated one --
-    passing emg alongside it must not warn."""
+def test_run_without_emg_raises_clear_error():
+    """.run() on an instance built without emg must raise a clear
+    ValueError, not AttributeError."""
     from adapt_decomp.adaptation import AdaptDecomp
 
-    kwargs, emg_online = _make_construction_kwargs()
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        adapter = AdaptDecomp(emg=emg_online, defer_preprocessing=True, **kwargs)
-    assert not any(issubclass(w.category, FutureWarning) for w in caught)
-    assert adapter.data_preprocessed is False
-    assert_close(adapter._raw_emg, emg_online.float())
-
-
-def test_two_step_construction_matches_one_shot():
-    """AdaptDecomp() + .init_data(emg) must produce identical output to the
-    deprecated one-shot AdaptDecomp(emg=emg, ...) form, for the same inputs."""
-    from adapt_decomp.adaptation import AdaptDecomp
-
-    kwargs, emg_online = _make_construction_kwargs()
-
-    torch.manual_seed(0)
-    with pytest.warns(FutureWarning):
-        one_shot = AdaptDecomp(emg=emg_online, preprocess=False, **kwargs)
-    out_one_shot = one_shot.process_data()
-
-    torch.manual_seed(0)
-    two_step = AdaptDecomp(**kwargs)
-    two_step.init_data(emg_online, preprocess=False)
-    out_two_step = two_step.process_data()
-
-    assert_close(out_one_shot.spikes, out_two_step.spikes)
-    assert_close(out_one_shot.ipts, out_two_step.ipts)
-
-
-def test_run_is_deprecated_alias_for_process_data():
-    """.run() must warn FutureWarning and return the same result as
-    .process_data() would, for the same instance."""
-    from adapt_decomp.adaptation import AdaptDecomp
-
-    kwargs, emg_online = _make_construction_kwargs()
+    kwargs, _ = _make_construction_kwargs()
     adapter = AdaptDecomp(**kwargs)
-    adapter.init_data(emg_online, preprocess=False)
-
-    with pytest.warns(FutureWarning, match="process_data"):
-        outputs = adapter.run()
-
-    assert outputs.spikes.shape[0] == emg_online.shape[0]
+    with pytest.raises(ValueError, match="emg"):
+        adapter.run()
 
 
-def test_process_data_emg_convenience_matches_separate_init_data_call():
-    """process_data(emg, preprocess=...) must be equivalent to calling
-    .init_data(emg, preprocess) then .process_data() with no arguments."""
+def test_run_warns_and_matches_process_data_offline():
+    """.run() must warn FutureWarning and return the same result as calling
+    process_data(emg, processing_mode="offline") directly, using the emg
+    passed to __init__."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    # fs=200 needs valid filter bounds since .run() always preprocesses
+    # (no way to pass preprocess=False through .run()).
+    kwargs["adapt_config"].highcut = 80.0
+    kwargs["adapt_config"].powerline = False
+
+    torch.manual_seed(3)
+    via_run = AdaptDecomp(emg=emg_online, **kwargs)
+    with pytest.warns(FutureWarning, match="deprecated"):
+        out_run = via_run.run()
+
+    torch.manual_seed(3)
+    via_process_data = AdaptDecomp(**kwargs)
+    out_direct = via_process_data.process_data(emg_online, processing_mode="offline")
+
+    assert_close(out_run.spikes, out_direct.spikes)
+    assert_close(out_run.ipts, out_direct.ipts)
+
+
+def test_process_data_requires_emg():
+    """process_data() with no emg must raise TypeError, not run over stale
+    or absent state."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    adapter = AdaptDecomp(**kwargs)
+    with pytest.raises(TypeError):
+        adapter.process_data()
+
+
+def test_process_data_matches_separate_init_data_call():
+    """process_data(emg, preprocess=...) must produce the same output as
+    calling .init_data(emg, preprocess) and .process_data(emg, preprocess)
+    separately, for the same inputs."""
     from adapt_decomp.adaptation import AdaptDecomp
 
     kwargs, emg_online = _make_construction_kwargs()
@@ -412,29 +423,62 @@ def test_process_data_emg_convenience_matches_separate_init_data_call():
     torch.manual_seed(1)
     adapter_b = AdaptDecomp(**kwargs)
     adapter_b.init_data(emg_online, preprocess=False)
-    out_b = adapter_b.process_data()
+    out_b = adapter_b.process_data(emg_online, preprocess=False)
 
     assert_close(out_a.spikes, out_b.spikes)
     assert_close(out_a.ipts, out_b.ipts)
 
 
-def test_process_data_no_args_after_from_calibration_style_init_data_unaffected():
-    """process_data() with no arguments (every current first-party call
-    site's usage) must run directly over whatever init_data() already
-    prepared, without needing emg passed again."""
+def test_process_data_offline_mode_builds_data_online_mode_builds_raw_data():
+    """process_data(emg, processing_mode=...) must dispatch to Data
+    (processing_mode="offline", the default) or RawData ("online"), and set
+    data_preprocessed to match."""
     from adapt_decomp.adaptation import AdaptDecomp
+    from adapt_decomp.adaptation.data_structures import Data, RawData
 
     kwargs, emg_online = _make_construction_kwargs()
+    # fs=200 needs valid filter bounds for the online branch below, which
+    # always filters (no preprocess=False escape hatch); see
+    # test_process_data_streaming_end_to_end_matches_eager_shape's own note.
+    kwargs["adapt_config"].highcut = 80.0
+    kwargs["adapt_config"].powerline = False
+
+    offline = AdaptDecomp(**kwargs)
+    offline.process_data(emg_online, preprocess=False)
+    assert isinstance(offline.data, Data)
+    assert offline.data_preprocessed is True
+    assert offline.processing_mode == "offline"
+
+    online = AdaptDecomp(**kwargs)
+    online.process_data(emg_online, preprocess=False, processing_mode="online")
+    assert isinstance(online.data, RawData)
+    assert online.data_preprocessed is False
+    assert online.processing_mode == "online"
+
+
+def test_process_batch_callable_directly_after_plain_construction():
+    """Full online mode: process_batch() must be callable right after plain
+    construction, with no process_data()/init_data() call and no manual
+    pre-seeding of the per-batch accumulators."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    kwargs["adapt_config"].highcut = 80.0   # valid for fs=200; process_batch always filters
+    kwargs["adapt_config"].powerline = False
+    D = kwargs["adapt_config"].ext_fact * 3   # raw_chs=3 (see _make_construction_kwargs)
+
     adapter = AdaptDecomp(**kwargs)
-    adapter.init_data(emg_online, preprocess=False)
-    outputs = adapter.process_data()
-    assert outputs.spikes.shape[0] == emg_online.shape[0]
+    adapter.data_preprocessed = False   # full online mode
+
+    spikes, ipts = adapter.process_batch(torch.randn(20, 3))
+    assert spikes.shape == (20, kwargs["sep_vectors"].shape[0])
+    assert ipts.shape == (20, kwargs["sep_vectors"].shape[0])
 
 
 # ---------------------------------------------------------------------------
 # Streaming mode (data_preprocessed=False): _center_and_extend_batch,
-# _preprocess_batch_raw, process_batch's uniform output, the B7 guard, and
-# end-to-end parity with the eager path.
+# _preprocess_batch_raw, process_batch's uniform output, and end-to-end
+# parity with the offline path.
 # ---------------------------------------------------------------------------
 
 def test_center_and_extend_batch_matches_extend_data_reference(make_decomposition, make_adapter):
@@ -544,23 +588,12 @@ def test_process_batch_uniform_output_streaming_mode_first_batch_zero_padded(mak
     assert adapter.time_preprocess_ms[1] >= 0.0
 
 
-def test_process_data_streaming_mode_without_raw_emg_raises(make_decomposition, make_adapter):
-    """process_data() with data_preprocessed=False and no raw emg ever given
-    must raise ValueError (the B7 guard), not AttributeError."""
-    decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3, n_cal=200, spike_stride=20)
-    adapter = make_adapter(decomp, cfg)
-    adapter.data_preprocessed = False
-    adapter._raw_emg = None
-
-    with pytest.raises(ValueError, match="process_data"):
-        adapter.process_data()
-
-
 def test_process_data_streaming_end_to_end_matches_eager_shape():
-    """A defer_preprocessing=True run driven via process_data() must complete
-    without error, match an equivalent eager-mode run's output shapes, keep
-    preprocess_time_ms at zero throughout the eager run, and seed the
-    streaming path's per-batch state (filter zi, EMA mean, extension FIFO)."""
+    """A processing_mode="online" run driven via process_data() must
+    complete without error, match an equivalent offline-mode run's output
+    shapes, keep preprocess_time_ms at zero throughout the offline run, and
+    seed the streaming path's per-batch state (filter zi, EMA mean,
+    extension FIFO)."""
     from adapt_decomp.adaptation import AdaptDecomp
 
     kwargs, emg_online = _make_construction_kwargs()
@@ -573,12 +606,11 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
 
     torch.manual_seed(2)
     eager = AdaptDecomp(**kwargs)
-    eager.init_data(emg_online, preprocess=False)
-    out_eager = eager.process_data()
+    out_eager = eager.process_data(emg_online, preprocess=False)
 
     torch.manual_seed(2)
-    streaming = AdaptDecomp(emg=emg_online, defer_preprocessing=True, **kwargs)
-    out_streaming = streaming.process_data()
+    streaming = AdaptDecomp(**kwargs)
+    out_streaming = streaming.process_data(emg_online, preprocess=False, processing_mode="online")
 
     assert out_streaming.spikes.shape == out_eager.spikes.shape
     assert out_streaming.ipts.shape == out_eager.ipts.shape
