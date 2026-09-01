@@ -285,7 +285,7 @@ def _run_one_dataset(
         emg, calibration=calibration, cbss_config=cbss_config,
         adapt_config=trial_config, preprocess=preprocess,
     )
-    outputs = adapter.run()
+    outputs = adapter.process_data()
 
     losses = _base_losses(outputs)
     diverged = losses["total_loss"] >= 1e10

@@ -17,6 +17,8 @@ from adapt_decomp.adaptation.ops import stable_cov
 from adapt_decomp.preprocessing import extend_data as _extend_data
 from adapt_decomp.preprocessing import filter_kwargs
 from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
+from adapt_decomp.preprocessing import select_channels as select_channels_fn
+from adapt_decomp.preprocessing import validate_channel_selection
 
 
 class Data(Dataset):
@@ -32,24 +34,28 @@ class Data(Dataset):
 
         Args:
             emg (torch.Tensor): Raw EMG data with shape (samples, channels).
-            preprocess (Optional[bool], optional): Whether to filter emg via
-                preprocess_emg (shared with CBSS calibration) before
-                centering. When False, emg is only mean-centered instead.
-                Defaults to True.
+            preprocess (Optional[bool], optional): Whether to filter emg and 
+                apply channel selection beforev entering. When False, emg is
+                only mean-centered instead. Defaults to True.
             config (Optional[AdaptConfig], optional): Online adaptation
                 configuration. Defaults to None, which builds AdaptConfig().
 
         Raises:
-            ValueError: If config.ext_mode is not "block" or "toeplitz".
+            ValueError: If config.ext_mode is not "block" or "toeplitz",
+                config.replace_bad_channels is True with config.ch_map
+                unset, or config.ch_mask's length disagrees with emg's raw
+                channel count -- see _select_channels.
         """
         if config is None:
             config = AdaptConfig()
 
         if preprocess:
             emg, offset = self.preprocess_emg(emg, config)
+            emg, offset = self._select_channels(emg, offset, config)
         else:
             offset = emg.mean(axis=0)
             emg = emg - offset
+
         self.extend_data(emg, config.ext_fact, config.ext_mode)
 
         self.emg_ext = self.emg_ext.to(device=config.device, dtype=torch.float32)
@@ -76,10 +82,6 @@ class Data(Dataset):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Filter and mean-centre emg via the shared preprocessing.preprocess_emg.
 
-        Shares preprocess_emg() with CBSS._preprocess_emg (calibration) so online
-        adaptation sees EMG at the same scale/spectral content the whitening
-        reference (Rz_cal) was computed from.
-
         Args:
             emg (torch.Tensor): Raw EMG data with shape (samples, channels).
             config (AdaptConfig): Online adaptation configuration; only the
@@ -95,6 +97,41 @@ class Data(Dataset):
         offset = np.mean(emg, axis=0)
         emg -= offset
         return torch.from_numpy(emg), torch.from_numpy(offset)
+
+    def _select_channels(
+        self, emg: torch.Tensor, offset: torch.Tensor, config: AdaptConfig
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply bad-channel handling (drop or interpolate) via the shared helper.
+
+        Args:
+            emg (torch.Tensor): Filtered, mean-centred EMG with shape
+                (samples, raw_channels).
+            offset (torch.Tensor): Per-channel mean subtracted from emg,
+                with shape (raw_channels,).
+            config (AdaptConfig): Only config.ch_mask/.ch_map/
+                .replace_bad_channels are used.
+
+        Raises:
+            ValueError: If config.replace_bad_channels is True with
+                config.ch_map unset, or if config.ch_mask's length
+                disagrees with emg's raw channel count.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: emg, unchanged (no-op or
+            interpolated) with shape (samples, raw_channels), or dropped to
+            (samples, good_channels); and offset, sliced to match emg's
+            channel count if channels were dropped, else unchanged.
+        """
+        validate_channel_selection(
+            config.ch_mask, config.ch_map, config.replace_bad_channels, emg.shape[1]
+        )
+        emg_np = select_channels_fn(
+            emg.cpu().numpy(), config.ch_mask, config.ch_map, config.replace_bad_channels
+        )
+        emg = torch.from_numpy(emg_np)
+        if emg.shape[1] != offset.shape[0]:
+            offset = offset[torch.as_tensor(config.ch_mask)]
+        return emg, offset
 
     def extend_data(
         self,
@@ -118,14 +155,7 @@ class Data(Dataset):
 
 
 class Decomposition:
-    """Precalibrated decomposition model with adaptive online state.
-
-    Immutable calibration references (kl_div_calib_mean, contrast_calib_mean,
-    spikes_centr_cal, base_centr_cal) are set once during init and never modified.
-
-    Adaptive state (whitening, sep_vectors, spikes_centr, base_centr, fifo_cov,
-    source_fifo) is updated per batch during online adaptation.
-    """
+    """Precalibrated decomposition model with adaptive online state."""
 
     def __init__(
         self,
@@ -141,12 +171,6 @@ class Decomposition:
         pca_mean: Optional[torch.Tensor] = None,         
     ) -> None:
         """Initialise the decomposition model from precalibrated matrices.
-
-        Stores immutable calibration references (whitening, sep_vectors, centroids,
-        emg_calib, ipts_calib, spikes_calib) and calls init_wh_update, init_sv_update,
-        and init_sd_update to compute the calibration statistics needed for online
-        adaptation. After construction, adaptive state (whitening, sep_vectors,
-        spikes_centr, base_centr, fifo_cov, source_fifo) is ready for per-batch updates.
 
         Args:
             whitening (torch.Tensor): Initial whitening matrix with shape
@@ -261,6 +285,12 @@ class Decomposition:
         self.init_wh_update()
         self.init_sv_update()
         self.init_sd_update()
+
+        # Streaming (data_preprocessed=False) state, seeded lazily by
+        # AdaptDecomp._preprocess_batch_raw on its first call.
+        self.zi: Optional[list] = None
+        self.ema_mean_online: Optional[torch.Tensor] = None
+        self.ext_fifo: Optional[torch.Tensor] = None
 
     def _apply_pca(self, X_ext: torch.Tensor) -> torch.Tensor:
         """Apply PCA transform to data.
@@ -589,7 +619,7 @@ class Decomposition:
 
 @dataclass
 class AdaptationResult:
-    """Per-batch outputs of a full AdaptDecomp.run() over an online recording.
+    """Per-batch outputs of a full AdaptDecomp.process_data() over an online recording.
 
     Structural sibling of adapt_decomp.cbss.data_structure.CBSSResult (same
     to_dict()-for-IO convention), but not the same class -- adaptation results
@@ -607,6 +637,9 @@ class AdaptationResult:
             ms, with shape (batches,).
         sd_time_ms (torch.Tensor): Per-batch spike-detection step time in ms,
             with shape (batches,).
+        preprocess_time_ms (torch.Tensor): Per-batch preprocessing step time
+            in ms, with shape (batches,). Zero when data_preprocessed is
+            True.
         total_time_ms (torch.Tensor): Per-batch total step time in ms, with
             shape (batches,).
         wh_loss (Optional[torch.Tensor]): Whitening loss with shape
@@ -644,6 +677,7 @@ class AdaptationResult:
 
     spikes: torch.Tensor
     ipts: torch.Tensor
+    preprocess_time_ms: torch.Tensor
     wh_time_ms: torch.Tensor
     sv_time_ms: torch.Tensor
     sd_time_ms: torch.Tensor
@@ -673,6 +707,7 @@ class AdaptationResult:
         out: Dict[str, Any] = {
             "spikes": self.spikes,
             "ipts": self.ipts,
+            "preprocess_time_ms": self.preprocess_time_ms,
             "wh_time_ms": self.wh_time_ms,
             "sv_time_ms": self.sv_time_ms,
             "sd_time_ms": self.sd_time_ms,

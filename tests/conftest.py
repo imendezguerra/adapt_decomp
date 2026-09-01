@@ -101,9 +101,10 @@ def make_adapter():
         Callable[[Decomposition, AdaptConfig], "AdaptDecomp"]: Call with the
         decomposition and the AdaptConfig it was built with (matching config
         matters -- several of decomp's derived fields depend on it). The
-        returned adapter's wh_loss/sv_loss/wh_trace are single-batch stubs
-        (shape (1,)/(1, M)/(1,)) -- for tests exercising _compute_losses()
-        directly, overwrite them first.
+        returned adapter's wh_loss/sv_loss/wh_trace start as empty lists,
+        ready for _whiten()/_update_sep_vectors() to append to (see
+        core.py's growable-accumulator convention); for tests exercising
+        _compute_losses() directly, overwrite them with tensors first.
     """
     def _make(decomp: Decomposition, config: AdaptConfig):
         from adapt_decomp.adaptation import AdaptDecomp
@@ -113,9 +114,9 @@ def make_adapter():
         adapter.decomp = decomp
         adapter.units = decomp.sep_vectors.shape[0]
         adapter.diagnostics = {}
-        adapter.wh_loss = torch.zeros(1)
-        adapter.sv_loss = torch.zeros(1, adapter.units)
-        adapter.wh_trace = torch.zeros(1)
+        adapter.wh_loss = []
+        adapter.sv_loss = []
+        adapter.wh_trace = []
         return adapter
     return _make
 

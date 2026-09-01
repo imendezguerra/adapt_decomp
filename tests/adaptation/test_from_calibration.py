@@ -2,11 +2,13 @@
 reconciliation it performs against adapt_config.
 
 cbss_config is treated as ground truth for every field in
-core._SHARED_CBSS_ADAPT_FIELDS (ext_fact, ext_mode, spike_det_exp, and the
-preprocessing/filter fields): a disagreeing adapt_config is silently
-corrected, with one UserWarning naming what changed; a disagreeing
-(cbss_config, calibration) pairing (ext_fact) is a caller bug and raises
-immediately instead.
+core._SHARED_CBSS_ADAPT_FIELDS (ext_fact, ext_mode, spike_det_exp, the
+preprocessing/filter fields, and ch_mask/ch_map/replace_bad_channels): a
+disagreeing adapt_config is silently corrected, with one UserWarning naming
+what changed -- see reconcile_with_calib_config()'s own array-safe
+comparison tests below for the ch_mask/ch_map-specific cases (plain !=
+raises on ndarrays); a disagreeing (cbss_config, calibration) pairing
+(ext_fact) is a caller bug and raises immediately instead.
 """
 
 import warnings
@@ -15,6 +17,7 @@ import numpy as np
 import pytest
 
 from adapt_decomp.adaptation import AdaptConfig, AdaptDecomp
+from adapt_decomp.adaptation.core import SharedCalibFields, reconcile_with_calib_config
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
 
@@ -84,6 +87,72 @@ def test_disagreeing_adapt_config_is_overwritten_and_warns():
 
     assert adapter.config.spike_det_exp == 1.5   # cbss_config won
     assert adapt_config.spike_det_exp == 9.0      # caller's instance untouched
+
+
+def _shared(**overrides) -> SharedCalibFields:
+    """SharedCalibFields with sane defaults for the 12 pre-existing fields,
+    plus overridable ch_mask/ch_map/replace_bad_channels."""
+    base = dict(
+        ext_fact=2, ext_mode="block", spike_det_exp=2.0, fs=2048,
+        lowcut=20.0, highcut=500.0, filter_order=4, powerline=True,
+        powerline_freq=50.0, notch_width_hz=1.0, notch_n_harmonics=3,
+        notch_order=2, ch_mask=None, ch_map=None, replace_bad_channels=False,
+    )
+    base.update(overrides)
+    return SharedCalibFields(**base)
+
+
+def test_reconcile_ch_mask_array_disagreement_warns_and_overwrites():
+    """A ch_mask disagreement (both non-None, different content) must be
+    detected via np.array_equal (not bare !=, which raises on ndarrays) and
+    overwritten from shared, like any other shared field."""
+    shared = _shared(ch_mask=np.array([True, False, True]))
+    adapt_config = AdaptConfig(
+        ext_fact=2, ch_mask=np.array([True, True, True]), device="cpu",
+    )
+    with pytest.warns(UserWarning, match="ch_mask"):
+        reconciled = reconcile_with_calib_config(adapt_config, shared)
+    np.testing.assert_array_equal(reconciled.ch_mask, shared.ch_mask)
+    # Caller's own instance is untouched.
+    np.testing.assert_array_equal(adapt_config.ch_mask, np.array([True, True, True]))
+
+
+def test_reconcile_ch_mask_none_on_both_sides_does_not_warn():
+    """ch_mask=None on both sides must not raise the ndarray-truthiness
+    error, and must not spuriously warn (nothing disagreed)."""
+    shared = _shared()   # ch_mask=None, ch_map=None
+    adapt_config = AdaptConfig(ext_fact=2, device="cpu")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reconciled = reconcile_with_calib_config(adapt_config, shared)
+
+    assert not any("disagreed" in str(w.message) for w in caught)
+    assert reconciled.ch_mask is None
+    assert reconciled.ch_map is None
+
+
+def test_reconcile_ch_mask_one_sided_none_warns():
+    """One side None, the other an array, must be detected as a disagreement
+    (not crash trying np.array_equal(None, array))."""
+    shared = _shared(ch_mask=np.array([True, False]))
+    adapt_config = AdaptConfig(ext_fact=2, ch_mask=None, device="cpu")
+    with pytest.warns(UserWarning, match="ch_mask"):
+        reconciled = reconcile_with_calib_config(adapt_config, shared)
+    np.testing.assert_array_equal(reconciled.ch_mask, shared.ch_mask)
+
+
+def test_reconcile_ch_mask_equal_arrays_do_not_warn():
+    """Equal (but distinct-object) ch_mask arrays on both sides must compare
+    equal via np.array_equal and not warn."""
+    shared = _shared(ch_mask=np.array([True, False, True]))
+    adapt_config = AdaptConfig(
+        ext_fact=2, ch_mask=np.array([True, False, True]), device="cpu",
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        reconcile_with_calib_config(adapt_config, shared)
+    assert not any("disagreed" in str(w.message) for w in caught)
 
 
 def test_cbss_config_calibration_ext_fact_mismatch_raises():

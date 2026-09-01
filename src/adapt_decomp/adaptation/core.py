@@ -1,6 +1,6 @@
 """Online adaptive EMG decomposition.
 
-AdaptDecomp's per-batch update (run_decomp) is split, per concern, into an
+AdaptDecomp's per-batch update (process_batch) is split, per concern, into an
 orchestrator method that decides whether to adapt (its own config flag) and
 logs loss/diagnostics either way, paired with a narrow method that only
 mutates state when adapting is actually on: _whiten/_update_whitening for
@@ -8,6 +8,12 @@ whitening, _update_spike_det for the spike/base centroids, and
 _update_sep_vectors (the one exception -- see its own docstring for why it
 stays a single if/else rather than an orchestrator/narrow pair) for the
 separation vectors.
+
+Construction is a two-step pipeline: build the instance (optionally without
+emg), then call init_data(emg, ...) to prepare it -- from_calibration()/
+calibrate_from_indices() do this internally. process_data() then drives the
+whole recording, batch by batch, via process_batch(); run() is a deprecated
+alias for process_data() kept for backward compatibility.
 
 AdaptDecomp has no run_optimisation()/reset-in-place path: Optuna
 hyperparameter search (adaptation/optimize.py) builds a fresh AdaptDecomp
@@ -19,7 +25,8 @@ import time
 import warnings
 from copy import copy
 from dataclasses import dataclass
-from typing import Literal, Optional, Tuple, Union
+from math import ceil
+from typing import Any, Iterator, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -40,6 +47,13 @@ from adapt_decomp.adaptation.ops import (
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.core import CBSS
 from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.preprocessing import (
+    extend_data,
+    filter_kwargs,
+    preprocess_emg_stateful,
+    select_channels,
+    validate_channel_selection,
+)
 
 
 class AdaptDecomp:
@@ -89,7 +103,7 @@ class AdaptDecomp:
                 (they must come from the same calibration run).
 
         Returns:
-            AdaptDecomp: Instance ready for run().
+            AdaptDecomp: Instance ready for process_data().
 
         Notes:
             calibration.gt_matched_indices (if present) is stored on the
@@ -139,8 +153,9 @@ class AdaptDecomp:
 
         tensors = calibration.to_adapt_tensors()
 
+        # Two-step construction internally (build, then init_data()) -- invisible to
+        # from_calibration()'s own callers, who still get a fully-initialised instance.
         instance = cls(
-            emg=emg_t,
             whitening=tensors["whitening"],
             sep_vectors=tensors["sep_vectors"],
             base_centr=tensors["base_centr"],
@@ -148,12 +163,12 @@ class AdaptDecomp:
             emg_calib=tensors["emg_calib"],
             ipts_calib=tensors["ipts_calib"],
             spikes_calib=tensors["spikes_calib"],
-            preprocess=preprocess,
             adapt_config=adapt_config,
             save_path=save_path,
             pca_components=tensors["pca_components"],
             pca_mean=tensors["pca_mean"],
         )
+        instance.init_data(emg_t, preprocess)
         instance.gt_matched_indices = calibration.gt_matched_indices  # None if unsupervised
         return instance
 
@@ -200,7 +215,7 @@ class AdaptDecomp:
                 CBSS.decompose()).
 
         Returns:
-            AdaptDecomp: Instance ready for run().
+            AdaptDecomp: Instance ready for process_data().
         """
 
         # Format data
@@ -244,7 +259,6 @@ class AdaptDecomp:
 
     def __init__(
         self,
-        emg: torch.Tensor,
         whitening: torch.Tensor,
         sep_vectors: torch.Tensor,
         base_centr: torch.Tensor,
@@ -252,12 +266,55 @@ class AdaptDecomp:
         emg_calib: torch.Tensor,
         ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
+        emg: Optional[Union[torch.Tensor, np.ndarray]] = None,
         preprocess: Optional[bool] = True,
         adapt_config: Optional[AdaptConfig] = None,
+        defer_preprocessing: bool = False,
         save_path: Optional[str] = None,
         pca_components: Optional[torch.Tensor] = None,
         pca_mean: Optional[torch.Tensor] = None,
     ) -> None:
+        """Build the decomposition model, optionally preparing emg too.
+
+        Args:
+            whitening (torch.Tensor): Initial whitening matrix.
+            sep_vectors (torch.Tensor): Initial separation vectors.
+            base_centr (torch.Tensor): Calibration baseline centroids.
+            spikes_centr (torch.Tensor): Calibration spike centroids.
+            emg_calib (torch.Tensor): Raw, unextended calibration EMG.
+            ipts_calib (torch.Tensor): Calibration source signal.
+            spikes_calib (torch.Tensor): Calibration binary spike train.
+            emg (Optional[Union[torch.Tensor, np.ndarray]], optional):
+                Online EMG to decompose, with shape (samples, channels).
+                Defaults to None -- the recommended way to construct: build
+                without emg, then call init_data(emg, ...) explicitly (the
+                two-step pattern). Passing emg here directly still works
+                (auto-calls init_data(emg, preprocess) unless
+                defer_preprocessing is True) but is deprecated -- see Notes.
+            preprocess (Optional[bool], optional): Forwarded to
+                init_data()/Data if emg is given and defer_preprocessing is
+                False. Defaults to True.
+            adapt_config (Optional[AdaptConfig], optional): Online
+                adaptation configuration. Defaults to None, which builds
+                AdaptConfig().
+            defer_preprocessing (bool, optional): If True and emg is given,
+                store it for the per-batch path instead of eagerly calling
+                init_data() -- see process_batch. Defaults to False.
+            save_path (Optional[str], optional): Path to save per-batch
+                parameters during process_data(), used when
+                adapt_config.save_params is True. Defaults to None.
+            pca_components (Optional[torch.Tensor], optional): Fitted PCA
+                components. Defaults to None (no PCA reduction).
+            pca_mean (Optional[torch.Tensor], optional): Fitted PCA mean.
+                Defaults to None.
+
+        Notes:
+            Passing emg directly (with defer_preprocessing not set) is
+            deprecated and raises FutureWarning; build without emg and call
+            init_data(emg, preprocess=...) explicitly instead. Passing emg
+            with defer_preprocessing=True is not deprecated -- it's the
+            constructor-time form of the new per-batch streaming path.
+        """
         # Get config
         if adapt_config is None:
             adapt_config = AdaptConfig()
@@ -278,32 +335,77 @@ class AdaptDecomp:
             emg_calib, ipts_calib, spikes_calib, self.config,
             pca_components=pca_components, pca_mean=pca_mean,
         )
-        # Build data object, save path, and diagnostics dict
-        self.data = Data(emg, preprocess, adapt_config)
         self.save_path = save_path
         self.diagnostics: dict = {}
+        self.data_preprocessed = False
+        self._raw_emg: Optional[torch.Tensor] = None
+
+        if emg is not None:
+            if defer_preprocessing:
+                self._raw_emg = torch.as_tensor(emg, dtype=torch.float32)
+            else:
+                warnings.warn(
+                    "Constructing AdaptDecomp with emg set directly is deprecated "
+                    "and will be removed in a future version; build without emg "
+                    "and call .init_data(emg, preprocess=...) explicitly instead.",
+                    FutureWarning, stacklevel=2,
+                )
+                self.init_data(emg, preprocess)
+
+    def init_data(self, emg: Union[torch.Tensor, np.ndarray], preprocess: bool = True) -> None:
+        """Prepare emg for offline processing.
+
+        Args:
+            emg (Union[torch.Tensor, np.ndarray]): Online EMG to decompose,
+                with shape (samples, channels).
+            preprocess (bool, optional): Whether to filter emg before
+                extension (see Data). Defaults to True.
+
+        Returns:
+            None
+        """
+        self.data = Data(emg, preprocess, self.config)
+        self.data_preprocessed = True
 
     # ------------------------------------------------------------------
     # Initialisation helpers
     # ------------------------------------------------------------------
-    def _init_exe_time(self, batches: int) -> None:
-        self.time_sv_ms = torch.zeros(batches, dtype=torch.float32)
-        self.time_wh_ms = torch.zeros(batches, dtype=torch.float32)
-        self.time_sd_ms = torch.zeros(batches, dtype=torch.float32)
+    def _init_exe_time(self) -> None:
+        """Reset per-batch timing accumulators to empty lists.
 
-    def _init_outputs(self, samples: int, units: int) -> None:
+        Returns:
+            None
+        """
+        self.time_wh_ms: list = []
+        self.time_sv_ms: list = []
+        self.time_sd_ms: list = []
+        self.time_preprocess_ms: list = []
+
+    def _init_outputs(self, units: int) -> None:
+        """Reset the per-batch spikes/sources accumulators to empty lists.
+
+        Args:
+            units (int): Number of motor units.
+
+        Returns:
+            None
+        """
         self.units = units
-        self.samples = samples
-        self.spikes = torch.zeros(samples, units, dtype=torch.int32, device=self.config.device)
-        self.ipts = torch.zeros(samples, units, dtype=torch.float32, device=self.config.device)
+        self._spikes_accum: list = []
+        self._sources_accum: list = []
 
-    def _init_losses(self, batches: int) -> None:
+    def _init_losses(self) -> None:
+        """Reset per-batch loss accumulators to empty lists, when config.compute_loss.
+
+        Returns:
+            None
+        """
         if self.config.compute_loss:
-            self.wh_loss = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
-            self.sv_loss = torch.zeros((batches, self.units), dtype=torch.float32, device=self.config.device)
-            self.wh_trace = torch.zeros(batches, dtype=torch.float32, device=self.config.device)
+            self.wh_loss: list = []
+            self.sv_loss: list = []
+            self.wh_trace: list = []
             # wh_loss_median/sv_loss_median/total_loss are set once, at the end of
-            # run(), by _compute_losses(), not accumulated per batch (see that method).
+            # process_data(), by _compute_losses(), not accumulated per batch.
 
     def _format_outputs(self) -> AdaptationResult:
         """Collect per-batch results into a typed AdaptationResult.
@@ -314,6 +416,7 @@ class AdaptDecomp:
             wh_time_ms      [batches]       float32
             sv_time_ms      [batches]       float32
             sd_time_ms      [batches]       float32
+            preprocess_time_ms [batches]    float32 — 0 when data_preprocessed=True
             total_time_ms   [batches]       float32
 
         Present when config.compute_loss=True:
@@ -339,7 +442,10 @@ class AdaptDecomp:
             wh_time_ms=self.time_wh_ms,
             sv_time_ms=self.time_sv_ms,
             sd_time_ms=self.time_sd_ms,
-            total_time_ms=self.time_wh_ms + self.time_sv_ms + self.time_sd_ms,
+            preprocess_time_ms=self.time_preprocess_ms,
+            total_time_ms=(
+                self.time_wh_ms + self.time_sv_ms + self.time_sd_ms + self.time_preprocess_ms
+            ),
         )
         if hasattr(self, "wh_loss"):
             result.wh_loss = self.wh_loss.detach().cpu().clone()
@@ -365,14 +471,45 @@ class AdaptDecomp:
     # Per-batch decomposition
     # ------------------------------------------------------------------
 
-    def run_decomp(
+    def process_batch(
         self, emg_batch: torch.Tensor, batch_idx: Optional[int] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Process one EMG batch: whiten → source estimate → detect → adapt.
+        """Process one EMG batch: preprocess → whiten → source estimate → detect → adapt.
 
-        Returns (spikes, ipts), both shape [N, M].
-        ipts is sources from before the sv update so outputs are consistent across batches.
+        Preprocessing branches on self.data_preprocessed: when True,
+        emg_batch is already extended and only the first batch's leading
+        ext_fact rows are trimmed; when False, emg_batch is raw and is
+        filtered/channel-selected/centred/extended by
+        _preprocess_batch_raw. Either way, the returned (spikes, ipts)
+        always have emg_batch.shape[0] rows (as called), zero-padded at
+        the leading rows a batch's own trim discarded.
+
+        Args:
+            emg_batch (torch.Tensor): One batch of EMG, shape (N,
+                channels) if data_preprocessed is False, else (N, D)
+                already extended.
+            batch_idx (Optional[int]): This batch's sequential index,
+                starting at 0.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: spikes and ipts, both shape
+            (N, M). ipts is sources from before the sv update so outputs
+            are consistent across batches.
         """
+        N_called = emg_batch.shape[0]
+
+        # --- Preprocessing ---
+        t0 = time.time()
+        if self.data_preprocessed:
+            pad_offset = self.config.ext_fact if batch_idx == 0 else 0
+            if pad_offset:
+                emg_batch = emg_batch[pad_offset:]
+            preprocess_ms = 0.0
+        else:
+            emg_batch, pad_offset = self._preprocess_batch_raw(emg_batch)
+            preprocess_ms = (time.time() - t0) * 1000
+        self.time_preprocess_ms.append(preprocess_ms)
+
         N = emg_batch.shape[0]
         X = emg_batch - emg_batch.mean(0, keepdim=True)
 
@@ -380,7 +517,7 @@ class AdaptDecomp:
         t0 = time.time()
         # Whitening
         Z, coupling_matrix = self._whiten(X, batch_idx)
-        self.time_wh_ms[batch_idx] = (time.time() - t0) * 1000
+        self.time_wh_ms.append((time.time() - t0) * 1000)
 
         # --- Source estimates and spike detection ---
         t0 = time.time()
@@ -409,14 +546,109 @@ class AdaptDecomp:
 
         # Update spike and base centroids
         self._update_spike_det(sources, spike_mask, peak_mask, trusted_spike_mask, batch_idx)
-        self.time_sd_ms[batch_idx] = (time.time() - t0) * 1000
+        self.time_sd_ms.append((time.time() - t0) * 1000)
 
         # --- Update separation vectors ---
         t0 = time.time()
         self._update_sep_vectors(Z, sources, trusted_spike_mask, batch_idx)
-        self.time_sv_ms[batch_idx] = (time.time() - t0) * 1000
+        self.time_sv_ms.append((time.time() - t0) * 1000)
 
-        return spike_mask.to(torch.int32), sources
+        # --- Pad back to N_called rows ---
+        spikes_out = torch.zeros(
+            N_called, self.decomp.sep_vectors.shape[0], dtype=torch.int32, device=self.config.device
+        )
+        sources_out = torch.zeros(
+            N_called, self.decomp.sep_vectors.shape[0], dtype=torch.float32, device=self.config.device
+        )
+        spikes_out[pad_offset:] = spike_mask.to(torch.int32)
+        sources_out[pad_offset:] = sources
+        return spikes_out, sources_out
+
+    # ------------------------------------------------------------------
+    # Raw-batch preprocessing (streaming mode, data_preprocessed=False):
+    # orchestrator (_preprocess_batch_raw) + narrow step (_center_and_extend_batch)
+    # ------------------------------------------------------------------
+
+    def _preprocess_batch_raw(self, emg_batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
+        """Filter, select channels, and extend one raw batch.
+
+        Args:
+            emg_batch (torch.Tensor): Raw EMG chunk with shape (N, raw_channels).
+
+        Returns:
+            Tuple[torch.Tensor, int]: Extended batch and pad_offset, see
+            _center_and_extend_batch.
+
+        Raises:
+            ValueError: If config.replace_bad_channels is True with
+                config.ch_map unset, or config.ch_mask's length disagrees
+                with emg_batch's raw channel count.
+        """
+        if self.decomp.zi is None:
+            # Only checkable once the raw channel count is known, on the
+            # first batch; later batches can't change it mid-run.
+            validate_channel_selection(
+                self.config.ch_mask, self.config.ch_map,
+                self.config.replace_bad_channels, emg_batch.shape[1],
+            )
+
+        emg_np, zi_new = preprocess_emg_stateful(
+            emg_batch.cpu().numpy(), self.config.fs, zi=self.decomp.zi, **filter_kwargs(self.config)
+        )
+        self.decomp.zi = zi_new
+
+        emg_np = select_channels(
+            emg_np, self.config.ch_mask, self.config.ch_map, self.config.replace_bad_channels
+        )
+        emg_batch = torch.from_numpy(emg_np).to(device=self.config.device, dtype=torch.float32)
+
+        return self._center_and_extend_batch(emg_batch)
+
+    def _center_and_extend_batch(self, emg_batch: torch.Tensor) -> Tuple[torch.Tensor, int]:
+        """Prepend the extension FIFO, centre, extend, and trim one batch.
+
+        Updates decomp.ema_mean_online and decomp.ext_fifo in place.
+
+        Args:
+            emg_batch (torch.Tensor): Filtered, channel-selected batch
+                with shape (N, channels).
+
+        Returns:
+            Tuple[torch.Tensor, int]: Extended batch and pad_offset, the
+            number of leading rows process_batch must zero-pad the final
+            output with.
+        """
+        ext_fact = self.config.ext_fact
+        if self.decomp.ext_fifo is not None:
+            window = torch.cat([self.decomp.ext_fifo, emg_batch], dim=0)
+        else:
+            window = emg_batch
+
+        batch_mean = emg_batch.mean(0, keepdim=True)
+        self.decomp.ema_mean_online = (
+            batch_mean.detach() if self.decomp.ema_mean_online is None
+            else (
+                self.config.ema_alpha * self.decomp.ema_mean_online
+                + (1 - self.config.ema_alpha) * batch_mean
+            ).detach()
+        )
+        window = window - self.decomp.ema_mean_online
+
+        window_ext = extend_data(window, ext_fact, ext_mode=self.config.ext_mode)
+
+        if self.decomp.ext_fifo is None:
+            # First call: no prior context, so the leading ext_fact rows
+            # genuinely lack history and must be zero-padded by the caller.
+            pad_offset = ext_fact
+        else:
+            # Later calls: the leading ext_fact rows duplicate the previous
+            # call's own already-returned tail, so they're discarded here
+            # (not zero-padded) to avoid emitting the same timestamps twice.
+            pad_offset = 0
+        window_ext = window_ext[ext_fact:]
+
+        self.decomp.ext_fifo = emg_batch[-ext_fact:]
+        return window_ext, pad_offset
 
     # ------------------------------------------------------------------
     # Whitening — orchestrator (_whiten) + narrow update (_update_whitening)
@@ -450,16 +682,15 @@ class AdaptDecomp:
 
             # Log the trace of the covariance for diagnostics and loss gating during optimisation
             if self.config.compute_loss:
-                self.wh_trace[batch_idx] = Rz.trace()
+                self.wh_trace.append(Rz.trace())
 
             # Compute KL-divergence error and direction for the configured wh_mode
             sign, logdet = torch.linalg.slogdet(Rz)
             if sign <= 0:
                 # If Rz is not positive definite, skip the whitening update and log a warning.
                 if self.config.compute_loss:
-                    if batch_idx > 0:
-                        # If possible set loss to the previous batch's loss to avoid 0 init propagation
-                        self.wh_loss[batch_idx] = self.wh_loss[batch_idx - 1]
+                    # Use the previous batch's loss or 0.0 if this is the first batch.
+                    self.wh_loss.append(self.wh_loss[-1] if self.wh_loss else 0.0)
                 if self.config.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
                     self.diagnostics.setdefault(idx, {})["wh_skip_invalid_slogdet"] = True
@@ -468,7 +699,7 @@ class AdaptDecomp:
 
             # If Rz is positive definite, log the actual error
             if self.config.compute_loss:
-                self.wh_loss[batch_idx] = e_wh.item() ** 2
+                self.wh_loss.append(e_wh.item() ** 2)
 
             # Update whitening if requested
             if self.config.adapt_wh:
@@ -751,9 +982,9 @@ class AdaptDecomp:
         is the right shape here, not an artificial orchestrator/narrow split.
 
         Mutates decomp.sep_vectors/.ema_gradnorm_sv in place; returns None.
-        Note this does NOT change the sources returned by run_decomp -- that's
+        Note this does NOT change the sources returned by process_batch -- that's
         deliberately the pre-adaptation sources computed before this call, per
-        run_decomp's own docstring ("ipts is sources from before the sv update
+        process_batch's own docstring ("ipts is sources from before the sv update
         so outputs are consistent across batches"), matching main's
         source_sep convention.
         """
@@ -810,7 +1041,7 @@ class AdaptDecomp:
         # --- Store losses ---
         if self.config.compute_loss:
             sv_err = sv_diag["contrast_error"]
-            self.sv_loss[batch_idx] = sv_err ** 2
+            self.sv_loss.append(sv_err ** 2)
 
         # --- Debug diagnostics ---
         if self.config.debug:
@@ -854,19 +1085,46 @@ class AdaptDecomp:
     # Main entry points
     # ------------------------------------------------------------------
 
-    def run(self) -> AdaptationResult:
-        """Run the full online decomposition over all batches."""
+    def process_data(
+        self,
+        emg: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        preprocess: bool = True,
+    ) -> AdaptationResult:
+        """Run the full online decomposition over all batches.
+
+        Args:
+            emg (Optional[Union[torch.Tensor, np.ndarray]], optional): If
+                given, calls init_data(emg, preprocess) first -- the same
+                as calling it separately just before process_data(), just
+                collapsed into one call for the common case. Defaults to
+                None, which runs directly over whatever is already
+                initialised (an earlier init_data() call, construction-time
+                emg, or from_calibration()/calibrate_from_indices()'s own
+                internal init_data() call) -- this is what every current
+                first-party caller uses, always after from_calibration()
+                has already returned a ready instance.
+            preprocess (bool, optional): Forwarded to init_data() when emg
+                is given; ignored otherwise. Defaults to True.
+
+        Raises:
+            ValueError: If config.save_params is True with save_path unset,
+                or data_preprocessed is False with no raw emg set (see
+                _build_batch_iter).
+
+        Returns:
+            AdaptationResult: This run's typed output.
+        """
+        if emg is not None:
+            self.init_data(emg, preprocess)
+
         if self.config.save_params and self.save_path is None:
             raise ValueError("config.save_params=True requires save_path to be set.")
-        dataset = DataLoader(
-            self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
-        )
-        self._init_outputs(
-            samples=len(self.data),
-            units=self.decomp.sep_vectors.shape[0],
-        )
-        self._init_losses(len(dataset))
-        self._init_exe_time(len(dataset))
+
+        batch_iter, n_batches = self._build_batch_iter()
+
+        self._init_outputs(units=self.decomp.sep_vectors.shape[0])
+        self._init_losses()
+        self._init_exe_time()
 
         if self.config.debug:
             self.diagnostics.clear()
@@ -877,13 +1135,12 @@ class AdaptDecomp:
                 wh_shape=self.decomp.whitening.shape,
                 sv_shape=self.decomp.sep_vectors.shape,
                 sd_shape=self.decomp.spikes_centr.shape,
-                batches=len(dataset),
+                batches=n_batches,
                 dtype="float32",
             )
 
-        for i, (emg_batch, idx_labels) in enumerate(dataset):
-            i_t = torch.tensor(i, device=self.config.device)
-            emg_batch, idx_labels = self._check_batch(emg_batch, idx_labels)
+        for batch_idx, emg_batch in enumerate(batch_iter):
+            i_t = torch.tensor(batch_idx, device=self.config.device)
 
             if self.config.save_params:
                 self.saver._append({
@@ -893,10 +1150,11 @@ class AdaptDecomp:
                     "spikes_centr": self.decomp.spikes_centr.cpu().numpy(),
                 })
 
-            spikes, ipts = self.run_decomp(emg_batch, i_t)
-            self.spikes[idx_labels, :] = spikes
-            self.ipts[idx_labels, :] = ipts
+            spikes, ipts = self.process_batch(emg_batch, i_t)
+            self._spikes_accum.append(spikes)
+            self._sources_accum.append(ipts)
 
+        self._finalize_accumulators()
         if self.config.compute_loss:
             self.wh_loss_median, self.sv_loss_median, self.total_loss = self._compute_losses()
 
@@ -904,6 +1162,106 @@ class AdaptDecomp:
         if self.config.save_params:
             self.saver._save(outputs.to_dict())
         return outputs
+
+    def _build_batch_iter(self) -> Tuple[Iterator[torch.Tensor], int]:
+        """Build this run's batch iterator and total batch count.
+
+        Returns:
+            Tuple[Iterator[torch.Tensor], int]: Batch iterator, yielding
+            emg_batch tensors in order, and the total number of batches.
+
+        Raises:
+            ValueError: If data_preprocessed is False and no raw emg was
+                ever given (constructor, process_data(emg=...), or
+                init_data()).
+        """
+        if self.data_preprocessed:
+            dataset = DataLoader(
+                self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
+            )
+            return (emg_batch for emg_batch, _ in dataset), len(dataset)
+        if self._raw_emg is None:
+            raise ValueError(
+                "process_data() needs emg when data_preprocessed is False. "
+                "Pass it to process_data(emg=...), the constructor, or call "
+                "init_data() instead."
+            )
+        n_batches = ceil(self._raw_emg.shape[0] / self.config.batch_size)
+        return self._raw_batch_iter(), n_batches
+
+    def _raw_batch_iter(self) -> Iterator[torch.Tensor]:
+        """Yield self._raw_emg in config.batch_size chunks, in order.
+
+        Returns:
+            Iterator[torch.Tensor]: Raw EMG chunks, each shape
+            (<=batch_size, channels).
+        """
+        bs = self.config.batch_size
+        for i in range(0, self._raw_emg.shape[0], bs):
+            yield self._raw_emg[i : i + bs]
+
+    def _finalize_accumulators(self) -> None:
+        """Convert this run's list accumulators into their final tensors.
+
+        Returns:
+            None
+        """
+        self.spikes = self._cat_list(self._spikes_accum, (0, self.units), dtype=torch.int32)
+        self.ipts = self._cat_list(self._sources_accum, (0, self.units), dtype=torch.float32)
+        if self.config.compute_loss:
+            self.wh_loss = torch.tensor(self.wh_loss, dtype=torch.float32, device=self.config.device)
+            self.sv_loss = self._stack_list(self.sv_loss, (0, self.units))
+            self.wh_trace = self._stack_list(self.wh_trace, (0,))
+        self.time_wh_ms = torch.tensor(self.time_wh_ms, dtype=torch.float32)
+        self.time_sv_ms = torch.tensor(self.time_sv_ms, dtype=torch.float32)
+        self.time_sd_ms = torch.tensor(self.time_sd_ms, dtype=torch.float32)
+        self.time_preprocess_ms = torch.tensor(self.time_preprocess_ms, dtype=torch.float32)
+
+    def _stack_list(self, values: list, empty_shape: Tuple[int, ...]) -> torch.Tensor:
+        """Stack a list of same-shaped tensors, or an empty tensor if the list is empty.
+
+        Args:
+            values (list): Tensors to stack.
+            empty_shape (Tuple[int, ...]): Shape to use when values is empty.
+
+        Returns:
+            torch.Tensor: torch.stack(values), or torch.zeros(empty_shape)
+            when values is empty.
+        """
+        if not values:
+            return torch.zeros(empty_shape, dtype=torch.float32, device=self.config.device)
+        return torch.stack(values)
+
+    def _cat_list(
+        self, values: list, empty_shape: Tuple[int, ...], dtype: torch.dtype = torch.float32
+    ) -> torch.Tensor:
+        """Concatenate a list of row tensors along dim 0, or an empty tensor if empty.
+
+        Args:
+            values (list): Row-shaped tensors to concatenate.
+            empty_shape (Tuple[int, ...]): Shape to use when values is empty.
+            dtype (torch.dtype): Dtype to use when values is empty.
+
+        Returns:
+            torch.Tensor: torch.cat(values, dim=0), or torch.zeros(empty_shape)
+            when values is empty.
+        """
+        if not values:
+            return torch.zeros(empty_shape, dtype=dtype, device=self.config.device)
+        return torch.cat(values, dim=0)
+
+    def run(self) -> AdaptationResult:
+        """Deprecated alias for process_data(); use process_data() instead.
+
+        Returns:
+            AdaptationResult: See process_data().
+        """
+        warnings.warn(
+            "AdaptDecomp.run() is deprecated and will be removed in a future "
+            "version; use process_data() instead.",
+            FutureWarning, stacklevel=2,
+        )
+        return self.process_data()
 
     def _compute_losses(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Aggregate wh_loss/sv_loss into guarded per-run scalars.
@@ -926,20 +1284,6 @@ class AdaptDecomp:
         sv_loss_median = self.sv_loss.nanmedian()
         return wh_loss_median, sv_loss_median, wh_loss_median + sv_loss_median
 
-    # ------------------------------------------------------------------
-    # Utility helpers
-    # ------------------------------------------------------------------
-
-    def _check_batch(
-        self, emg_batch: torch.Tensor, idx_labels: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Discard extension-factor artefact samples from the first batch."""
-        if torch.any(idx_labels < self.config.ext_fact):
-            emg_batch = emg_batch[self.config.ext_fact:]
-            idx_labels = idx_labels[self.config.ext_fact:]
-        return emg_batch, idx_labels
-
-
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
@@ -952,6 +1296,7 @@ _SHARED_CBSS_ADAPT_FIELDS = (
     "fs", "lowcut", "highcut", "filter_order",
     "powerline", "powerline_freq",
     "notch_width_hz", "notch_n_harmonics", "notch_order",
+    "ch_mask", "ch_map", "replace_bad_channels",
 )
 
 
@@ -959,7 +1304,7 @@ _SHARED_CBSS_ADAPT_FIELDS = (
 class SharedCalibFields:
     """The subset of calibration config that online adaptation must agree with.
 
-    Same 12 field names/types as AdaptConfig's own -- see
+    Same 15 field names/types as AdaptConfig's own -- see
     _SHARED_CBSS_ADAPT_FIELDS. Lets reconcile_with_calib_config() work from
     any calibration source, not just a CBSSConfig.
     """
@@ -975,6 +1320,9 @@ class SharedCalibFields:
     notch_width_hz: float
     notch_n_harmonics: int
     notch_order: int
+    ch_mask: Optional[np.ndarray]
+    ch_map: Optional[np.ndarray]
+    replace_bad_channels: bool
 
     @classmethod
     def from_cbss_config(cls, cbss_config: CBSSConfig) -> "SharedCalibFields":
@@ -987,6 +1335,27 @@ class SharedCalibFields:
             SharedCalibFields: This calibration's shared-field values.
         """
         return cls(**{field: getattr(cbss_config, field) for field in _SHARED_CBSS_ADAPT_FIELDS})
+
+
+def _fields_differ(adapt_val: Any, cbss_val: Any) -> bool:
+    """Compare one shared field's adapt_config/cbss_config values, array-safe.
+
+    Plain != raises ValueError ("truth value of an array is ambiguous") when
+    either side is an np.ndarray (ch_mask/ch_map) -- use np.array_equal for
+    those instead, falling back to != for every scalar/bool/str field.
+
+    Args:
+        adapt_val (Any): This field's value on adapt_config.
+        cbss_val (Any): This field's value on the calibration's own config.
+
+    Returns:
+        bool: True if the two values differ.
+    """
+    if isinstance(adapt_val, np.ndarray) or isinstance(cbss_val, np.ndarray):
+        if adapt_val is None or cbss_val is None:
+            return adapt_val is not cbss_val
+        return not np.array_equal(adapt_val, cbss_val)
+    return adapt_val != cbss_val
 
 
 def reconcile_with_calib_config(adapt_config: AdaptConfig, shared: SharedCalibFields) -> AdaptConfig:
@@ -1010,7 +1379,7 @@ def reconcile_with_calib_config(adapt_config: AdaptConfig, shared: SharedCalibFi
     changed = []
     for field in _SHARED_CBSS_ADAPT_FIELDS:
         cbss_val, adapt_val = getattr(shared, field), getattr(adapt_config, field)
-        if adapt_val != cbss_val:
+        if _fields_differ(adapt_val, cbss_val):
             changed.append((field, adapt_val, cbss_val))
             setattr(adapt_config, field, cbss_val)
     if changed:

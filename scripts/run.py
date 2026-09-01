@@ -33,7 +33,7 @@ def _run_pooled(pool, config):
             dataset.emg, calibration=dataset.calibration, cbss_config=dataset.cbss_config,
             adapt_config=copy.deepcopy(config), preprocess=dataset.preprocess,
         )
-        outputs[name] = adapter.run()
+        outputs[name] = adapter.process_data()
     return outputs
 
 

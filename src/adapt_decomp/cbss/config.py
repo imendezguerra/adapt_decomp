@@ -29,17 +29,11 @@ class CBSSConfig:
     notch_n_harmonics: int = 3
     notch_order: int = 2
     replace_bad_channels: bool = False
-    bad_chs: Optional[list] = None
+    ch_mask: Optional[np.ndarray] = None   # boolean, length = raw channel count; True = keep
     ch_map: Optional[np.ndarray] = None
 
     # Extension
-    # Must match the online adaptation AdaptConfig.ext_fact used downstream on this
-    # calibration's output (Decomposition.__init__ validates this at construction).
     ext_fact: int = 10
-
-    # "block" (default) — column block i holds ALL channels shifted by i samples.
-    # "toeplitz" — each channel's own ext_fact delays are grouped together, so
-    # each channel's block of columns is itself a Toeplitz matrix. 
     ext_mode: Literal["block", "toeplitz"] = "block"
 
     # PCA dimensionality reduction before whitening (None = skip PCA)
@@ -113,6 +107,8 @@ class CBSSConfig:
             self.device = str(self.device)
         if self.ch_map is not None and not isinstance(self.ch_map, np.ndarray):
             self.ch_map = np.asarray(self.ch_map)
+        if self.ch_mask is not None and not isinstance(self.ch_mask, np.ndarray):
+            self.ch_mask = np.asarray(self.ch_mask, dtype=bool)
         self.spike_min_dist = max(1, round(self.spike_min_dist_ms / 1000 * self.fs))
         validate_literals(self)
 
@@ -145,6 +141,8 @@ class CBSSConfig:
             data = yaml.safe_load(f) or {}
         if data.get("ch_map") is not None:
             data["ch_map"] = np.asarray(data["ch_map"])
+        if data.get("ch_mask") is not None:
+            data["ch_mask"] = np.asarray(data["ch_mask"], dtype=bool)
         if data.get("dtype") is not None:
             data["dtype"] = dtype_from_string(data["dtype"])
         return cls(**data)

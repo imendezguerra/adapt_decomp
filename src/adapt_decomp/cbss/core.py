@@ -22,7 +22,7 @@ from adapt_decomp.spikes.metrics import (
     get_muaps,
     get_pulse_to_noise_ratio,
 )
-from adapt_decomp.preprocessing import extend_data, filter_kwargs, preprocess_emg, replace_bad_channels
+from adapt_decomp.preprocessing import extend_data, filter_kwargs, preprocess_emg, select_channels
 
 
 class CBSS:
@@ -46,27 +46,12 @@ class CBSS:
     # ------------------------------------------------------------------
 
     def _preprocess_emg(self, emg: np.ndarray, fs: float) -> torch.Tensor:
-        """Bandpass + optional notch + zero-mean + optional bad-channel replacement.
-
-        Shares preprocess_emg() with Data.preprocess_emg (online adaptation) so the
-        whitening reference computed here at calibration and the online covariance see
-        EMG at the same scale/spectral content.
-        """
+        """Bandpass + optional notch + zero-mean + optional bad-channel handling."""
         emg_f = preprocess_emg(emg, fs, **filter_kwargs(self.config))
         emg_f = emg_f - emg_f.mean(axis=0, keepdims=True)
-        if self.config.replace_bad_channels and self.config.bad_chs is not None and self.config.ch_map is not None:
-            emg_f = replace_bad_channels(emg_f, self.config.bad_chs, self.config.ch_map, layout="samples_first")
-        elif self.config.bad_chs is not None:
-            if self.config.ch_map is not None:
-                raise ValueError(
-                    "Dropping bad channels (replace_bad_channels=False) while "
-                    "ch_map is set is not supported: ch_map's indices would no "
-                    "longer match the shrunk channel layout. Set "
-                    "replace_bad_channels=True to keep channel count/indexing intact."
-                )
-            mask = np.ones(emg_f.shape[1], dtype=bool)
-            mask[self.config.bad_chs] = False
-            emg_f = emg_f[:, mask]
+        emg_f = select_channels(
+            emg_f, self.config.ch_mask, self.config.ch_map, self.config.replace_bad_channels
+        )
         return torch.from_numpy(emg_f.astype(np.float32)).to(device=self._device, dtype=self._dtype)
 
     # ------------------------------------------------------------------
@@ -87,6 +72,40 @@ class CBSS:
         valid = idx[(idx >= 0) & (idx < n)]
         bin_src[valid, 0] = 1
         return get_coefficient_of_variation(bin_src, timestamps, None)[0].item()
+
+    def _compute_muaps(self, spike_trains: torch.Tensor, emg: torch.Tensor) -> torch.Tensor:
+        """Compute MUAPs from spike trains and EMG.
+
+        Args:
+            spike_trains (torch.Tensor): Binary spike train with shape
+                (samples, n_mu).
+            emg (torch.Tensor): Preprocessed EMG with shape (samples,
+                raw_channels) or (samples, good_channels) if channels were
+                dropped.
+
+        Returns:
+            torch.Tensor: MUAPs with shape (n_mu, rows, cols, win).
+
+        Note:
+            ch_map defaults to a line array if not provided. Bad channels are
+            replaced with zeros in the returned MUAPs.
+        """
+        ch_mask = self.config.ch_mask
+        n_raw = ch_mask.shape[0] if ch_mask is not None else emg.shape[1]
+
+        if emg.shape[1] != n_raw:
+            ch_mask_t = torch.as_tensor(ch_mask, device=emg.device)
+            emg_full = torch.zeros(emg.shape[0], n_raw, dtype=emg.dtype, device=emg.device)
+            emg_full[:, ch_mask_t] = emg
+            emg = emg_full
+
+        ch_map = self.config.ch_map
+        if ch_map is None:
+            ch_map = np.arange(n_raw).reshape(1, n_raw)
+
+        half_win = round(25 / 2 / 1000 * self.config.fs)
+        emg_ch = emg_to_ch_array(emg.cpu(), ch_map)
+        return get_muaps(spike_trains.cpu(), emg_ch, half_win)
 
     # ------------------------------------------------------------------
     # Refinement
@@ -166,12 +185,6 @@ class CBSS:
     ) -> CBSSResult:
         """Decompose HD-EMG using CBSS.
 
-        If self.config.selection is set, the result is filtered via
-        CBSSResult.select_unsupervised()/select_supervised() (using
-        self.config.selection_kwargs) before being returned -- see
-        CBSSConfig.selection. selection=None (default) returns every unit
-        CBSS found, unfiltered.
-
         Args:
             emg:        [T, C] EMG (float32 recommended).
             timestamps: Optional [T] sample times in seconds.
@@ -247,10 +260,7 @@ class CBSS:
                     spike_trains, sources_d, self.config.ext_fact, self.config.spike_min_dist
                 ).cpu()
                 dict_results["dr"] = get_discharge_rate(spike_trains, timestamps_t).cpu()
-                if self.config.ch_map is not None:
-                    half_win = round(25 / 2 / 1000 * self.config.fs)
-                    emg_ch = emg_to_ch_array(emg_t.cpu(), self.config.ch_map)
-                    dict_results["muaps"] = get_muaps(spike_trains.cpu(), emg_ch, half_win).cpu()
+                dict_results["muaps"] = self._compute_muaps(spike_trains, emg_t).cpu()
 
         dict_results["emg"] = emg_t.cpu() if self.config.save_emg else None
         dict_results["timestamps"] = timestamps_t.cpu() if self.config.save_emg else None
@@ -479,9 +489,6 @@ class CBSS:
                 spike_trains_dev, sources_d, self.config.ext_fact, self.config.spike_min_dist
             ).cpu().numpy()
             applied.dr = get_discharge_rate(spike_trains_dev, timestamps_t).cpu().numpy()
-            if self.config.ch_map is not None:
-                half_win = round(25 / 2 / 1000 * self.config.fs)
-                emg_ch = emg_to_ch_array(emg_original.cpu(), self.config.ch_map)
-                applied.muaps = get_muaps(spike_trains_dev.cpu(), emg_ch, half_win).cpu().numpy()
+            applied.muaps = self._compute_muaps(spike_trains_dev, emg_original).cpu().numpy()
 
         return applied

@@ -5,6 +5,8 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
+import numpy as np
+
 from adapt_decomp.utils import to_yaml_safe, validate_literals
 
 
@@ -37,9 +39,7 @@ class AdaptConfig(_LegacyConfig):
     device: Literal["cpu", "cuda", "mps", None] = None
 
     # Preprocessing parameters
-    # Shares preprocessing.preprocess_emg with CBSS calibration (CBSSConfig) -- keep
-    # these in sync with CBSSConfig's equivalents so the whitening reference computed
-    # at calibration and the online covariance see EMG at the same scale.
+    # Shares preprocessing.preprocess_emg with CBSS CBSSConfig
     lowcut: float = 20
     highcut: float = 500
     filter_order: int = 4
@@ -48,6 +48,11 @@ class AdaptConfig(_LegacyConfig):
     notch_width_hz: float = 1.0
     notch_n_harmonics: int = 3
     notch_order: int = 2
+
+    # Bad-channel handling shared with CBSSConfig
+    ch_mask: Optional[np.ndarray] = None   # boolean, length = raw channel count; True = keep
+    ch_map: Optional[np.ndarray] = None    # electrode map (only needed to replicate interpolation online)
+    replace_bad_channels: bool = False     # False = drop bad channels, True = interpolate bad channels
 
     # Extension parameters (to be inherited from calibration)
     ext_fact: int = 10
@@ -105,6 +110,10 @@ class AdaptConfig(_LegacyConfig):
     debug: bool = False
 
     def __post_init__(self) -> None:
+        if self.ch_map is not None and not isinstance(self.ch_map, np.ndarray):
+            self.ch_map = np.asarray(self.ch_map)
+        if self.ch_mask is not None and not isinstance(self.ch_mask, np.ndarray):
+            self.ch_mask = np.asarray(self.ch_mask, dtype=bool)
         self.spike_min_dist = int(self.spike_min_dist_ms * self.fs / 1000)
         self.batch_size = int(self.batch_ms * self.fs / 1000)
         validate_literals(self)

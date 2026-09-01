@@ -296,3 +296,314 @@ def test_reconcile_with_calib_config_agreeing_fields_stay_silent():
 
     assert not any("disagreed" in str(w.message) for w in caught)
     assert reconciled.spike_det_exp == 1.5
+
+
+# ---------------------------------------------------------------------------
+# Construction: two-step (init_data) vs one-shot (deprecated), process_data(emg=...)
+# ---------------------------------------------------------------------------
+
+def _make_construction_kwargs():
+    """Small, valid AdaptDecomp.__init__ kwargs (no emg) plus emg separately --
+    mirrors test_multibatch_stability_and_rare_safety_clip's own setup, just
+    without emg baked into the kwargs, for testing construction paths
+    independently of the full calibration machinery."""
+    from adapt_decomp.adaptation.config import AdaptConfig
+
+    raw_chs, ext_fact, M = 3, 2, 2
+    D = raw_chs * ext_fact
+    cfg = AdaptConfig()
+    cfg.device = "cpu"
+    cfg.ext_fact = ext_fact
+    cfg.batch_ms = 100
+    cfg.fs = 200
+    cfg.__post_init__()
+
+    wh = torch.eye(D)
+    sv = orthonormalize_rows_qr(torch.randn(M, D))
+    base_centroids = torch.rand(M) * 0.5
+    spike_centroids = torch.rand(M) + 2.0
+    emg_calib = torch.randn(500, raw_chs)
+    ipts_calib = torch.randn(500, M)
+    spikes_calib = torch.zeros(500, M, dtype=torch.int32)
+    spikes_calib[::20] = 1
+    emg_online = torch.randn(300, raw_chs)
+
+    kwargs = dict(
+        whitening=wh, sep_vectors=sv, base_centr=base_centroids,
+        spikes_centr=spike_centroids, emg_calib=emg_calib,
+        ipts_calib=ipts_calib, spikes_calib=spikes_calib, adapt_config=cfg,
+    )
+    return kwargs, emg_online
+
+
+def test_construct_with_emg_directly_warns_future_warning():
+    """Passing emg to __init__ directly (defer_preprocessing not set) must
+    raise FutureWarning and still build a fully-initialised instance."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    with pytest.warns(FutureWarning, match="deprecated"):
+        adapter = AdaptDecomp(emg=emg_online, preprocess=False, **kwargs)
+    assert adapter.data_preprocessed is True
+    assert adapter.data.emg_ext.shape[0] == emg_online.shape[0]
+
+
+def test_construct_with_emg_and_defer_preprocessing_does_not_warn():
+    """defer_preprocessing=True is a new capability, not a deprecated one --
+    passing emg alongside it must not warn."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        adapter = AdaptDecomp(emg=emg_online, defer_preprocessing=True, **kwargs)
+    assert not any(issubclass(w.category, FutureWarning) for w in caught)
+    assert adapter.data_preprocessed is False
+    assert_close(adapter._raw_emg, emg_online.float())
+
+
+def test_two_step_construction_matches_one_shot():
+    """AdaptDecomp() + .init_data(emg) must produce identical output to the
+    deprecated one-shot AdaptDecomp(emg=emg, ...) form, for the same inputs."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+
+    torch.manual_seed(0)
+    with pytest.warns(FutureWarning):
+        one_shot = AdaptDecomp(emg=emg_online, preprocess=False, **kwargs)
+    out_one_shot = one_shot.process_data()
+
+    torch.manual_seed(0)
+    two_step = AdaptDecomp(**kwargs)
+    two_step.init_data(emg_online, preprocess=False)
+    out_two_step = two_step.process_data()
+
+    assert_close(out_one_shot.spikes, out_two_step.spikes)
+    assert_close(out_one_shot.ipts, out_two_step.ipts)
+
+
+def test_run_is_deprecated_alias_for_process_data():
+    """.run() must warn FutureWarning and return the same result as
+    .process_data() would, for the same instance."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    adapter = AdaptDecomp(**kwargs)
+    adapter.init_data(emg_online, preprocess=False)
+
+    with pytest.warns(FutureWarning, match="process_data"):
+        outputs = adapter.run()
+
+    assert outputs.spikes.shape[0] == emg_online.shape[0]
+
+
+def test_process_data_emg_convenience_matches_separate_init_data_call():
+    """process_data(emg, preprocess=...) must be equivalent to calling
+    .init_data(emg, preprocess) then .process_data() with no arguments."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+
+    torch.manual_seed(1)
+    adapter_a = AdaptDecomp(**kwargs)
+    out_a = adapter_a.process_data(emg_online, preprocess=False)
+
+    torch.manual_seed(1)
+    adapter_b = AdaptDecomp(**kwargs)
+    adapter_b.init_data(emg_online, preprocess=False)
+    out_b = adapter_b.process_data()
+
+    assert_close(out_a.spikes, out_b.spikes)
+    assert_close(out_a.ipts, out_b.ipts)
+
+
+def test_process_data_no_args_after_from_calibration_style_init_data_unaffected():
+    """process_data() with no arguments (every current first-party call
+    site's usage) must run directly over whatever init_data() already
+    prepared, without needing emg passed again."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    adapter = AdaptDecomp(**kwargs)
+    adapter.init_data(emg_online, preprocess=False)
+    outputs = adapter.process_data()
+    assert outputs.spikes.shape[0] == emg_online.shape[0]
+
+
+# ---------------------------------------------------------------------------
+# Streaming mode (data_preprocessed=False): _center_and_extend_batch,
+# _preprocess_batch_raw, process_batch's uniform output, the B7 guard, and
+# end-to-end parity with the eager path.
+# ---------------------------------------------------------------------------
+
+def test_center_and_extend_batch_matches_extend_data_reference(make_decomposition, make_adapter):
+    """Two consecutive _center_and_extend_batch calls must match extend_data
+    run once on the centred concatenation of both batches, each sliced to
+    its own span."""
+    from adapt_decomp.preprocessing import extend_data
+
+    ext_fact, raw_chs, M = 3, 2, 2
+    decomp, cfg = make_decomposition(
+        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=200, spike_stride=20,
+    )
+    adapter = make_adapter(decomp, cfg)
+
+    torch.manual_seed(0)
+    batch1 = torch.randn(10, raw_chs)
+    batch2 = torch.randn(10, raw_chs)
+
+    ext1, pad1 = adapter._center_and_extend_batch(batch1)
+    ext2, pad2 = adapter._center_and_extend_batch(batch2)
+
+    assert pad1 == ext_fact
+    assert pad2 == 0
+    assert ext1.shape[0] == batch1.shape[0] - ext_fact
+    assert ext2.shape[0] == batch2.shape[0]
+
+    mean1 = batch1.mean(0, keepdim=True)
+    window1_ext = extend_data(batch1 - mean1, ext_fact, ext_mode=cfg.ext_mode)
+    assert_close(ext1, window1_ext[ext_fact:])
+
+    mean2 = cfg.ema_alpha * mean1 + (1 - cfg.ema_alpha) * batch2.mean(0, keepdim=True)
+    window2 = torch.cat([batch1[-ext_fact:], batch2], dim=0)
+    window2_ext = extend_data(window2 - mean2, ext_fact, ext_mode=cfg.ext_mode)
+    assert_close(ext2, window2_ext[ext_fact:])
+
+
+def test_ema_mean_online_seeds_from_first_batch_then_blends(make_decomposition, make_adapter):
+    """decomp.ema_mean_online must seed to the first batch's own mean, then
+    blend via config.ema_alpha on later calls."""
+    ext_fact, raw_chs, M = 2, 2, 2
+    decomp, cfg = make_decomposition(
+        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=200, spike_stride=20,
+    )
+    adapter = make_adapter(decomp, cfg)
+
+    torch.manual_seed(1)
+    batch1 = torch.randn(8, raw_chs)
+    batch2 = torch.randn(8, raw_chs)
+
+    adapter._center_and_extend_batch(batch1)
+    assert_close(decomp.ema_mean_online, batch1.mean(0, keepdim=True))
+
+    adapter._center_and_extend_batch(batch2)
+    expected = cfg.ema_alpha * batch1.mean(0, keepdim=True) + (1 - cfg.ema_alpha) * batch2.mean(0, keepdim=True)
+    assert_close(decomp.ema_mean_online, expected)
+
+
+def _prep_batch_process_adapter(make_decomposition, make_adapter, data_preprocessed: bool):
+    """Wire a make_adapter instance with the timing lists process_batch needs
+    (make_adapter itself only seeds wh_loss/sv_loss/wh_trace)."""
+    decomp, cfg = make_decomposition(M=2, ext_fact=3, raw_chs=2, n_cal=200, spike_stride=20)
+    adapter = make_adapter(decomp, cfg)
+    adapter.data_preprocessed = data_preprocessed
+    adapter.time_wh_ms, adapter.time_sv_ms = [], []
+    adapter.time_sd_ms, adapter.time_preprocess_ms = [], []
+    return adapter, cfg
+
+
+def test_process_batch_uniform_output_eager_mode_first_batch_zero_padded(make_decomposition, make_adapter):
+    """process_batch's first call in eager mode must return emg_batch.shape[0]
+    rows with the leading ext_fact rows zeroed; later calls are fully populated."""
+    adapter, cfg = _prep_batch_process_adapter(make_decomposition, make_adapter, data_preprocessed=True)
+    D = adapter.decomp.n
+    N = 12
+
+    spikes, sources = adapter.process_batch(torch.randn(N, D), batch_idx=0)
+    assert spikes.shape == (N, adapter.units)
+    assert sources.shape == (N, adapter.units)
+    assert torch.all(spikes[:cfg.ext_fact] == 0)
+    assert torch.all(sources[:cfg.ext_fact] == 0)
+    assert adapter.time_preprocess_ms == [0.0]
+
+    spikes2, _ = adapter.process_batch(torch.randn(N, D), batch_idx=1)
+    assert spikes2.shape == (N, adapter.units)
+    assert adapter.time_preprocess_ms == [0.0, 0.0]
+
+
+def test_process_batch_uniform_output_streaming_mode_first_batch_zero_padded(make_decomposition, make_adapter):
+    """process_batch's first call in streaming mode must return
+    emg_batch.shape[0] rows with the leading rows zeroed, and log a
+    non-negative preprocessing time each call; later calls are fully
+    populated. (A near-zero synthetic batch can legitimately measure
+    0.0ms on a coarse wall clock, so only non-negativity is checked here.)"""
+    adapter, cfg = _prep_batch_process_adapter(make_decomposition, make_adapter, data_preprocessed=False)
+    raw_chs = 2
+    N = 20
+
+    spikes, sources = adapter.process_batch(torch.randn(N, raw_chs), batch_idx=0)
+    assert spikes.shape == (N, adapter.units)
+    assert sources.shape == (N, adapter.units)
+    assert torch.all(spikes[:cfg.ext_fact] == 0)
+    assert torch.all(sources[:cfg.ext_fact] == 0)
+    assert adapter.time_preprocess_ms[0] >= 0.0
+
+    spikes2, _ = adapter.process_batch(torch.randn(N, raw_chs), batch_idx=1)
+    assert spikes2.shape == (N, adapter.units)
+    assert adapter.time_preprocess_ms[1] >= 0.0
+
+
+def test_process_data_streaming_mode_without_raw_emg_raises(make_decomposition, make_adapter):
+    """process_data() with data_preprocessed=False and no raw emg ever given
+    must raise ValueError (the B7 guard), not AttributeError."""
+    decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3, n_cal=200, spike_stride=20)
+    adapter = make_adapter(decomp, cfg)
+    adapter.data_preprocessed = False
+    adapter._raw_emg = None
+
+    with pytest.raises(ValueError, match="process_data"):
+        adapter.process_data()
+
+
+def test_process_data_streaming_end_to_end_matches_eager_shape():
+    """A defer_preprocessing=True run driven via process_data() must complete
+    without error, match an equivalent eager-mode run's output shapes, keep
+    preprocess_time_ms at zero throughout the eager run, and seed the
+    streaming path's per-batch state (filter zi, EMA mean, extension FIFO)."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    # fs=200 (from _make_construction_kwargs) needs valid filter bounds since
+    # the streaming path always filters (no preprocess=False escape hatch);
+    # disable the notch filter too since its default harmonics (100, 150 Hz)
+    # exceed this fs's Nyquist frequency (100 Hz).
+    kwargs["adapt_config"].highcut = 80.0
+    kwargs["adapt_config"].powerline = False
+
+    torch.manual_seed(2)
+    eager = AdaptDecomp(**kwargs)
+    eager.init_data(emg_online, preprocess=False)
+    out_eager = eager.process_data()
+
+    torch.manual_seed(2)
+    streaming = AdaptDecomp(emg=emg_online, defer_preprocessing=True, **kwargs)
+    out_streaming = streaming.process_data()
+
+    assert out_streaming.spikes.shape == out_eager.spikes.shape
+    assert out_streaming.ipts.shape == out_eager.ipts.shape
+
+    assert torch.all(out_eager.preprocess_time_ms == 0)
+    # A synthetic batch this small can legitimately measure 0.0ms on a
+    # coarse wall clock, so preprocess_time_ms itself is only checked for
+    # shape/non-negativity here; that streaming mode's preprocessing step
+    # actually ran is checked deterministically via its per-batch state below.
+    assert torch.all(out_streaming.preprocess_time_ms >= 0)
+    assert_close(
+        out_streaming.total_time_ms,
+        out_streaming.wh_time_ms + out_streaming.sv_time_ms
+        + out_streaming.sd_time_ms + out_streaming.preprocess_time_ms,
+    )
+
+    # Streaming mode's per-batch state (filter zi, EMA mean, extension FIFO)
+    # must have been seeded by the run.
+    assert streaming.decomp.zi is not None
+    assert streaming.decomp.ema_mean_online is not None
+    assert streaming.decomp.ext_fifo is not None
+
+    # adapter.spikes/ipts (read directly off the instance) must match
+    # outputs.spikes/ipts exactly, since optimize.py's _run_one_dataset relies on this.
+    assert_close(eager.spikes, out_eager.spikes)
+    assert_close(eager.ipts, out_eager.ipts)
+    assert_close(streaming.spikes, out_streaming.spikes)
+    assert_close(streaming.ipts, out_streaming.ipts)
