@@ -66,8 +66,8 @@ def _log_pooled_outputs(outputs_by_dataset, pool, config):
     roa_calib_means = []
     total_time_ms_means = []
     for name, outputs in outputs_by_dataset.items():
-        wandb.summary[f'{name}/wh_loss'] = torch.median(outputs['wh_loss']).item()
-        wandb.summary[f'{name}/sv_loss'] = torch.median(outputs['sv_loss'].nansum(dim=1)).item()
+        wandb.summary[f'{name}/wh_loss'] = outputs['wh_loss_total'].item()
+        wandb.summary[f'{name}/sv_loss'] = outputs['sv_loss_total'].item()
         wandb.summary[f'{name}/total_loss'] = outputs['total_loss'].item()
         total_time_ms_mean = torch.mean(outputs['total_time_ms']).item()
         wandb.summary[f'{name}/total_time_ms'] = total_time_ms_mean
@@ -91,10 +91,10 @@ def _log_pooled_outputs(outputs_by_dataset, pool, config):
                 roa_calib_means.append(roa_calib_mean)
 
     wandb.summary['wh_loss'] = float(
-        sum(outputs['wh_loss_median'].item() for outputs in outputs_by_dataset.values())
+        sum(outputs['wh_loss_total'].item() for outputs in outputs_by_dataset.values())
     )
     wandb.summary['sv_loss'] = float(
-        sum(outputs['sv_loss_median'].item() for outputs in outputs_by_dataset.values())
+        sum(outputs['sv_loss_total'].item() for outputs in outputs_by_dataset.values())
     )
     wandb.summary['total_loss'] = float(
         sum(outputs['total_loss'].item() for outputs in outputs_by_dataset.values())
@@ -274,7 +274,7 @@ def run_optuna(
     optim_config: str = typer.Option(
         ..., "--optim_config",
         help="Path to Optuna search-settings YAML -- param_space/objective/n_trials/n_jobs/"
-             "random_seed. See configs/adapt_configs/sweep_optuna.yaml.",
+             "random_seed. See configs/sweep_configs/sweep_optuna.yaml.",
     ),
     wandb_project_name: str = typer.Option(
         "adaptive_emg_decomp_dyn", "--wandb_project_name", help="WandB project name",
@@ -308,7 +308,7 @@ def run_wandb(
     data_config: str = typer.Option(..., "--data_config", help="Path to data config YAML"),
     sweep_config: str = typer.Option(
         ..., "--sweep_config",
-        help="Path to wandb sweep config YAML. See configs/adapt_configs/sweep_wandb.yaml.",
+        help="Path to wandb sweep config YAML. See configs/sweep_configs/sweep_wandb.yaml.",
     ),
     wandb_project_name: str = typer.Option(
         "adaptive_emg_decomp_dyn", "--wandb_project_name", help="WandB project name",

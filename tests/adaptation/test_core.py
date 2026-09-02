@@ -207,12 +207,13 @@ def test_multibatch_stability_and_rare_safety_clip():
 
 
 # ---------------------------------------------------------------------------
-# _compute_losses: guarded per-run wh_loss_median/sv_loss_median/total_loss
+# _compute_losses: guarded per-run wh_loss_total/sv_loss_total/total_loss
 # ---------------------------------------------------------------------------
 
-def test_compute_losses_sums_wh_and_sv_medians(make_decomposition, make_adapter):
-    """Normal (non-diverged) case: total_loss == wh_loss_median + sv_loss_median,
-    each the median/nanmedian of the per-batch wh_loss/sv_loss tensors."""
+def test_compute_losses_sums_wh_and_sv_losses(make_decomposition, make_adapter):
+    """Normal (non-diverged) case: total_loss == wh_loss_total + sv_loss_total,
+    wh_loss_total the sum of the per-batch wh_loss tensor and sv_loss_total the
+    sum of sv_loss summed across units per batch, then across batches."""
     decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3)
     adapter = make_adapter(decomp, cfg)
 
@@ -220,11 +221,11 @@ def test_compute_losses_sums_wh_and_sv_medians(make_decomposition, make_adapter)
     adapter.sv_loss = torch.tensor([[0.4, 0.6], [0.5, float("nan")], [0.2, 0.8]])
     adapter.wh_trace = decomp.trace_cal.expand(3).clone()  # ratio == 1, well within the guard
 
-    wh_loss_median, sv_loss_median, total_loss = adapter._compute_losses()
+    wh_loss_total, sv_loss_total, total_loss = adapter._compute_losses()
 
-    assert_close(wh_loss_median, torch.tensor(0.2))
-    assert_close(sv_loss_median, adapter.sv_loss.nanmedian())
-    assert_close(total_loss, wh_loss_median + sv_loss_median)
+    assert_close(wh_loss_total, torch.tensor(0.6))
+    assert_close(sv_loss_total, adapter.sv_loss.nansum(dim=1).nansum())
+    assert_close(total_loss, wh_loss_total + sv_loss_total)
 
 
 def test_compute_losses_guards_against_nan_and_divergence(make_decomposition, make_adapter):
@@ -237,9 +238,9 @@ def test_compute_losses_guards_against_nan_and_divergence(make_decomposition, ma
     adapter.sv_loss = torch.zeros(2, 2)
     adapter.wh_trace = decomp.trace_cal.expand(2).clone()
 
-    wh_loss_median, sv_loss_median, total_loss = adapter._compute_losses()
+    wh_loss_total, sv_loss_total, total_loss = adapter._compute_losses()
 
-    for value in (wh_loss_median, sv_loss_median, total_loss):
+    for value in (wh_loss_total, sv_loss_total, total_loss):
         assert value.item() == pytest.approx(1e10)
 
 

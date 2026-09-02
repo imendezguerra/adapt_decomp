@@ -680,14 +680,16 @@ class AdaptationResult:
             shape (batches, M). Set only when config.compute_loss is True.
         wh_trace (Optional[torch.Tensor]): Trace of the whitened covariance
             with shape (batches,). Set only when config.compute_loss is True.
-        wh_loss_median (Optional[torch.Tensor]): Guarded scalar median(wh_loss)
+        wh_loss_total (Optional[torch.Tensor]): Guarded scalar sum(wh_loss)
             for the whole run -- see AdaptDecomp._compute_losses(). Set only
             when config.compute_loss is True.
-        sv_loss_median (Optional[torch.Tensor]): Guarded scalar nanmedian(sv_loss)
-            for the whole run -- see AdaptDecomp._compute_losses(). Set only
-            when config.compute_loss is True.
+        sv_loss_total (Optional[torch.Tensor]): Guarded scalar
+            sum(sv_loss.nansum(dim=1)) (per-batch sum across units, then
+            summed across batches) for the whole run -- see
+            AdaptDecomp._compute_losses(). Set only when config.compute_loss
+            is True.
         total_loss (Optional[torch.Tensor]): Guarded scalar score for the
-            whole run -- wh_loss_median + sv_loss_median, see
+            whole run -- wh_loss_total + sv_loss_total, see
             AdaptDecomp._compute_losses(). Set only when config.compute_loss
             is True.
         diagnostics (Optional[Dict[Any, Any]]): Per-batch diagnostic tensors,
@@ -716,8 +718,8 @@ class AdaptationResult:
     sv_loss: Optional[torch.Tensor] = None
     centroid_loss: Optional[torch.Tensor] = None
     wh_trace: Optional[torch.Tensor] = None
-    wh_loss_median: Optional[torch.Tensor] = None
-    sv_loss_median: Optional[torch.Tensor] = None
+    wh_loss_total: Optional[torch.Tensor] = None
+    sv_loss_total: Optional[torch.Tensor] = None
     total_loss: Optional[torch.Tensor] = None
     diagnostics: Optional[Dict[Any, Any]] = None
     gt_matched_indices: Optional[np.ndarray] = None
@@ -745,7 +747,7 @@ class AdaptationResult:
         }
         for key in (
             "wh_loss", "sv_loss", "centroid_loss", "wh_trace",
-            "wh_loss_median", "sv_loss_median", "total_loss",
+            "wh_loss_total", "sv_loss_total", "total_loss",
             "diagnostics", "gt_matched_indices", "roa",
         ):
             value = getattr(self, key)

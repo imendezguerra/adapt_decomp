@@ -422,7 +422,7 @@ class AdaptDecomp:
 
         self._finalize_accumulators()
         if self.config.compute_loss:
-            self.wh_loss_median, self.sv_loss_median, self.total_loss = self._compute_losses()
+            self.wh_loss_total, self.sv_loss_total, self.total_loss = self._compute_losses()
 
         outputs = self._format_outputs()
         if self.config.save_params:
@@ -1168,7 +1168,7 @@ class AdaptDecomp:
             self.wh_loss: list = []
             self.sv_loss: list = []
             self.wh_trace: list = []
-            # wh_loss_median/sv_loss_median/total_loss are set once, at the end of
+            # wh_loss_total/sv_loss_total/total_loss are set once, at the end of
             # process_data(), by _compute_losses(), not accumulated per batch.
 
     # ------------------------------------------------------------------
@@ -1233,8 +1233,9 @@ class AdaptDecomp:
         these directly.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: wh_loss_median
-            (median(wh_loss)), sv_loss_median (nanmedian(sv_loss)), and
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: wh_loss_total
+            (sum(wh_loss)), sv_loss_total (sum(sv_loss.nansum(dim=1)) --
+            summed across units per batch, then across batches), and
             total_loss (their sum); each 1e10 if wh_loss has any NaN or
             the wh_trace/trace_cal ratio indicates whitening diverged.
         """
@@ -1242,9 +1243,9 @@ class AdaptDecomp:
         if torch.any(torch.isnan(self.wh_loss)) or not (0.1 < trace_ratio.item() < 50.0):
             invalid = torch.tensor(1e10, device=self.config.device)
             return invalid, invalid, invalid
-        wh_loss_median = self.wh_loss.median()
-        sv_loss_median = self.sv_loss.nanmedian()
-        return wh_loss_median, sv_loss_median, wh_loss_median + sv_loss_median
+        wh_loss_total = self.wh_loss.sum()
+        sv_loss_total = self.sv_loss.nansum(dim=1).nansum()
+        return wh_loss_total, sv_loss_total, wh_loss_total + sv_loss_total
 
     def _format_outputs(self) -> AdaptationResult:
         """Collect per-batch results into a typed AdaptationResult.
@@ -1263,8 +1264,8 @@ class AdaptDecomp:
             sv_loss         [batches, M]    float32
             centroid_loss   [batches, M]    float32
             wh_trace        [batches]       float32
-            wh_loss_median  scalar          float32 — see _compute_losses()
-            sv_loss_median  scalar          float32 — see _compute_losses()
+            wh_loss_total   scalar          float32 — see _compute_losses()
+            sv_loss_total   scalar          float32 — see _compute_losses()
             total_loss      scalar          float32 — see _compute_losses()
 
         Present when config.debug=True:
@@ -1294,10 +1295,10 @@ class AdaptDecomp:
             result.centroid_loss = self.centroid_loss.detach().cpu().clone()
         if hasattr(self, "wh_trace"):
             result.wh_trace = self.wh_trace.detach().cpu().clone()
-        if hasattr(self, "wh_loss_median"):
-            result.wh_loss_median = self.wh_loss_median.detach().cpu().clone()
-        if hasattr(self, "sv_loss_median"):
-            result.sv_loss_median = self.sv_loss_median.detach().cpu().clone()
+        if hasattr(self, "wh_loss_total"):
+            result.wh_loss_total = self.wh_loss_total.detach().cpu().clone()
+        if hasattr(self, "sv_loss_total"):
+            result.sv_loss_total = self.sv_loss_total.detach().cpu().clone()
         if hasattr(self, "total_loss"):
             result.total_loss = self.total_loss.detach().cpu().clone()
         if self.config.debug and hasattr(self, "diagnostics"):

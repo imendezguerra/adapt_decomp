@@ -41,8 +41,8 @@ ObjectiveName = Literal["sv_loss", "wh_loss", "total_loss", "roa"]
 
 # Maps each loss-valued ObjectiveName to the AdaptationResult field it reads.
 _OBJECTIVE_FIELD: Dict[str, str] = {
-    "sv_loss": "sv_loss_median",
-    "wh_loss": "wh_loss_median",
+    "sv_loss": "sv_loss_total",
+    "wh_loss": "wh_loss_total",
     "total_loss": "total_loss",
 }
 _VALID_OBJECTIVES: Tuple[str, ...] = (*_OBJECTIVE_FIELD, "roa")
@@ -53,7 +53,7 @@ def _base_losses(outputs: AdaptationResult) -> Dict[str, float]:
 
     Args:
         outputs (AdaptationResult): A single run's result, with compute_loss=True
-            (so wh_loss_median/sv_loss_median/total_loss are all set).
+            (so wh_loss_total/sv_loss_total/total_loss are all set).
 
     Returns:
         Dict[str, float]: {"sv_loss": ..., "wh_loss": ..., "total_loss": ...}.

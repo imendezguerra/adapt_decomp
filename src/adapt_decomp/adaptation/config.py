@@ -175,7 +175,7 @@ def load_yaml(file_path: str) -> Dict:
 
 
 def load_config(
-    defaults_path: str = "configs/model_configs/default_neuromotion.yml",
+    defaults_path: str = "configs/adapt_configs/default_neuromotion.yaml",
     wandb_config=None,
 ) -> AdaptConfig:
     """Load YAML config and apply optional wandb sweep overrides."""
