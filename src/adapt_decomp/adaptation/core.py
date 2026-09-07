@@ -1234,8 +1234,8 @@ class AdaptDecomp:
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: wh_loss_total
-            (sum(wh_loss)), sv_loss_total (sum(sv_loss.nansum(dim=1)) --
-            summed across units per batch, then across batches), and
+            (median(wh_loss)), sv_loss_total (median(sv_loss.nansum(dim=1)) --
+            summed across units per batch, then medianed across batches), and
             total_loss (their sum); each 1e10 if wh_loss has any NaN or
             the wh_trace/trace_cal ratio indicates whitening diverged.
         """
@@ -1243,8 +1243,8 @@ class AdaptDecomp:
         if torch.any(torch.isnan(self.wh_loss)) or not (0.1 < trace_ratio.item() < 50.0):
             invalid = torch.tensor(1e10, device=self.config.device)
             return invalid, invalid, invalid
-        wh_loss_total = self.wh_loss.sum()
-        sv_loss_total = self.sv_loss.nansum(dim=1).nansum()
+        wh_loss_total = self.wh_loss.median()
+        sv_loss_total = self.sv_loss.nansum(dim=1).median()
         return wh_loss_total, sv_loss_total, wh_loss_total + sv_loss_total
 
     def _format_outputs(self) -> AdaptationResult:
