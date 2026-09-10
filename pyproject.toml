@@ -10,7 +10,7 @@ where = ["src"]
 
 [project]
 name = "adapt_decomp"
-version = "2.0.0"
+version = "1.0.0"
 description = "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
 authors = [{ name = "Irene Mendez Guerra", email = "irene.mendez17@imperial.ac.uk" }]
 readme = "README.md"

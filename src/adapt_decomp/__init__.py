@@ -1,4 +1,4 @@
-__version__ = "2.0"
+__version__ = "1.0.0"
 
 from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
 from adapt_decomp.adaptation import (
