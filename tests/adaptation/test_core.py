@@ -164,7 +164,7 @@ def test_multibatch_stability_and_rare_safety_clip():
     base_centroids = torch.rand(M) * 0.5
     spike_centroids = torch.rand(M) + 2.0
     emg_calib = torch.randn(500, raw_chs)
-    ipts_calib = torch.randn(500, M)
+    sources_calib = torch.randn(500, M)
     spikes_calib = torch.zeros(500, M, dtype=torch.int32)
     spikes_calib[::20] = 1
 
@@ -176,7 +176,7 @@ def test_multibatch_stability_and_rare_safety_clip():
         base_centr=base_centroids,
         spikes_centr=spike_centroids,
         emg_calib=emg_calib,
-        ipts_calib=ipts_calib,
+        sources_calib=sources_calib,
         spikes_calib=spikes_calib,
         adapt_config=cfg,
     )
@@ -210,10 +210,10 @@ def test_multibatch_stability_and_rare_safety_clip():
 # _compute_losses: guarded per-run wh_loss_total/sv_loss_total/total_loss
 # ---------------------------------------------------------------------------
 
-def test_compute_losses_sums_wh_and_sv_losses(make_decomposition, make_adapter):
+def test_compute_losses_medians_wh_and_sv_losses(make_decomposition, make_adapter):
     """Normal (non-diverged) case: total_loss == wh_loss_total + sv_loss_total,
-    wh_loss_total the sum of the per-batch wh_loss tensor and sv_loss_total the
-    sum of sv_loss summed across units per batch, then across batches."""
+    wh_loss_total the median of the per-batch wh_loss tensor and sv_loss_total
+    the median, across batches, of sv_loss summed across units per batch."""
     decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3)
     adapter = make_adapter(decomp, cfg)
 
@@ -223,8 +223,8 @@ def test_compute_losses_sums_wh_and_sv_losses(make_decomposition, make_adapter):
 
     wh_loss_total, sv_loss_total, total_loss = adapter._compute_losses()
 
-    assert_close(wh_loss_total, torch.tensor(0.6))
-    assert_close(sv_loss_total, adapter.sv_loss.nansum(dim=1).nansum())
+    assert_close(wh_loss_total, torch.tensor(0.2))
+    assert_close(sv_loss_total, adapter.sv_loss.nansum(dim=1).median())
     assert_close(total_loss, wh_loss_total + sv_loss_total)
 
 
@@ -322,7 +322,7 @@ def _make_construction_kwargs():
     base_centroids = torch.rand(M) * 0.5
     spike_centroids = torch.rand(M) + 2.0
     emg_calib = torch.randn(500, raw_chs)
-    ipts_calib = torch.randn(500, M)
+    sources_calib = torch.randn(500, M)
     spikes_calib = torch.zeros(500, M, dtype=torch.int32)
     spikes_calib[::20] = 1
     emg_online = torch.randn(300, raw_chs)
@@ -330,7 +330,7 @@ def _make_construction_kwargs():
     kwargs = dict(
         whitening=wh, sep_vectors=sv, base_centr=base_centroids,
         spikes_centr=spike_centroids, emg_calib=emg_calib,
-        ipts_calib=ipts_calib, spikes_calib=spikes_calib, adapt_config=cfg,
+        sources_calib=sources_calib, spikes_calib=spikes_calib, adapt_config=cfg,
     )
     return kwargs, emg_online
 
@@ -360,6 +360,18 @@ def test_init_with_emg_warns_future_warning_and_stores_it():
         adapter = AdaptDecomp(emg=emg_online, **kwargs)
     assert_close(adapter._emg_raw, emg_online)
     assert not hasattr(adapter, "data")
+
+
+def test_init_ipts_calib_deprecated_alias_warns():
+    """Passing ipts_calib=... to __init__ (the deprecated pre-rename kwarg)
+    must warn FutureWarning and still populate decomp.sources_calib."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    sources_calib = kwargs.pop("sources_calib")
+    with pytest.warns(FutureWarning, match="ipts_calib"):
+        adapter = AdaptDecomp(ipts_calib=sources_calib, **kwargs)
+    assert_close(adapter.decomp.sources_calib, sources_calib)
 
 
 def test_run_without_emg_raises_clear_error():
@@ -395,7 +407,7 @@ def test_run_warns_and_matches_process_data_offline():
     out_direct = via_process_data.process_data(emg_online, processing_mode="offline")
 
     assert_close(out_run.spikes, out_direct.spikes)
-    assert_close(out_run.ipts, out_direct.ipts)
+    assert_close(out_run.sources, out_direct.sources)
 
 
 def test_process_data_requires_emg():
@@ -427,7 +439,7 @@ def test_process_data_matches_separate_init_data_call():
     out_b = adapter_b.process_data(emg_online, preprocess=False)
 
     assert_close(out_a.spikes, out_b.spikes)
-    assert_close(out_a.ipts, out_b.ipts)
+    assert_close(out_a.sources, out_b.sources)
 
 
 def test_process_data_offline_mode_builds_data_online_mode_builds_raw_data():
@@ -471,9 +483,9 @@ def test_process_batch_callable_directly_after_plain_construction():
     adapter = AdaptDecomp(**kwargs)
     adapter.data_preprocessed = False   # full online mode
 
-    spikes, ipts = adapter.process_batch(torch.randn(20, 3))
+    spikes, sources = adapter.process_batch(torch.randn(20, 3))
     assert spikes.shape == (20, kwargs["sep_vectors"].shape[0])
-    assert ipts.shape == (20, kwargs["sep_vectors"].shape[0])
+    assert sources.shape == (20, kwargs["sep_vectors"].shape[0])
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +626,7 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
     out_streaming = streaming.process_data(emg_online, preprocess=False, processing_mode="online")
 
     assert out_streaming.spikes.shape == out_eager.spikes.shape
-    assert out_streaming.ipts.shape == out_eager.ipts.shape
+    assert out_streaming.sources.shape == out_eager.sources.shape
 
     assert torch.all(out_eager.preprocess_time_ms == 0)
     # A synthetic batch this small can legitimately measure 0.0ms on a
@@ -634,9 +646,9 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
     assert streaming.decomp.ema_mean_online is not None
     assert streaming.decomp.ext_fifo is not None
 
-    # adapter.spikes/ipts (read directly off the instance) must match
-    # outputs.spikes/ipts exactly, since optimize.py's _run_one_dataset relies on this.
+    # adapter.spikes/sources (read directly off the instance) must match
+    # outputs.spikes/sources exactly, since optimize.py's _run_one_dataset relies on this.
     assert_close(eager.spikes, out_eager.spikes)
-    assert_close(eager.ipts, out_eager.ipts)
+    assert_close(eager.sources, out_eager.sources)
     assert_close(streaming.spikes, out_streaming.spikes)
-    assert_close(streaming.ipts, out_streaming.ipts)
+    assert_close(streaming.sources, out_streaming.sources)

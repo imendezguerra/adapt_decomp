@@ -1,7 +1,4 @@
-# data_config for optimize_adapt_decomp_pooled_memory -- works the same whether
-# datasets has one entry or several (a single dataset is just a one-entry pool).
-# Every dataset's calibration is preloaded and held resident for the whole search --
-# see fdsi_pool_disk_example.yaml for the lazy, memory-lean counterpart.
+# data_config for optimize_adapt_decomp_pooled_memory
 
 root: 'C:/Users/Irene/Documents/work_local/fdsi_benchmark'  # Base directory
 loader: 'load_pooled_cbss_memory'                           # Loading function to use

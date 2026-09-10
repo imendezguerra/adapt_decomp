@@ -81,11 +81,14 @@ def make_decomposition(make_adapt_config):
         spike_cal = torch.rand(M) + 2.0
         base_cal = torch.rand(M) * 0.5
         emg_cal = torch.randn(n_cal, raw_chs)
-        ipts_cal = torch.randn(n_cal, M)
+        sources_cal = torch.randn(n_cal, M)
         spikes_cal = torch.zeros(n_cal, M, dtype=torch.int32)
         spikes_cal[::spike_stride] = 1
 
-        decomp = Decomposition(wh, sv, base_cal, spike_cal, emg_cal, ipts_cal, spikes_cal, cfg)
+        decomp = Decomposition(
+            wh, sv, base_cal, spike_cal, emg_cal, spikes_cal, cfg,
+            sources_calib=sources_cal,
+        )
         return decomp, cfg
     return _make
 
@@ -153,14 +156,14 @@ def make_optimize_kwargs():
         base_centroids = torch.rand(M) * 0.5
         spike_centroids = torch.rand(M) + 2.0
         emg_calib = torch.randn(500, raw_chs)
-        ipts_calib = torch.randn(500, M)
+        sources_calib = torch.randn(500, M)
         spikes_calib = torch.zeros(500, M, dtype=torch.int32)
         spikes_calib[::20] = 1
         emg_online = torch.randn(600, raw_chs)
 
         spikes_calib_np = spikes_calib.numpy()
         calibration = CBSSResult(
-            sources=ipts_calib.numpy(),
+            sources=sources_calib.numpy(),
             spikes=spikes_calib_np,
             spikes_dict={i: np.where(spikes_calib_np[:, i])[0] for i in range(M)},
             sep_vectors=sv.numpy().T,  # CBSSResult stores [dim, n_mu]; to_adapt_tensors() transposes back

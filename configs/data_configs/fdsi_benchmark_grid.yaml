@@ -1,0 +1,21 @@
+# Benchmark grid for notebooks/fdsi_benchmark/
+
+fdsi_root: 'C:\Users\Irene\Documents\work_local\fdsi_benchmark'  # calibration/adaptation cache root
+
+fs: 2048                  # Sampling frequency (Hz)
+ext_fact: 10               # Extension factor used across the benchmark's calibrations
+tol_spike_ms: 2.0          # Spike-alignment tolerance for rate-of-agreement
+roa_cal_th: 0.9            # Supervised-selection RoA threshold at calibration time
+cal_duration_s: 5.0        # Calibration window length (s)
+iso_duration_s: 5.0        # Isometric bookend duration for triangular-condition phase analysis
+
+subjects: [sub-01, sub-02, sub-03, sub-04, sub-05]
+conditions: [staircase, triangular-ramp40s, triangular-ramp20s, triangular-ramp10s, triangular-ramp5s]
+snr_levels: [30, 25, 20, 15]
+
+# Recordings pooled for hyperparameter search; the rest are held out for the
+# apply-to-all-100-recordings step.
+pool_conditions: [triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
+optim_sub: sub-01
+optim_snr: 30
+n_trials: 50

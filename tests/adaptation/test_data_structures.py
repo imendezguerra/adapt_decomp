@@ -241,7 +241,7 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
     batches, M = 5, 3
     result = AdaptationResult(
         spikes=torch.zeros(batches, M, dtype=torch.int32),
-        ipts=torch.randn(batches, M),
+        sources=torch.randn(batches, M),
         wh_time_ms=torch.rand(batches),
         sv_time_ms=torch.rand(batches),
         sd_time_ms=torch.rand(batches),
@@ -254,7 +254,7 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
     loaded = AdaptationResult.load(path)
 
     assert isinstance(loaded, AdaptationResult)
-    assert_close(loaded.ipts, result.ipts)
+    assert_close(loaded.sources, result.sources)
     assert loaded.wh_loss is None
 
 
@@ -269,3 +269,118 @@ def test_adaptation_result_load_rejects_wrong_type(tmp_path):
 
     with pytest.raises(ValueError):
         AdaptationResult.load(path)
+
+
+def test_adaptation_result_sil_roundtrip(tmp_path):
+    """AdaptationResult.save()/.load() should round-trip the sil field."""
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+
+    batches, M = 5, 3
+    result = AdaptationResult(
+        spikes=torch.zeros(batches, M, dtype=torch.int32),
+        sources=torch.randn(batches, M),
+        wh_time_ms=torch.rand(batches),
+        sv_time_ms=torch.rand(batches),
+        sd_time_ms=torch.rand(batches),
+        preprocess_time_ms=torch.zeros(batches),
+        total_time_ms=torch.rand(batches),
+        sil=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+    )
+    assert result.to_dict()["sil"] is not None
+
+    path = tmp_path / "adaptation_result_sil.pkl"
+    result.save(path)
+    loaded = AdaptationResult.load(path)
+
+    np.testing.assert_allclose(loaded.sil, result.sil)
+
+
+def test_adaptation_result_sil_defaults_none_for_legacy_pickle(tmp_path):
+    """A pickle written before `sil` existed should load with sil is None, not AttributeError."""
+    import pickle
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+
+    batches, M = 4, 2
+    result = AdaptationResult(
+        spikes=torch.zeros(batches, M, dtype=torch.int32),
+        sources=torch.randn(batches, M),
+        wh_time_ms=torch.rand(batches),
+        sv_time_ms=torch.rand(batches),
+        sd_time_ms=torch.rand(batches),
+        preprocess_time_ms=torch.zeros(batches),
+        total_time_ms=torch.rand(batches),
+    )
+    del result.__dict__["sil"]  # simulate an instance pickled before this field existed
+
+    path = tmp_path / "legacy_result.pkl"
+    with open(path, "wb") as f:
+        pickle.dump(result, f)
+
+    loaded = AdaptationResult.load(path)
+
+    assert loaded.sil is None
+    assert "sil" not in loaded.to_dict()
+
+
+def test_decomposition_ipts_calib_deprecated_alias_warns():
+    """Decomposition(..., ipts_calib=...) still works but raises FutureWarning."""
+    from adapt_decomp.adaptation.data_structures import Decomposition
+    from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
+
+    M, raw_chs, ext_fact, n_cal = 2, 2, 2, 50
+    D = raw_chs * ext_fact
+    wh = torch.eye(D)
+    sv = orthonormalize_rows_qr(torch.randn(M, D))
+    base_cal = torch.rand(M) * 0.5
+    spike_cal = torch.rand(M) + 2.0
+    emg_cal = torch.randn(n_cal, raw_chs)
+    sources_cal = torch.randn(n_cal, M)
+    spikes_cal = torch.zeros(n_cal, M, dtype=torch.int32)
+    cfg = AdaptConfig(ext_fact=ext_fact)
+
+    with pytest.warns(FutureWarning, match="ipts_calib"):
+        decomp = Decomposition(
+            wh, sv, base_cal, spike_cal, emg_cal, spikes_cal, cfg,
+            ipts_calib=sources_cal,
+        )
+
+    assert_close(decomp.sources_calib, sources_cal.to(dtype=torch.float32))
+
+
+def test_adaptation_result_ipts_deprecated_alias_warns():
+    """AdaptationResult(ipts=...) still works but raises FutureWarning and lands in .sources."""
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+
+    batches, M = 4, 2
+    sources = torch.randn(batches, M)
+    with pytest.warns(FutureWarning, match="ipts"):
+        result = AdaptationResult(
+            spikes=torch.zeros(batches, M, dtype=torch.int32),
+            ipts=sources,
+            wh_time_ms=torch.rand(batches),
+            sv_time_ms=torch.rand(batches),
+            sd_time_ms=torch.rand(batches),
+            preprocess_time_ms=torch.zeros(batches),
+            total_time_ms=torch.rand(batches),
+        )
+
+    assert_close(result.sources, sources)
+    assert result.ipts is None
+    assert "sources" in result.to_dict()
+    assert "ipts" not in result.to_dict()
+
+
+def test_adaptation_result_requires_sources_or_ipts():
+    """AdaptationResult() with neither sources nor the deprecated ipts raises ValueError."""
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+
+    batches, M = 4, 2
+    with pytest.raises(ValueError, match="sources"):
+        AdaptationResult(
+            spikes=torch.zeros(batches, M, dtype=torch.int32),
+            wh_time_ms=torch.rand(batches),
+            sv_time_ms=torch.rand(batches),
+            sd_time_ms=torch.rand(batches),
+            preprocess_time_ms=torch.zeros(batches),
+            total_time_ms=torch.rand(batches),
+        )

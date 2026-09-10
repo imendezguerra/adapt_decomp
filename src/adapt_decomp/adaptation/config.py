@@ -80,7 +80,7 @@ class AdaptConfig(_LegacyConfig):
     wh_sv_coupling: bool = False    # Propagate the first-order frame correction from each wh step to sv.
 
     # Separation vectors 
-    contrast_scope: Literal["batch_based", "spike_based"] = "batch_based" # Samples to use for separation vector update
+    contrast_scope: Literal["batch_based", "spike_based"] = "spike_based" # Samples to use for separation vector update
     sv_epochs: int = 1       # Max number of separation vector updates per batch
     sv_tol: float = 1e-4     # Convergence tolerance in case multiple updates per batch for early stopping
 

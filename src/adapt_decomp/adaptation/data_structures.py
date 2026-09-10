@@ -189,16 +189,18 @@ class Decomposition:
 
     def __init__(
         self,
-        whitening: torch.Tensor,   
-        sep_vectors: torch.Tensor, 
-        base_centr: torch.Tensor,  
-        spikes_centr: torch.Tensor,  
+        whitening: torch.Tensor,
+        sep_vectors: torch.Tensor,
+        base_centr: torch.Tensor,
+        spikes_centr: torch.Tensor,
         emg_calib: torch.Tensor,
-        ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
         config: Optional[AdaptConfig] = None,
-        pca_components: Optional[torch.Tensor] = None,    
-        pca_mean: Optional[torch.Tensor] = None,         
+        pca_components: Optional[torch.Tensor] = None,
+        pca_mean: Optional[torch.Tensor] = None,
+        *,
+        sources_calib: Optional[torch.Tensor] = None,
+        ipts_calib: Optional[torch.Tensor] = None,
     ) -> None:
         """Initialise the decomposition model from precalibrated matrices.
 
@@ -216,29 +218,46 @@ class Decomposition:
                 shape (M,).
             emg_calib (torch.Tensor): Raw, unextended calibration EMG with
                 shape (N_cal, channels).
-            ipts_calib (torch.Tensor): Calibration source signal with shape
-                (N_cal, M).
             spikes_calib (torch.Tensor): Calibration binary spike train
                 with shape (N_cal, M).
             config (Optional[AdaptConfig], optional): Online adaptation
                 configuration. Defaults to None, which builds AdaptConfig().
             pca_components (Optional[torch.Tensor], optional): Fitted PCA
                 components with shape (n, D). Defaults to None (no PCA reduction).
-            pca_mean (Optional[torch.Tensor], optional): Fitted PCA mean with 
+            pca_mean (Optional[torch.Tensor], optional): Fitted PCA mean with
                 shape (D,). Defaults to None.
+            sources_calib (Optional[torch.Tensor], optional): Calibration
+                source signal with shape (N_cal, M). Required (keyword-only) --
+                Optional only so the deprecated ipts_calib alias below can
+                still satisfy it. Defaults to None.
+            ipts_calib (Optional[torch.Tensor], optional): Deprecated alias
+                for sources_calib. Defaults to None. Raises FutureWarning
+                when given.
 
         Raises:
             ValueError: If pca_components is set and its input/output
                 dimensions do not match ext_fact/whitening, or if
                 pca_components is None and channels * ext_fact does not
-                match the whitening matrix dimension.
+                match the whitening matrix dimension. Also if neither
+                sources_calib nor ipts_calib is given.
 
         Notes:
             pca_components/pca_mean (from CBSSResult, when CBSSConfig.n_components was
             set): if given, every extended-EMG batch is projected through this fitted
-            PCA transform: (X_ext - pca_mean) @ pca_components.T following CBSS 
+            PCA transform: (X_ext - pca_mean) @ pca_components.T following CBSS
             pipeline: center -> extend -> PCA -> whiten order.
         """
+        if ipts_calib is not None:
+            warnings.warn(
+                "'ipts_calib' is deprecated and will be removed in a future "
+                "version; use 'sources_calib' instead.",
+                FutureWarning, stacklevel=2,
+            )
+            if sources_calib is None:
+                sources_calib = ipts_calib
+        if sources_calib is None:
+            raise ValueError("sources_calib is required.")
+
         if config is None:
             config = AdaptConfig()
 
@@ -284,7 +303,7 @@ class Decomposition:
 
         # Calibration data (kept for init_* recomputation and reset)
         self.emg_calib = emg_calib.to(dtype=torch.float32)
-        self.ipts_calib = ipts_calib.to(dtype=torch.float32)
+        self.sources_calib = sources_calib.to(dtype=torch.float32)
         self.spikes_calib = spikes_calib.to(dtype=torch.int32)
 
         # Check for correct dimensions if PCA model is passed
@@ -515,30 +534,30 @@ class Decomposition:
         separation vector update and loss normalisation.
 
         Mirrors contrast_scope so calibration and online kappa are comparable:
-          batch_based — log_cosh over all calibration IPT samples
+          batch_based — log_cosh over all calibration source samples
           spike_based — log_cosh averaged only at spike times per source
 
         Returns:
             None
         """
-        ipts = self.ipts_calib.to(self.device)
+        sources = self.sources_calib.to(self.device)
 
-        # Compute contrast values during calibration per batch or spikes during calibration 
+        # Compute contrast values during calibration per batch or spikes during calibration
         if self.contrast_scope == "batch_based":
-            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_batch_based(ipts)
+            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_batch_based(sources)
         else:
-            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_spike_based(ipts)
+            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_spike_based(sources)
 
         # EMA of ||grad_sv_row|| (per unit) used to normalize the sv natural-gradient
         # direction to unit scale (see update_sv_spike_gated). None = not yet seeded;
         # the first online batch seeds each unit directly from its own value. 
         self.ema_gradnorm_sv: Optional[torch.Tensor] = None
 
-    def _compute_kappa_batch_based(self, ipts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _compute_kappa_batch_based(self, sources: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Vectorised batch-wise kappa mean/std over reshaped fixed-size batches.
 
         Args:
-            ipts (torch.Tensor): Calibration source signal with shape
+            sources (torch.Tensor): Calibration source signal with shape
                 (N_cal, M).
 
         Returns:
@@ -546,23 +565,23 @@ class Decomposition:
             contrast_calib_std, each with shape (M,).
         """
         from adapt_decomp.cbss.ica import log_cosh
-        M = ipts.shape[1]
-        n_full = (ipts.shape[0] // self.batch_size) * self.batch_size
+        M = sources.shape[1]
+        n_full = (sources.shape[0] // self.batch_size) * self.batch_size
         if n_full >= 2 * self.batch_size:
-            ipts_b = ipts[:n_full].reshape(-1, self.batch_size, M)
-            batch_kappas = log_cosh(ipts_b).mean(dim=1)   # [n_batches, M]
+            sources_b = sources[:n_full].reshape(-1, self.batch_size, M)
+            batch_kappas = log_cosh(sources_b).mean(dim=1)   # [n_batches, M]
             contrast_calib_mean = batch_kappas.mean(dim=0)
             contrast_calib_std = batch_kappas.std(dim=0).clamp_min(1e-7)
         else:
-            contrast_calib_mean = log_cosh(ipts).mean(dim=0)   # fallback: full-dataset
+            contrast_calib_mean = log_cosh(sources).mean(dim=0)   # fallback: full-dataset
             contrast_calib_std = torch.full((M,), 1e-7, device=self.device)
         return contrast_calib_mean, contrast_calib_std
 
-    def _compute_kappa_spike_based(self, ipts: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _compute_kappa_spike_based(self, sources: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Per-unit, spike-masked kappa mean/std via a per-batch loop (irregular masks).
 
         Args:
-            ipts (torch.Tensor): Calibration source signal with shape
+            sources (torch.Tensor): Calibration source signal with shape
                 (N_cal, M).
 
         Returns:
@@ -570,24 +589,24 @@ class Decomposition:
             contrast_calib_std, each with shape (M,).
         """
         from adapt_decomp.cbss.ica import log_cosh
-        M = ipts.shape[1]
+        M = sources.shape[1]
         batch_kappas = []
         # Seed kappa_b fallback with full-dataset spike-based estimate
         kappa_seed = torch.zeros(M, device=self.device)
         spikes = self.spikes_calib.to(self.device)
         for j in range(M):
-            ipts_j = ipts[spikes[:, j] == 1, j]
-            kappa_seed[j] = log_cosh(ipts_j).mean() if ipts_j.numel() > 0 else 0.0
+            sources_j = sources[spikes[:, j] == 1, j]
+            kappa_seed[j] = log_cosh(sources_j).mean() if sources_j.numel() > 0 else 0.0
 
         spikes_cal = self.spikes_calib.to(self.device)
-        for i in range(0, ipts.shape[0], self.batch_size):
-            batch = ipts[i : i + self.batch_size]
+        for i in range(0, sources.shape[0], self.batch_size):
+            batch = sources[i : i + self.batch_size]
             spikes_b = spikes_cal[i : i + self.batch_size]
             kappa_b = kappa_seed.clone()
             for j in range(M):
-                ipts_j = batch[spikes_b[:, j] == 1, j]
-                if ipts_j.numel() > 0:
-                    kappa_b[j] = log_cosh(ipts_j).mean()
+                sources_j = batch[spikes_b[:, j] == 1, j]
+                if sources_j.numel() > 0:
+                    kappa_b[j] = log_cosh(sources_j).mean()
             batch_kappas.append(kappa_b)
 
         if len(batch_kappas) >= 2:
@@ -614,12 +633,12 @@ class Decomposition:
         self.base_centr = self.base_centr_cal.clone()
         self.source_fifo: Optional[torch.Tensor] = None
 
-        ipts   = self.ipts_calib.to(self.device)    # [N_cal, M]
-        spikes = self.spikes_calib.to(self.device)  # [N_cal, M] int32
+        sources = self.sources_calib.to(self.device)  # [N_cal, M]
+        spikes = self.spikes_calib.to(self.device)     # [N_cal, M] int32
 
-        sources_det = ipts.abs().pow(self.spike_det_exp)
+        sources_det = sources.abs().pow(self.spike_det_exp)
 
-        M = ipts.shape[1]
+        M = sources.shape[1]
         Q75_cal = torch.zeros(M, dtype=torch.float32, device=self.device)
         IQR_cal = torch.zeros(M, dtype=torch.float32, device=self.device)
 
@@ -659,8 +678,9 @@ class AdaptationResult:
     Attributes:
         spikes (torch.Tensor): Binary spike train with shape (samples, M),
             int32.
-        ipts (torch.Tensor): Source signal (before the sv update, so outputs
-            are consistent across batches) with shape (samples, M), float32.
+        sources (torch.Tensor): Source signal (before the sv update, so
+            outputs are consistent across batches) with shape (samples, M),
+            float32.
         wh_time_ms (torch.Tensor): Per-batch whitening step time in ms, with
             shape (batches,).
         sv_time_ms (torch.Tensor): Per-batch separation-vector step time in
@@ -676,16 +696,14 @@ class AdaptationResult:
             (batches,). Set only when config.compute_loss is True.
         sv_loss (Optional[torch.Tensor]): Separation-vector contrast loss
             with shape (batches, M). Set only when config.compute_loss is True.
-        centroid_loss (Optional[torch.Tensor]): Centroid-separation loss with
-            shape (batches, M). Set only when config.compute_loss is True.
         wh_trace (Optional[torch.Tensor]): Trace of the whitened covariance
             with shape (batches,). Set only when config.compute_loss is True.
-        wh_loss_total (Optional[torch.Tensor]): Guarded scalar sum(wh_loss)
+        wh_loss_total (Optional[torch.Tensor]): Guarded scalar median(wh_loss)
             for the whole run -- see AdaptDecomp._compute_losses(). Set only
             when config.compute_loss is True.
         sv_loss_total (Optional[torch.Tensor]): Guarded scalar
-            sum(sv_loss.nansum(dim=1)) (per-batch sum across units, then
-            summed across batches) for the whole run -- see
+            median(sv_loss.nansum(dim=1)) (per-batch sum across units, then
+            medianed across batches) for the whole run -- see
             AdaptDecomp._compute_losses(). Set only when config.compute_loss
             is True.
         total_loss (Optional[torch.Tensor]): Guarded scalar score for the
@@ -705,10 +723,22 @@ class AdaptationResult:
             their own comparison (e.g.
             adapt_decomp.spikes.comparison.rate_of_agreement_paired), such
             as adaptation/optimize.py's optimize_adapt_decomp_pooled_memory(compute_roa=True).
+        sil (Optional[np.ndarray]): Per-unit silhouette score with shape
+            (M,), from the already-detected spike population against a
+            freshly found base-peak population over the full recording.
+            Mirrors roa's convention (per-unit, not built here) -- callers
+            set it after computing their own score (e.g.
+            adapt_decomp.spikes.metrics.get_sil). Same within/between
+            silhouette formula as
+            adapt_decomp.cbss.data_structure.CBSSResult.sil, with the spike
+            cluster taken from the already-known spike labels instead of
+            re-clustering -- see get_sil for the exact construction.
+        ipts (Optional[torch.Tensor]): Deprecated alias for sources, accepted
+            as a construction-time keyword only. Defaults to None. Raises
+            FutureWarning when given.
     """
 
     spikes: torch.Tensor
-    ipts: torch.Tensor
     preprocess_time_ms: torch.Tensor
     wh_time_ms: torch.Tensor
     sv_time_ms: torch.Tensor
@@ -716,7 +746,6 @@ class AdaptationResult:
     total_time_ms: torch.Tensor
     wh_loss: Optional[torch.Tensor] = None
     sv_loss: Optional[torch.Tensor] = None
-    centroid_loss: Optional[torch.Tensor] = None
     wh_trace: Optional[torch.Tensor] = None
     wh_loss_total: Optional[torch.Tensor] = None
     sv_loss_total: Optional[torch.Tensor] = None
@@ -724,6 +753,35 @@ class AdaptationResult:
     diagnostics: Optional[Dict[Any, Any]] = None
     gt_matched_indices: Optional[np.ndarray] = None
     roa: Optional[np.ndarray] = None
+    sil: Optional[np.ndarray] = None
+    # sources is logically required; Optional only so construction-time
+    # validation (see __post_init__) can run before enforcing that, which
+    # is what lets the deprecated ipts= alias satisfy it. Kept last (not in
+    # its old, required, second-field position) since a dataclass field with
+    # a default cannot precede one without -- see __post_init__.
+    sources: Optional[torch.Tensor] = None
+    ipts: Optional[torch.Tensor] = None  # deprecated alias for sources
+
+    def __post_init__(self) -> None:
+        """Resolve the deprecated ipts alias into sources.
+
+        Returns:
+            None
+
+        Raises:
+            ValueError: If neither sources nor the deprecated ipts was given.
+        """
+        if self.ipts is not None:
+            warnings.warn(
+                "AdaptationResult's 'ipts' field is deprecated and will be "
+                "removed in a future version; use 'sources' instead.",
+                FutureWarning, stacklevel=2,
+            )
+            if self.sources is None:
+                self.sources = self.ipts
+            self.ipts = None
+        if self.sources is None:
+            raise ValueError("AdaptationResult requires 'sources' (or deprecated 'ipts').")
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to a plain dict, omitting fields that are still None.
@@ -738,7 +796,7 @@ class AdaptationResult:
         """
         out: Dict[str, Any] = {
             "spikes": self.spikes,
-            "ipts": self.ipts,
+            "sources": self.sources,
             "preprocess_time_ms": self.preprocess_time_ms,
             "wh_time_ms": self.wh_time_ms,
             "sv_time_ms": self.sv_time_ms,
@@ -746,9 +804,9 @@ class AdaptationResult:
             "total_time_ms": self.total_time_ms,
         }
         for key in (
-            "wh_loss", "sv_loss", "centroid_loss", "wh_trace",
+            "wh_loss", "sv_loss", "wh_trace",
             "wh_loss_total", "sv_loss_total", "total_loss",
-            "diagnostics", "gt_matched_indices", "roa",
+            "diagnostics", "gt_matched_indices", "roa", "sil",
         ):
             value = getattr(self, key)
             if value is not None:

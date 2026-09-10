@@ -196,4 +196,5 @@ cython_debug/
 data/
 wandb/
 archive/
-notebooks/
+.claude/
+.vscode/

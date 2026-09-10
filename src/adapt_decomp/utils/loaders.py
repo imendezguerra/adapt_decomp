@@ -131,7 +131,12 @@ def load_example(
         (samples, channels)), "gt_full_bin" (Optional[np.ndarray], paired to
         cbss_result's units), "roa_calib" (Optional[np.ndarray], per-unit
         rate of agreement at the calibration window), "preprocess" (bool),
-        "fs" (int).
+        "fs" (int), "timestamps" (np.ndarray, shape (samples,), seconds),
+        "angle_profile" (np.ndarray, shape (samples,), wrist angle in
+        degrees), "force_profile" (np.ndarray, shape (samples,), force
+        profile), "ch_map" (np.ndarray, shape (rows, cols), raw-channel
+        electrode grid layout) -- these are context/plotting fields, read
+        straight from path_emg's own neuromotion fields.
     """
     from adapt_decomp.cbss.config import CBSSConfig
 
@@ -159,6 +164,10 @@ def load_example(
         "roa_calib": roa_calib,
         "preprocess": preprocess,
         "fs": int(sim_data["fs"]),
+        "timestamps": np.asarray(sim_data["timestamps"]),
+        "angle_profile": np.asarray(sim_data["angle_profile"]),
+        "force_profile": np.asarray(sim_data["force_profile"]),
+        "ch_map": np.asarray(sim_data["ch_map"]),
     }
 
 

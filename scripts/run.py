@@ -215,7 +215,7 @@ def _run_optuna(adapt_config, data_config, wandb_project_name, optim_config,
         wandb_project_name: WandB project name, used only if no wandb run is active yet.
         optim_config: Path to Optuna search-settings YAML.
         objective: Overrides optim_config's own objective. None -> optim_config's value,
-            else "total_loss".
+            else "sv_loss".
         n_trials: Overrides optim_config's own n_trials. None -> optim_config's value,
             else 100.
         best_result_path: Directory to save the winning trial's AdaptationResult/config/
@@ -232,7 +232,7 @@ def _run_optuna(adapt_config, data_config, wandb_project_name, optim_config,
 
     optim_settings = load_yaml(optim_config)
     param_space = {k: tuple(v) for k, v in optim_settings.get("param_space", {}).items()}
-    resolved_objective = objective if objective is not None else optim_settings.get("objective", "total_loss")
+    resolved_objective = objective if objective is not None else optim_settings.get("objective", "sv_loss")
     resolved_n_trials = n_trials if n_trials is not None else optim_settings.get("n_trials", 100)
     resolved_n_jobs = optim_settings.get("n_jobs", 1)
     resolved_random_seed = optim_settings.get("random_seed", 1909)
@@ -281,7 +281,7 @@ def run_optuna(
     ),
     objective: Optional[ObjectiveName] = typer.Option(
         None, "--objective",
-        help="Overrides optim_config's own objective if set. Falls back to total_loss if "
+        help="Overrides optim_config's own objective if set. Falls back to sv_loss if "
              "neither is set.",
     ),
     n_trials: Optional[int] = typer.Option(

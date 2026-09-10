@@ -324,7 +324,7 @@ def _run_one_dataset(
 def optimize_adapt_decomp_pooled_memory(
     *,
     pool: Dict[str, PooledDatasetMemory],
-    objective: ObjectiveName = "total_loss",
+    objective: ObjectiveName = "sv_loss",
     base_config: Optional[AdaptConfig] = None,
     compute_roa: bool = False,
     roa_kwargs: Optional[dict] = None,
@@ -353,7 +353,7 @@ def optimize_adapt_decomp_pooled_memory(
         objective (ObjectiveName, optional): Which scalar to score a trial
             on, "sv_loss", "wh_loss", "total_loss", or "roa" (implies
             compute_roa=True and requires every dataset's gt_paired_bin).
-            Defaults to "total_loss".
+            Defaults to "sv_loss".
         base_config (Optional[AdaptConfig], optional): Resolved base
             AdaptConfig instance each trial/dataset is deep-copied from,
             before param_space overrides are applied. Defaults to None,
@@ -542,7 +542,7 @@ def optimize_adapt_decomp_pooled_memory(
 def optimize_adapt_decomp_pooled_disk(
     *,
     pool: Dict[str, PooledDatasetDisk],
-    objective: ObjectiveName = "total_loss",
+    objective: ObjectiveName = "sv_loss",
     base_config: Optional[AdaptConfig] = None,
     compute_roa: bool = False,
     roa_kwargs: Optional[dict] = None,
@@ -568,7 +568,7 @@ def optimize_adapt_decomp_pooled_disk(
             PooledDatasetDisk.resolve() at the start of each dataset's run
             every trial. Every dataset is evaluated on every trial.
         objective (ObjectiveName, optional): See optimize_adapt_decomp_pooled_memory.
-            Defaults to "total_loss".
+            Defaults to "sv_loss".
         base_config (Optional[AdaptConfig], optional): Resolved base
             AdaptConfig each trial/dataset is deep-copied from. Defaults
             to None, which uses AdaptConfig().

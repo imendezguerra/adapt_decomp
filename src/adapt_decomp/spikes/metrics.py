@@ -24,7 +24,7 @@ def _check_mu_format(data: np.ndarray) -> np.ndarray:
 
 def firings_to_spikes(
     firings: Union[np.ndarray, List[np.ndarray]],
-    ipts: np.ndarray,
+    sources: np.ndarray,
     matlab_index: bool = False,
 ) -> np.ndarray:
     """Convert per-unit firing sample indices to a dense binary spike matrix.
@@ -33,16 +33,16 @@ def firings_to_spikes(
         firings (Union[np.ndarray, List[np.ndarray]]): One array of firing
             sample indices per motor unit (e.g. as loaded from a MATLAB
             decomposition struct via scipy.io.loadmat).
-        ipts (np.ndarray): Innervated pulse trains with shape (units,
-            samples), used only as a shape/dtype template for the output.
+        sources (np.ndarray): Source signals with shape (units, samples),
+            used only as a shape/dtype template for the output.
         matlab_index (bool, optional): Whether firings uses 1-based (MATLAB)
             indexing, which is converted to 0-based. Defaults to False.
 
     Returns:
         np.ndarray: Binary spike matrix with shape (units, samples), same
-        shape as ipts.
+        shape as sources.
     """
-    spikes = np.zeros_like(ipts)
+    spikes = np.zeros_like(sources)
     for i, firing in enumerate(firings):
         if matlab_index:
             firing = firing - 1
@@ -131,13 +131,13 @@ def get_muaps(
 
 def get_base_and_spike_vals(
     spike_train: torch.Tensor,
-    ipt2: torch.Tensor,
+    sources_sq: torch.Tensor,
     ext_fact: int,
     min_dist: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return (base_vals, spike_vals) for one unit from squared source."""
     # Use the canonical multi-source peak finder on a single [T, 1] view
-    peak_mask, _ = find_peaks_multisource(ipt2.unsqueeze(1), min_dist)
+    peak_mask, _ = find_peaks_multisource(sources_sq.unsqueeze(1), min_dist)
     peak_idx = peak_mask[:, 0].nonzero(as_tuple=True)[0]
     peak_idx = peak_idx[peak_idx >= ext_fact + 1]
 
@@ -150,23 +150,23 @@ def get_base_and_spike_vals(
         base_idx = (~spike_mask).nonzero(as_tuple=True)[0]
         base_idx = base_idx[base_idx >= ext_fact + 1]
 
-    return ipt2[base_idx], ipt2[spike_idx]
+    return sources_sq[base_idx], sources_sq[spike_idx]
 
 
 def get_pulse_to_noise_ratio(
     spike_trains: torch.Tensor,
-    ipts: torch.Tensor,
+    sources: torch.Tensor,
     ext_fact: int,
     min_peak_dist: int = 0,
 ) -> torch.Tensor:
     """Pulse-to-noise ratio in dB using resolved spike-train labels."""
-    ipts2 = ipts ** 2
+    sources_sq = sources ** 2
     n_mu = spike_trains.shape[1]
-    pnr = torch.full((n_mu,), float("nan"), dtype=ipts.dtype, device=ipts.device)
+    pnr = torch.full((n_mu,), float("nan"), dtype=sources.dtype, device=sources.device)
     min_dist = max(1, int(min_peak_dist))
     for unit in range(n_mu):
         base_vals, spike_vals = get_base_and_spike_vals(
-            spike_trains[:, unit], ipts2[:, unit], ext_fact, min_dist
+            spike_trains[:, unit], sources_sq[:, unit], ext_fact, min_dist
         )
         if spike_vals.numel() == 0 or base_vals.numel() == 0:
             continue
@@ -228,5 +228,57 @@ def emg_to_ch_array(emg: torch.Tensor, ch_map: np.ndarray | torch.Tensor) -> tor
     valid = ch_map_t >= 0
     ch_array[valid, :] = emg[:, ch_map_t[valid]].T
     return ch_array
+
+
+def get_sil(
+    sources: torch.Tensor,
+    spike_trains: torch.Tensor,
+    min_dist: int,
+    peak_power: float = 2.0,
+    use_abs: bool = False,
+) -> torch.Tensor:
+    """Per-unit silhouette score, spike labels reused, base peaks freshly found.
+
+    Args:
+        sources (torch.Tensor): Source signals with shape (samples, M).
+        spike_trains (torch.Tensor): Binary spike train with shape
+            (samples, M), same shape as sources.
+        min_dist (int): Minimum sample distance between base peaks, forwarded
+            to find_peaks_multisource's NMS window.
+        peak_power (float, optional): Power to raise the source to before
+            scoring -- squares by default, matching
+            CBSSConfig/AdaptConfig.spike_det_exp. Defaults to 2.0.
+        use_abs (bool, optional): Whether to use the absolute value of the
+            source before raising to peak_power. Defaults to False.
+
+    Returns:
+        torch.Tensor: Per-unit silhouette score with shape (M,).
+    """
+    n_mu = sources.shape[1]
+    sil = torch.full((n_mu,), float("nan"), dtype=sources.dtype, device=sources.device)
+    for unit in range(n_mu):
+        source = sources[:, unit]
+        source_p = source.abs().pow(peak_power) if use_abs else source.pow(peak_power)
+
+        spike_idx = spike_trains[:, unit].nonzero(as_tuple=True)[0]
+        spike_vals = source_p[spike_idx]
+
+        peak_mask, peak_values = find_peaks_multisource(source.unsqueeze(1), min_dist, peak_power, use_abs)
+        peaks = peak_mask[:, 0].nonzero(as_tuple=True)[0]
+        is_spike = torch.isin(peaks, spike_idx)
+        base_vals = peak_values[peaks[~is_spike], 0]
+        if base_vals.numel() == 0:
+            # No non-spike peaks found, fall back to every non-peak sample
+            base_vals = source_p[~peak_mask[:, 0]]
+
+        if spike_vals.numel() == 0 or base_vals.numel() == 0:
+            sil[unit] = 0.0
+            continue
+        spike_centroid, base_centroid = spike_vals.median(), base_vals.median()
+        within = ((spike_vals - spike_centroid) ** 2).sum()
+        between = ((spike_vals - base_centroid) ** 2).sum()
+        denom = max(within, between)
+        sil[unit] = (between - within) / denom if denom > 0 else 0.0
+    return sil
 
 

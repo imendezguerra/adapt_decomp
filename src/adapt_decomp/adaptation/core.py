@@ -117,7 +117,7 @@ class AdaptDecomp:
             base_centr=tensors["base_centr"],
             spikes_centr=tensors["spikes_centr"],
             emg_calib=tensors["emg_calib"],
-            ipts_calib=tensors["ipts_calib"],
+            sources_calib=tensors["sources_calib"],
             spikes_calib=tensors["spikes_calib"],
             adapt_config=adapt_config,
             save_path=save_path,
@@ -226,13 +226,15 @@ class AdaptDecomp:
         base_centr: torch.Tensor,
         spikes_centr: torch.Tensor,
         emg_calib: torch.Tensor,
-        ipts_calib: torch.Tensor,
         spikes_calib: torch.Tensor,
         adapt_config: Optional[AdaptConfig] = None,
         save_path: Optional[str] = None,
         pca_components: Optional[torch.Tensor] = None,
         pca_mean: Optional[torch.Tensor] = None,
         emg: Optional[Union[torch.Tensor, np.ndarray]] = None,
+        *,
+        sources_calib: Optional[torch.Tensor] = None,
+        ipts_calib: Optional[torch.Tensor] = None,
     ) -> None:
         """Build the decomposition model. Never touches emg, except a deprecated v1-compatible path (see emg).
 
@@ -242,7 +244,6 @@ class AdaptDecomp:
             base_centr (torch.Tensor): Calibration baseline centroids.
             spikes_centr (torch.Tensor): Calibration spike centroids.
             emg_calib (torch.Tensor): Raw, unextended calibration EMG.
-            ipts_calib (torch.Tensor): Calibration source signal.
             spikes_calib (torch.Tensor): Calibration binary spike train.
             adapt_config (Optional[AdaptConfig], optional): Online
                 adaptation configuration. Defaults to None, which builds
@@ -261,10 +262,31 @@ class AdaptDecomp:
                 recommended way to construct; process_data()/init_data()
                 are the only places emg should otherwise enter. Raises
                 FutureWarning when given.
+            sources_calib (Optional[torch.Tensor], optional): Calibration
+                source signal, keyword-only. Required -- Optional only so the
+                deprecated ipts_calib alias below can still satisfy it.
+                Defaults to None.
+            ipts_calib (Optional[torch.Tensor], optional): Deprecated alias
+                for sources_calib. Defaults to None. Raises FutureWarning
+                when given.
+
+        Raises:
+            ValueError: If neither sources_calib nor ipts_calib is given.
 
         Returns:
             None
         """
+        if ipts_calib is not None:
+            warnings.warn(
+                "'ipts_calib' is deprecated and will be removed in a future "
+                "version; use 'sources_calib' instead.",
+                FutureWarning, stacklevel=2,
+            )
+            if sources_calib is None:
+                sources_calib = ipts_calib
+        if sources_calib is None:
+            raise ValueError("sources_calib is required.")
+
         # Get config
         if adapt_config is None:
             adapt_config = AdaptConfig()
@@ -282,8 +304,9 @@ class AdaptDecomp:
         # Build decomposition object
         self.decomp = Decomposition(
             whitening, sep_vectors, base_centr, spikes_centr,
-            emg_calib, ipts_calib, spikes_calib, self.config,
+            emg_calib, spikes_calib, config=self.config,
             pca_components=pca_components, pca_mean=pca_mean,
+            sources_calib=sources_calib,
         )
         self.save_path = save_path
         self.diagnostics: dict = {}
@@ -416,9 +439,9 @@ class AdaptDecomp:
                     "spikes_centr": self.decomp.spikes_centr.cpu().numpy(),
                 })
 
-            spikes, ipts = self.process_batch(emg_batch, i_t)
+            spikes, sources = self.process_batch(emg_batch, i_t)
             self._spikes_accum.append(spikes)
-            self._sources_accum.append(ipts)
+            self._sources_accum.append(sources)
 
         self._finalize_accumulators()
         if self.config.compute_loss:
@@ -465,7 +488,7 @@ class AdaptDecomp:
         emg_batch is already extended and only the first batch's leading
         ext_fact rows are trimmed; when False, emg_batch is raw and is
         filtered/channel-selected/centred/extended by
-        _preprocess_batch_raw. Either way, the returned (spikes, ipts)
+        _preprocess_batch_raw. Either way, the returned (spikes, sources)
         always have emg_batch.shape[0] rows (as called), zero-padded at
         the leading rows a batch's own trim discarded.
 
@@ -477,9 +500,9 @@ class AdaptDecomp:
                 sequential index, starting at 0.
 
         Returns:
-            Tuple[torch.Tensor, torch.Tensor]: spikes and ipts, both shape
-            (N, M). ipts is sources from before the sv update so outputs
-            are consistent across batches.
+            Tuple[torch.Tensor, torch.Tensor]: spikes and sources, both shape
+            (N, M). sources is the source signal from before the sv update
+            so outputs are consistent across batches.
         """
         N_called = emg_batch.shape[0]
 
@@ -1029,7 +1052,7 @@ class AdaptDecomp:
             contrast error and the update together inside the fixed-point
             loop, so there's no separate "compute the error" call to share
             with the adapt_sv=False path.
-            Does not change the sources process_batch returns: ipts is
+            Does not change the sources process_batch returns: sources is
             always the pre-update sources, so outputs stay consistent
             across batches.
         """
@@ -1182,7 +1205,7 @@ class AdaptDecomp:
             None
         """
         self.spikes = self._cat_list(self._spikes_accum, (0, self.units), dtype=torch.int32)
-        self.ipts = self._cat_list(self._sources_accum, (0, self.units), dtype=torch.float32)
+        self.sources = self._cat_list(self._sources_accum, (0, self.units), dtype=torch.float32)
         if self.config.compute_loss:
             self.wh_loss = torch.tensor(self.wh_loss, dtype=torch.float32, device=self.config.device)
             self.sv_loss = self._stack_list(self.sv_loss, (0, self.units))
@@ -1201,11 +1224,11 @@ class AdaptDecomp:
 
         Returns:
             torch.Tensor: torch.stack(values), or torch.zeros(empty_shape)
-            when values is empty.
+            when values is empty. Always moved to self.config.device.
         """
         if not values:
             return torch.zeros(empty_shape, dtype=torch.float32, device=self.config.device)
-        return torch.stack(values)
+        return torch.stack(values).to(device=self.config.device)
 
     def _cat_list(
         self, values: list, empty_shape: Tuple[int, ...], dtype: torch.dtype = torch.float32
@@ -1252,7 +1275,7 @@ class AdaptDecomp:
 
         Always present:
             spikes          [samples, M]    int32   — binary spike train
-            ipts            [samples, M]    float32 — source signal before sv update
+            sources         [samples, M]    float32 — source signal before sv update
             wh_time_ms      [batches]       float32
             sv_time_ms      [batches]       float32
             sd_time_ms      [batches]       float32
@@ -1262,7 +1285,6 @@ class AdaptDecomp:
         Present when config.compute_loss=True:
             wh_loss         [batches]       float32
             sv_loss         [batches, M]    float32
-            centroid_loss   [batches, M]    float32
             wh_trace        [batches]       float32
             wh_loss_total   scalar          float32 — see _compute_losses()
             sv_loss_total   scalar          float32 — see _compute_losses()
@@ -1278,7 +1300,7 @@ class AdaptDecomp:
         """
         result = AdaptationResult(
             spikes=self.spikes.detach().cpu().clone(),
-            ipts=self.ipts.detach().cpu().clone(),
+            sources=self.sources.detach().cpu().clone(),
             wh_time_ms=self.time_wh_ms,
             sv_time_ms=self.time_sv_ms,
             sd_time_ms=self.time_sd_ms,
@@ -1291,8 +1313,6 @@ class AdaptDecomp:
             result.wh_loss = self.wh_loss.detach().cpu().clone()
         if hasattr(self, "sv_loss"):
             result.sv_loss = self.sv_loss.detach().cpu().clone()
-        if hasattr(self, "centroid_loss"):
-            result.centroid_loss = self.centroid_loss.detach().cpu().clone()
         if hasattr(self, "wh_trace"):
             result.wh_trace = self.wh_trace.detach().cpu().clone()
         if hasattr(self, "wh_loss_total"):

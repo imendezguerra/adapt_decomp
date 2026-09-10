@@ -5,7 +5,7 @@ from __future__ import annotations
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
 import torch
@@ -36,8 +36,20 @@ class CBSSResult:
     gt_matched_indices: Optional[np.ndarray] = None  # [n_mu] index into GT units after supervised selection
     roa: Optional[np.ndarray] = None                 # [n_mu] RoA vs gt_matched_indices, set by select_supervised
 
-    def to_dict(self) -> Dict:
-        return {
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialise to a plain dict, omitting fields that are still None.
+
+        Mirrors AdaptationResult.to_dict()'s convention -- __getitem__/
+        __contains__/get() below delegate to this, so a field only shows up in
+        the dict-style view once it has actually been set (e.g. muaps only
+        after MUAP extraction, roa/gt_matched_indices only after
+        select_supervised).
+
+        Returns:
+            Dict[str, Any]: Mapping of field name to value, for every field
+            that is not None.
+        """
+        out: Dict[str, Any] = {
             "sources": self.sources,
             "spikes": self.spikes,
             "spikes_dict": self.spikes_dict,
@@ -49,16 +61,15 @@ class CBSSResult:
             "spikes_centr": self.spikes_centr,
             "base_centr": self.base_centr,
             "ext_fact": self.ext_fact,
-            "pca_components": self.pca_components,
-            "pca_mean": self.pca_mean,
-            "pnr": self.pnr,
-            "dr": self.dr,
-            "muaps": self.muaps,
-            "emg": self.emg,
-            "timestamps": self.timestamps,
-            "gt_matched_indices": self.gt_matched_indices,
-            "roa": self.roa,
         }
+        for key in (
+            "pca_components", "pca_mean", "pnr", "dr", "muaps",
+            "emg", "timestamps", "gt_matched_indices", "roa",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                out[key] = value
+        return out
 
     # ------------------------------------------------------------------
     # Conversion for online adaptation
@@ -70,7 +81,7 @@ class CBSSResult:
         Returns:
             Dict[str, Optional[torch.Tensor]]: "whitening", "sep_vectors"
             ([n_mu, dim], transposed from this result's stored [dim, n_mu]),
-            "base_centr", "spikes_centr", "emg_calib", "ipts_calib",
+            "base_centr", "spikes_centr", "emg_calib", "sources_calib",
             "spikes_calib", and "pca_components"/"pca_mean" (None if this
             calibration did not use PCA reduction).
 
@@ -96,7 +107,7 @@ class CBSSResult:
             "base_centr": _t(self.base_centr),
             "spikes_centr": _t(self.spikes_centr),
             "emg_calib": _t(self.emg),
-            "ipts_calib": _t(self.sources),
+            "sources_calib": _t(self.sources),
             "spikes_calib": _t(self.spikes),
             "pca_components": _t(self.pca_components) if self.pca_components is not None else None,
             "pca_mean": _t(self.pca_mean) if self.pca_mean is not None else None,
@@ -342,3 +353,45 @@ class CBSSResult:
         subset.gt_matched_indices = gt_matched[mask].astype(np.int64)
         subset.roa = roa_by_dec_idx[mask]
         return subset
+
+    # ------------------------------------------------------------------
+    # Dict-style access
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, key: str) -> Any:
+        """Dict-style subscript access, delegating to to_dict().
+
+        Args:
+            key (str): Field name.
+
+        Returns:
+            Any: The field's value.
+
+        Raises:
+            KeyError: If key is not a set field.
+        """
+        return self.to_dict()[key]
+
+    def __contains__(self, key: str) -> bool:
+        """Check whether key is a set (non-None) field.
+
+        Args:
+            key (str): Field name.
+
+        Returns:
+            bool: True if key is present in to_dict().
+        """
+        return key in self.to_dict()
+
+    def get(self, key: str, default: Optional[Any] = None) -> Any:
+        """Dict-style .get(), delegating to to_dict().
+
+        Args:
+            key (str): Field name.
+            default (Optional[Any], optional): Value to return if key is not
+                set. Defaults to None.
+
+        Returns:
+            Any: The field's value, or default.
+        """
+        return self.to_dict().get(key, default)

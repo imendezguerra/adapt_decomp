@@ -44,7 +44,7 @@ def test_to_adapt_tensors_transposes_sep_vectors_and_matches_shapes():
     np.testing.assert_allclose(tensors["sep_vectors"].numpy(), result.sep_vectors.T)
     assert tensors["whitening"].shape == (D, D)
     assert tensors["emg_calib"].shape == (T, C)
-    assert tensors["ipts_calib"].shape == (T, n_mu)
+    assert tensors["sources_calib"].shape == (T, n_mu)
     assert tensors["spikes_calib"].shape == (T, n_mu)
     assert tensors["pca_components"] is None
     assert tensors["pca_mean"] is None
@@ -60,6 +60,41 @@ def test_to_adapt_tensors_raises_if_emg_not_set():
     result.emg = None
     with pytest.raises(ValueError, match="emg"):
         result.to_adapt_tensors()
+
+
+def test_to_dict_omits_none_fields():
+    """to_dict() should include every required field plus only the optional
+    fields that are actually set -- pnr/dr/muaps/gt_matched_indices/roa stay
+    unset on a plain CBSS.decompose() result, so they should be absent."""
+    result = _make_result()
+
+    d = result.to_dict()
+
+    for key in ("sources", "spikes", "spikes_dict", "sil", "cov_isi", "sep_vectors",
+                "whitening", "extension_mean", "spikes_centr", "base_centr", "ext_fact",
+                "emg", "timestamps"):
+        assert key in d
+    for key in ("pca_components", "pca_mean", "pnr", "dr", "muaps", "gt_matched_indices", "roa"):
+        assert key not in d
+
+
+def test_dict_style_access_mirrors_to_dict():
+    """__getitem__/__contains__/get() should delegate to to_dict(), so a field
+    is only "in" the result once it has actually been set."""
+    result = _make_result()
+
+    assert result["sources"] is result.sources
+    assert "roa" not in result
+    assert result.get("roa") is None
+    assert result.get("roa", "default") == "default"
+    with pytest.raises(KeyError):
+        result["roa"]
+
+    result.roa = np.full(3, 0.95, dtype=np.float32)
+
+    assert "roa" in result
+    assert result["roa"] is result.roa
+    assert result.get("roa") is result.roa
 
 
 def test_cbss_result_save_load_roundtrip(tmp_path):

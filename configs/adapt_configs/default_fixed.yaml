@@ -21,7 +21,7 @@ batch_ms: 100                     # Batch duration (ms); batch_size = batch_ms Ã
 adapt_wh: false                   # Do not adapt whitening matrix V
 adapt_sv: false                   # Do not adapt separation matrix B
 adapt_sd: false                   # Do not adapt spike / base centroids
-compute_loss: true                # Log wh_loss, sv_loss, centroid_loss, wh_trace each batch
+compute_loss: true                # Log wh_loss, sv_loss, wh_trace each batch
 save_params: false                # Save newly adapted parameters per batch (HDF5)
 
 # Main adaptation hyperparameters (unused: adapt_wh/adapt_sv are false)

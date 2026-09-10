@@ -1,9 +1,4 @@
 # Pooled data_config for the lazy, memory-lean optimizer
-# (optimize_adapt_decomp_pooled_disk): identical to fdsi_pool_memory_example.yaml,
-# except each dataset also lists path_calib_config (needed by
-# AdaptDecomp.from_calibration()) and every path is read fresh per trial
-# instead of preloaded once for the whole search -- see
-# optimize_adapt_decomp_pooled_disk's docstring for the memory/IO tradeoff.
 
 root: 'C:/Users/Irene/Documents/work_local/fdsi_benchmark'  # Base directory
 loader: 'load_pooled_cbss_disk'                             # Loading function to use

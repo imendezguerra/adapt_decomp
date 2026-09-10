@@ -1,6 +1,6 @@
 # Default wandb parameter space, for scripts/run.py's run_wandb command.
 
-sweep_counts: 20  # Overridable via run_wandb's --sweep_counts; popped before being
+sweep_counts: 100  # Overridable via run_wandb's --sweep_counts; popped before being
                   # passed to wandb.sweep() itself, which doesn't know this key.
 
 method: "bayes"  # Bayesian optimization for efficient searching

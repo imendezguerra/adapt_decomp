@@ -68,7 +68,7 @@ class H5ParamsBatchWriter:
         data = {}
         with h5py.File(self.path, 'r') as f:
             for key in f.keys():
-                data[key] = f[key][:]
+                data[key] = f[key][()]
         return data
 
 def load_output(path: str) -> Dict:
@@ -82,5 +82,5 @@ def load_output(path: str) -> Dict:
     outputs = {}
     with h5py.File(path, 'r') as f:
         for key in f.keys():
-            outputs[key] = f[key][:]
+            outputs[key] = f[key][()]
     return outputs
