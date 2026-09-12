@@ -1,6 +1,6 @@
 # Pooled data_config for the lazy, memory-lean optimizer
 
-root: 'C:/Users/Irene/Documents/work_local/fdsi_benchmark'  # Base directory
+root: 'data/fdsi_benchmark'  # Base directory
 loader: 'load_pooled_cbss_disk'                             # Loading function to use
 preprocess: true                                            # Default for every dataset below (overridable per-dataset)
 # calib_loader: class    # Optional; default for every dataset below (overridable per-dataset)

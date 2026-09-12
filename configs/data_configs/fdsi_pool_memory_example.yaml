@@ -1,6 +1,6 @@
 # data_config for optimize_adapt_decomp_pooled_memory
 
-root: 'C:/Users/Irene/Documents/work_local/fdsi_benchmark'  # Base directory
+root: '../../data/fdsi_benchmark'  # Base directory, relative to notebooks/fdsi_benchmark/ (03a/03b/03c's cwd)
 loader: 'load_pooled_cbss_memory'                           # Loading function to use
 preprocess: true                                            # Default for every dataset below (overridable per-dataset)
 # calib_loader: class    # Optional; default for every dataset below (overridable per-dataset)

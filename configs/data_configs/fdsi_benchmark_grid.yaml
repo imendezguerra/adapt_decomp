@@ -1,6 +1,6 @@
 # Benchmark grid for notebooks/fdsi_benchmark/
 
-fdsi_root: 'C:\Users\Irene\Documents\work_local\fdsi_benchmark'  # calibration/adaptation cache root
+fdsi_root: '../../data/fdsi_benchmark'  # calibration/adaptation cache root, relative to notebooks/fdsi_benchmark/
 
 fs: 2048                  # Sampling frequency (Hz)
 ext_fact: 10               # Extension factor used across the benchmark's calibrations

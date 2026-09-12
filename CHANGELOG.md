@@ -95,6 +95,8 @@ paths, config formats, and the CLI have all changed (see Migration below).
 
 ### Migration from 0.1.0
 
+- See `notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb` for
+  a worked example of porting old code to the new pipeline.
 - Replace any `from adapt_decomp.config import ...` /
   `from adapt_decomp.loaders import ...` / etc. with the new subpackage
   paths (e.g. `from adapt_decomp.adaptation.config import ...`,

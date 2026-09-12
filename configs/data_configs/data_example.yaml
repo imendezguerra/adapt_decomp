@@ -1,5 +1,5 @@
 # Single-recording data_config
-root: 'data/JNE_data/sim'                     # Base directory
+root: 'data/neuromotion'                      # Base directory
 loader: 'load_example'                        # Loading function to use
 preprocess: false                             # Whether to preprocess the data
 
