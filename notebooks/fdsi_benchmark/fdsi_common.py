@@ -1,7 +1,7 @@
 """Benchmark-specific glue for the notebooks/fdsi_benchmark/ showcase; not part of the
 installed adapt_decomp package. Path builders and RoA/SIL/phase aggregation (reading
 already-computed results back off disk into tidy DataFrames for plotting) for the FDSI
-benchmark's fixed data/calibration/adaptation directory layout. The CBSS/AdaptDecomp calls
+benchmark's fixed data/ (raw) and outputs/{calibration,adaptation}/ (generated) layout. The CBSS/AdaptDecomp calls
 that produce those results live in the notebooks themselves, not here.
 """
 
@@ -42,7 +42,7 @@ def calibration_paths(cal_dir: Path, sub: str, cond: str, snr: int) -> Tuple[Pat
     """Cached calibration result/config paths for one recording.
 
     Args:
-        cal_dir (Path): Calibration cache root (FDSI_ROOT/calibration).
+        cal_dir (Path): Calibration cache root (<dataset>/outputs/calibration).
         sub (str): Subject id.
         cond (str): Condition name.
         snr (int): SNR level in dB.
@@ -59,7 +59,7 @@ def fixed_paths(adapt_dir: Path, sub: str, cond: str, snr: int) -> Tuple[Path, P
     """Cached fixed-adaptation (no-adaptation baseline) result/config paths.
 
     Args:
-        adapt_dir (Path): Adaptation cache root (FDSI_ROOT/adaptation).
+        adapt_dir (Path): Adaptation cache root (<dataset>/outputs/adaptation).
         sub (str): Subject id.
         cond (str): Condition name.
         snr (int): SNR level in dB.
@@ -77,7 +77,7 @@ def adapted_paths(adapt_dir: Path, sub: str, cond: str, snr: int, lr_mode: str,
     """Cached applied-adaptation result/config paths for one winning config.
 
     Args:
-        adapt_dir (Path): Adaptation cache root (FDSI_ROOT/adaptation).
+        adapt_dir (Path): Adaptation cache root (<dataset>/outputs/adaptation).
         sub (str): Subject id.
         cond (str): Condition name.
         snr (int): SNR level in dB.
@@ -98,7 +98,7 @@ def gt_spikes_path(data_dir: Path, sub: str, cond: str) -> Path:
     """Path to one condition's clean-recording ground-truth spikes .npz.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
 
@@ -114,7 +114,7 @@ def load_raw_emg(data_dir: Path, sub: str, cond: str, snr: int) -> np.ndarray:
     """Load raw noisy EMG for one FDSI recording.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
         snr (int): SNR level in dB.
@@ -134,7 +134,7 @@ def load_angle_profile(data_dir: Path, sub: str, cond: str) -> np.ndarray:
     condition's EMG at every SNR level.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
 
@@ -152,7 +152,7 @@ def load_effort_profile(data_dir: Path, sub: str, cond: str) -> np.ndarray:
     directly off its own npz key.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
 
@@ -167,7 +167,7 @@ def load_clean_emg(data_dir: Path, sub: str, cond: str) -> np.ndarray:
     """Load the noiseless simulated EMG for one condition.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
 
@@ -182,7 +182,7 @@ def load_recording_metadata(data_dir: Path, sub: str, cond: str) -> Dict:
     """Load one condition's clean-recording metadata (muscle model, grid, MU pool, ...).
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
 
@@ -198,7 +198,7 @@ def load_noise_metadata(data_dir: Path, sub: str, cond: str, snr: int) -> Dict:
     """Load one noisy recording's noise-injection metadata (target/realised SNR, seed).
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
         snr (int): SNR level in dB.
@@ -259,7 +259,7 @@ def load_gt_full_bin(data_dir: Path, sub: str, cond: str, cbss_result: CBSSResul
     """Ground-truth spikes for one recording, matched/sliced to this calibration's units.
 
     Args:
-        data_dir (Path): Data root (FDSI_ROOT/data).
+        data_dir (Path): Data root (<dataset>/data).
         sub (str): Subject id.
         cond (str): Condition name.
         cbss_result (CBSSResult): This recording's calibration.

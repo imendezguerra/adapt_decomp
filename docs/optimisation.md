@@ -153,8 +153,8 @@ preprocess: true
 datasets:
   - name: triangular-ramp40s
     path_emg: 'data/sub-01/noisy/..._emg.npz'
-    path_calib: 'calibration/sub-01/..._cbss.pkl'
-    path_calib_config: 'calibration/sub-01/..._cbss_config.yaml'
+    path_calib: 'outputs/calibration/sub-01/..._cbss.pkl'
+    path_calib_config: 'outputs/calibration/sub-01/..._cbss_config.yaml'
     path_gt: 'data/sub-01/clean/..._spikes.npz'   # optional -- omit for no RoA
   - name: triangular-ramp10s
     path_emg: '...'
