@@ -1,5 +1,7 @@
 # Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters
 
+[![DOI](https://zenodo.org/badge/1000466165.svg)](https://doi.org/10.5281/zenodo.22902494)
+
 This repository contains functions to adaptively decompose electromyography (EMG) into motor unit firings during dynamic conditions in real-time (~22 ms per 100 ms batch, CPU only with loss calculation) based on online learning metrics with tunable hyperparameters as described in [Mendez Guerra et al, JNE, 2024](https://dx.doi.org/10.1088/1741-2552/ad5ebf). The code is implemented in Python using PyTorch.
 
 The full pipeline is as follows including calibration, hyperparameter optimisation, and adaptation:
