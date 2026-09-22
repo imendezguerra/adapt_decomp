@@ -110,6 +110,47 @@ To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_ex
 
 For more examples go to [fdsi_benchmark](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/fdsi_benchmark), where there is a collection of notebooks covering claibration, hyperparameter optimization (3 methods), and evaluation on simulated dynamic data. The dataset comprises 100 synthetic HD-EMG recordings (100 chs) simulated with NeuroMotion using [MUniverse](https://github.com/dfarinagroup/muniverse) (5 subjects x 5 wrist-kinematic conditions x 4 SNR levels, each with a matching ground-truth spike train), configured via [configs/data_configs/fdsi_benchmark_grid.yaml](configs/data_configs/fdsi_benchmark_grid.yaml). For more information on the datset start by [00_dataset.ipynb](notebooks/fdsi_benchmark/00_dataset.ipynb) and follow the notebooks in order.
 
+## Downloading the data
+
+The notebooks read data that is too large to keep in the repository. It is published as three
+independent archives, so you only fetch what you need:
+
+| Archive | Size | What it is |
+|---|---|---|
+| `neuromotion-data` | 1.64 GB | The tutorial's simulated recording and its calibration. **Required by the tutorial.** |
+| `fdsi_benchmark-data` | 10.35 GB | The 100-recording benchmark itself. **Required by the benchmark notebooks.** |
+| `fdsi_benchmark-outputs` | 10.75 GB | Every cached pipeline stage. Optional, but recomputing the full grid takes hours. |
+
+A `data` archive is the dataset; the matching `outputs` archive is what this repository
+produced from it. The benchmark notebooks are load-only by default, so
+`fdsi_benchmark-outputs` is what lets you reproduce every figure in seconds instead of hours.
+The tutorial has no outputs archive — it regenerates its own in minutes.
+
+From the repository root, with the `adapt_decomp` environment active:
+
+```sh
+python scripts/download_data.py list                      # archives, sizes and DOIs
+python scripts/download_data.py get neuromotion-data      # just the tutorial's input
+python scripts/download_data.py get fdsi_benchmark        # both benchmark archives (prefix match)
+python scripts/download_data.py get                       # everything (22 GB)
+```
+
+Files land in `data/<dataset>/{data,outputs}/`, which is exactly where the configs and
+notebooks expect them — no manual placement needed. Each download is checked against the
+checksum Zenodo publishes, and anything already unpacked is skipped, so re-running the command
+is cheap.
+
+Prefer to do it by hand? Download the zips from the DOIs that `list` prints (named
+`<dataset>-<kind>.zip`), and unpack them all into `data/`. Each archive
+carries its own full path, so any subset lands correctly:
+
+```sh
+unzip '*.zip' -d data/
+```
+
+Each dataset folder then contains its own `README.md` describing how the data was generated
+and what every field means.
+
 ## Contributing
 We welcome contributions! Here's how you can contribute:
 

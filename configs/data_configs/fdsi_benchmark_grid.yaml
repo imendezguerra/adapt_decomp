@@ -1,7 +1,7 @@
 # Benchmark grid for notebooks/fdsi_benchmark/
 
 data_root: '../../data/fdsi_benchmark/data'        # Raw recordings, relative to notebooks/fdsi_benchmark/
-outputs_root: '../../data/fdsi_benchmark/outputs'  # Calibration/adaptation cache, carries VERSION
+outputs_root: '../../data/fdsi_benchmark/outputs'  # Calibration/adaptation cache
 
 fs: 2048                  # Sampling frequency (Hz)
 ext_fact: 10               # Extension factor used across the benchmark's calibrations
