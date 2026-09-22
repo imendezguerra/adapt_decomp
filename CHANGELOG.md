@@ -8,8 +8,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 ## [1.0.0] - 2026-09-22
 
 Full architectural rewrite of the package around two self-contained
-subsystems, plus first-class hyperparameter optimisation, a real test suite,
-and streaming/online decomposition. This is a breaking release: import
+subsystems, plus an hyperparameter optimisation, a test suite,
+and a streaming/online decomposition. This is a breaking release: import
 paths, config formats, and the CLI have all changed (see Migration below).
 
 ### Added
@@ -38,7 +38,7 @@ paths, config formats, and the CLI have all changed (see Migration below).
 - **Hyperparameter optimisation (`adaptation/optimize.py`)** — Optuna-based
   search, pooled across one or more datasets:
   - `optimize_adapt_decomp_pooled_memory` / `optimize_adapt_decomp_pooled_disk`
-    for single-objective search (in-memory vs. on-disk `CBSSResult` pools).
+    for single objective search (in-memory vs. on-disk `CBSSResult` pools).
   - `optimize_adapt_decomp_pooled_memory_pareto` /
     `optimize_adapt_decomp_pooled_disk_pareto` for Pareto multi-objective
     search, with a configurable selection rule over the resulting front (recommended approach with whitening and separation vector losses).
@@ -50,19 +50,19 @@ paths, config formats, and the CLI have all changed (see Migration below).
   untested; now includes unit tests for `adaptation/ops.py`,
   `data_structures.py`, `config.py`, `optimize.py` (including the Pareto
   path), `cbss/`, `preprocessing/`, `spikes/`, and `utils/loaders.py`, plus
-  architecture/import-boundary checks. Run with
+  architecture/import boundary checks. Run with
   `pytest tests/test_backend.py -q`.
 - **New configs**: `configs/sweep_configs/` (Optuna and wandb search
   settings), pooled/grid data configs for the FDSI benchmark
-  (`configs/data_configs/fdsi_*`), and per-dataset `adapt_configs/` defaults
+  (`configs/data_configs/fdsi_*`), and per dataset `adapt_configs/` defaults
   (fixed, forearm, muniverse, neuromotion, wrist).
 - **New notebooks** under `notebooks/fdsi_benchmark/`: dataset overview,
   calibration, decomposition without adaptation, hyperparameter optimisation (Pareto,
-  separation-vector loss, rate-of-agreement), application, and a
+  separation vector loss, rate of agreement), application, and a
   cross-method comparison notebook.
 - **Documentation** under `docs/`: `architecture.md`, `calibration.md`,
   `adaptation.md`, `optimisation.md` — task-oriented guides linked from the
-  README, replacing the old single package-structure section.
+  README, replacing the old single package structure section.
 - New dependencies: `pandas`, `scikit-learn`, `pyyaml`, `pytest`, `optuna`,
   `cmaes`, `loguru`, `plotly`, `tqdm`, `typer`.
 
