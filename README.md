@@ -106,20 +106,20 @@ pieces connect.
   [docs/architecture.md](docs/architecture.md).
 
 ## Tutorials
-To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. It runs the full calibration → adaptation → evaluation pipeline on a simulated wrist dynamic contraction ([NeuroMotion](https://github.com/shihan-ma/NeuroMotion): a 15% MVC index flexion recorded while the wrist ramps from 0° to -40° in a staircase pattern, precalibrated on the first 30 s plateau).
+To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/feature_structure/notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. The notebook loads synethetic data and a precomputed decomposition model and runs the adaptation pipeline on a simulated wrist dynamic contraction ([NeuroMotion](https://github.com/shihan-ma/NeuroMotion): a 15% MVC index flexion recorded while the wrist ramps from 0° to -40° in a staircase pattern, precalibrated on the first 30 s plateau).
 
-For more examples go to [fdsi_benchmark](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/fdsi_benchmark), where there is a collection of notebooks covering claibration, hyperparameter optimization (3 methods), and evaluation on simulated dynamic data. The dataset comprises 100 synthetic HD-EMG recordings (100 chs) simulated with NeuroMotion using [MUniverse](https://github.com/dfarinagroup/muniverse) (5 subjects x 5 wrist-kinematic conditions x 4 SNR levels, each with a matching ground-truth spike train), configured via [configs/data_configs/fdsi_benchmark_grid.yaml](configs/data_configs/fdsi_benchmark_grid.yaml). For more information on the datset start by [00_dataset.ipynb](notebooks/fdsi_benchmark/00_dataset.ipynb) and follow the notebooks in order.
+For more examples go to [fdsi_benchmark](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/fdsi_benchmark), where there is a collection of notebooks covering decomposition claibration using cbss, hyperparameter optimization (3 methods), online decomposition with and without adaptation (best configs), and model comparison. The dataset used by these notebooks comprises 100 synthetic HD-EMG recordings (100 chs) simulated with NeuroMotion using [MUniverse](https://github.com/dfarinagroup/muniverse) (5 subjects x 5 wrist-kinematic conditions x 4 SNR levels, each with a matching ground-truth spike train), configured via [configs/data_configs/fdsi_benchmark_grid.yaml](configs/data_configs/fdsi_benchmark_grid.yaml). For more information on the datset start by [00_dataset.ipynb](notebooks/fdsi_benchmark/00_dataset.ipynb) and follow the notebooks in order.
 
 ## Downloading the data
 
 The notebooks read data that is too large to keep in the repository. It is published as three
 independent archives, so you only fetch what you need:
 
-| Archive | Size | What it is |
-|---|---|---|
-| `neuromotion-data` | 1.64 GB | The tutorial's simulated recording and its calibration. **Required by the tutorial.** |
-| `fdsi_benchmark-data` | 10.35 GB | The 100-recording benchmark itself. **Required by the benchmark notebooks.** |
-| `fdsi_benchmark-outputs` | 10.75 GB | Every cached pipeline stage. Optional, but recomputing the full grid takes hours. |
+| Archive | Size | What it is | DOI |
+|---|---|---|---|
+| `neuromotion-data` | 1.64 GB | The tutorial's simulated recording and its calibration. **Required by the tutorial.** | [10.5281/zenodo.22880910](https://doi.org/10.5281/zenodo.22880910) |
+| `fdsi_benchmark-data` | 10.35 GB | The 100-recording benchmark itself. **Required by the benchmark notebooks.** | [10.5281/zenodo.22882346](https://doi.org/10.5281/zenodo.22882346) |
+| `fdsi_benchmark-outputs` | 10.75 GB | Every cached pipeline stage. Optional, but recomputing the full grid takes hours. | [10.5281/zenodo.22882323](https://doi.org/10.5281/zenodo.22882323) |
 
 A `data` archive is the dataset; the matching `outputs` archive is what this repository
 produced from it. The benchmark notebooks are load-only by default, so
@@ -140,8 +140,7 @@ notebooks expect them — no manual placement needed. Each download is checked a
 checksum Zenodo publishes, and anything already unpacked is skipped, so re-running the command
 is cheap.
 
-Prefer to do it by hand? Download the zips from the DOIs that `list` prints (named
-`<dataset>-<kind>.zip`), and unpack them all into `data/`. Each archive
+Prefer to do it by hand? Download the zips from the DOIs list and unpack them all into `data/`. Each archive
 carries its own full path, so any subset lands correctly:
 
 ```sh
