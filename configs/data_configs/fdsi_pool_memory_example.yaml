@@ -1,0 +1,27 @@
+# data_config for optimize_adapt_decomp_pooled_memory
+
+root: '../../data/fdsi_benchmark'  # Base directory, relative to notebooks/fdsi_benchmark/ (03a/03b/03c's cwd)
+loader: 'load_pooled_cbss_memory'                           # Loading function to use
+preprocess: true                                            # Default for every dataset below (overridable per-dataset)
+# calib_loader: class    # Optional; default for every dataset below (overridable per-dataset)
+# emg_loader: npz        # Optional; default for every dataset below (overridable per-dataset)
+# gt_loader: npz         # Optional; default for every dataset below (overridable per-dataset)
+
+datasets:
+  - name: triangular-ramp40s                                # Dataset name for labelling
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz'
+    path_calib: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss.pkl'
+    path_calib_config: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz'   # Optional; omit for no RoA
+
+  - name: triangular-ramp10s
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp10s_snr30dB_emg.npz'
+    path_calib: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp10s_snr30dB_cbss.pkl'
+    path_calib_config: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp10s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp10s_spikes.npz'
+
+  - name: triangular-ramp5s
+    path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp5s_snr30dB_emg.npz'
+    path_calib: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp5s_snr30dB_cbss.pkl'
+    path_calib_config: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp5s_snr30dB_cbss_config.yaml'
+    path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp5s_spikes.npz'

@@ -1,0 +1,8 @@
+# Single-recording data_config
+root: 'data/neuromotion'                      # Base directory
+loader: 'load_example'                        # Loading function to use
+preprocess: false                             # Whether to preprocess the data
+
+path_decomp: 'data/calibration/decomp_sim.mat'  # Legacy MATLAB decomposition (provided, not computed here)
+path_emg: 'data/data_sim.hdf5'                  # EMG for decomposition adaptation
+path_gt: 'data/data_sim.hdf5'                   # Ground truth spikes; same file as path_emg here
