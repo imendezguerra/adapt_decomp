@@ -5,7 +5,7 @@ All notable changes to `adapt_decomp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.0.0] - 2026-09-10
+## [1.0.0] - 2026-09-22
 
 Full architectural rewrite of the package around two self-contained
 subsystems, plus first-class hyperparameter optimisation, a real test suite,
