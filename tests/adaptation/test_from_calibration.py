@@ -23,7 +23,11 @@ from adapt_decomp.cbss.data_structure import CBSSResult
 
 
 def _make_cbss_result(
-    ext_fact: int = 2, n_mu: int = 2, C: int = 2, T: int = 300, spike_stride: int = 40,
+    ext_fact: int = 2,
+    n_mu: int = 2,
+    C: int = 2,
+    T: int = 300,
+    spike_stride: int = 40,
 ) -> CBSSResult:
     """Small, valid CBSSResult -- mirrors utils/test_loaders.py's helper, with
     D derived from C*ext_fact so a real Decomposition can be built from it."""
@@ -81,18 +85,29 @@ def test_disagreeing_adapt_config_is_overwritten_and_warns():
             adapt_config=adapt_config,
         )
 
-    assert adapter.config.spike_det_exp == 1.5   # cbss_config won
-    assert adapt_config.spike_det_exp == 9.0      # caller's instance untouched
+    assert adapter.config.spike_det_exp == 1.5  # cbss_config won
+    assert adapt_config.spike_det_exp == 9.0  # caller's instance untouched
 
 
 def _shared(**overrides) -> SharedCalibFields:
     """SharedCalibFields with sane defaults for the 12 pre-existing fields,
     plus overridable ch_mask/ch_map/replace_bad_channels."""
     base = dict(
-        ext_fact=2, ext_mode="block", spike_det_exp=2.0, fs=2048,
-        lowcut=20.0, highcut=500.0, filter_order=4, powerline=True,
-        powerline_freq=50.0, notch_width_hz=1.0, notch_n_harmonics=3,
-        notch_order=2, ch_mask=None, ch_map=None, replace_bad_channels=False,
+        ext_fact=2,
+        ext_mode="block",
+        spike_det_exp=2.0,
+        fs=2048,
+        lowcut=20.0,
+        highcut=500.0,
+        filter_order=4,
+        powerline=True,
+        powerline_freq=50.0,
+        notch_width_hz=1.0,
+        notch_n_harmonics=3,
+        notch_order=2,
+        ch_mask=None,
+        ch_map=None,
+        replace_bad_channels=False,
     )
     base.update(overrides)
     return SharedCalibFields(**base)
@@ -104,7 +119,9 @@ def test_reconcile_ch_mask_array_disagreement_warns_and_overwrites():
     overwritten from shared, like any other shared field."""
     shared = _shared(ch_mask=np.array([True, False, True]))
     adapt_config = AdaptConfig(
-        ext_fact=2, ch_mask=np.array([True, True, True]), device="cpu",
+        ext_fact=2,
+        ch_mask=np.array([True, True, True]),
+        device="cpu",
     )
     with pytest.warns(UserWarning, match="ch_mask"):
         reconciled = reconcile_with_calib_config(adapt_config, shared)
@@ -116,7 +133,7 @@ def test_reconcile_ch_mask_array_disagreement_warns_and_overwrites():
 def test_reconcile_ch_mask_none_on_both_sides_does_not_warn():
     """ch_mask=None on both sides must not raise the ndarray-truthiness
     error, and must not spuriously warn (nothing disagreed)."""
-    shared = _shared()   # ch_mask=None, ch_map=None
+    shared = _shared()  # ch_mask=None, ch_map=None
     adapt_config = AdaptConfig(ext_fact=2, device="cpu")
 
     with warnings.catch_warnings(record=True) as caught:
@@ -143,7 +160,9 @@ def test_reconcile_ch_mask_equal_arrays_do_not_warn():
     equal via np.array_equal and not warn."""
     shared = _shared(ch_mask=np.array([True, False, True]))
     adapt_config = AdaptConfig(
-        ext_fact=2, ch_mask=np.array([True, False, True]), device="cpu",
+        ext_fact=2,
+        ch_mask=np.array([True, False, True]),
+        device="cpu",
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

@@ -40,7 +40,9 @@ def _select(patterns: List[str]) -> List[str]:
     for pattern in patterns:
         matches = [name for name in ARCHIVES if name.startswith(pattern)]
         if not matches:
-            raise ValueError(f"Unknown archive: {pattern!r}. Expected a prefix of {list(ARCHIVES)}.")
+            raise ValueError(
+                f"Unknown archive: {pattern!r}. Expected a prefix of {list(ARCHIVES)}."
+            )
         selected += matches
     return sorted(set(selected))
 
@@ -86,8 +88,13 @@ def _fetch(entry: Dict, target: Path) -> None:
     """
     digest = hashlib.md5()
     with urllib.request.urlopen(entry["links"]["self"]) as response, open(target, "wb") as handle:
-        with tqdm(total=entry["size"], unit="B", unit_scale=True, unit_divisor=1024,
-                  desc=f"  {entry['key']}") as bar:
+        with tqdm(
+            total=entry["size"],
+            unit="B",
+            unit_scale=True,
+            unit_divisor=1024,
+            desc=f"  {entry['key']}",
+        ) as bar:
             for chunk in iter(lambda: response.read(CHUNK_BYTES), b""):
                 handle.write(chunk)
                 digest.update(chunk)
@@ -106,12 +113,16 @@ def list_archives() -> None:
         None
     """
     for name, (doi, unpacks_to, size_gb) in ARCHIVES.items():
-        print(f"{name:<24}{size_gb:>6.1f} GB  ->  data/{unpacks_to:<24}{doi or '(not published yet)'}")
+        print(
+            f"{name:<24}{size_gb:>6.1f} GB  ->  data/{unpacks_to:<24}{doi or '(not published yet)'}"
+        )
 
 
 @app.command(name="get")
 def get(
-    archives: Optional[List[str]] = typer.Argument(None, help="Archive names or prefixes; omit for all"),
+    archives: Optional[List[str]] = typer.Argument(
+        None, help="Archive names or prefixes; omit for all"
+    ),
     dest: str = typer.Option("data", "--dest", help="Directory to unpack into"),
     force: bool = typer.Option(False, "--force", help="Re-download archives already unpacked"),
 ) -> None:

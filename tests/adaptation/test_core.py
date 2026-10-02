@@ -8,22 +8,28 @@ which exercise a single _whiten() call via the make_adapter fixture.
 
 import warnings
 
-import torch
 import pytest
+import torch
 from torch.testing import assert_close
 
 from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
-
 
 # ---------------------------------------------------------------------------
 # Whitening update skips when slogdet sign is invalid
 # ---------------------------------------------------------------------------
 
+
 def test_update_wh_skips_invalid_slogdet(make_decomposition, make_adapter):
     """If Rz has non-positive slogdet, wh is returned unchanged from _update_wh."""
     decomp, cfg = make_decomposition(
-        M=2, ext_fact=2, raw_chs=3, n_cal=200, spike_stride=40,
-        adapt_wh=True, compute_loss=False, debug=True,
+        M=2,
+        ext_fact=2,
+        raw_chs=3,
+        n_cal=200,
+        spike_stride=40,
+        adapt_wh=True,
+        compute_loss=False,
+        debug=True,
     )
     adapter = make_adapter(decomp, cfg)
 
@@ -46,15 +52,23 @@ def test_update_wh_skips_invalid_slogdet(make_decomposition, make_adapter):
 # frame correction identity implied by the wh step)
 # ---------------------------------------------------------------------------
 
+
 def test_wh_sv_coupling_matches_frame_correction_identity(make_decomposition, make_adapter):
     """coupling_matrix must equal -delta_wh @ wh^-1 (the first-order frame correction
     implied by the wh step) under the lr_learning_rate/direction-normalized formula."""
     ext_fact, raw_chs = 2, 3
     D = raw_chs * ext_fact
     decomp, cfg = make_decomposition(
-        M=2, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=300, spike_stride=40,
-        whitening=torch.eye(D) * 1.3,   # non-identity, trivially invertible
-        adapt_wh=True, wh_sv_coupling=True, debug=False, wh_learning_rate=5e-3,
+        M=2,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=300,
+        spike_stride=40,
+        whitening=torch.eye(D) * 1.3,  # non-identity, trivially invertible
+        adapt_wh=True,
+        wh_sv_coupling=True,
+        debug=False,
+        wh_learning_rate=5e-3,
     )
     adapter = make_adapter(decomp, cfg)
 
@@ -71,7 +85,9 @@ def test_wh_sv_coupling_matches_frame_correction_identity(make_decomposition, ma
     assert_close(coupling_matrix, expected_coupling, atol=1e-4, rtol=1e-3)
 
 
-def test_wh_sv_coupling_matches_frame_correction_identity_lr_alone(make_decomposition, make_adapter):
+def test_wh_sv_coupling_matches_frame_correction_identity_lr_alone(
+    make_decomposition, make_adapter
+):
     """Same identity as test_wh_sv_coupling_matches_frame_correction_identity, but
     under cfg.lr_mode="fixed" (lr_alone) -- confirms `weight` was substituted
     symmetrically into both delta_wh_target and coupling_matrix's formula, not
@@ -79,10 +95,17 @@ def test_wh_sv_coupling_matches_frame_correction_identity_lr_alone(make_decompos
     ext_fact, raw_chs = 2, 3
     D = raw_chs * ext_fact
     decomp, cfg = make_decomposition(
-        M=2, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=300, spike_stride=40,
+        M=2,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=300,
+        spike_stride=40,
         whitening=torch.eye(D) * 1.3,
-        adapt_wh=True, wh_sv_coupling=True, debug=False,
-        lr_mode="fixed", wh_learning_rate=5e-3,
+        adapt_wh=True,
+        wh_sv_coupling=True,
+        debug=False,
+        lr_mode="fixed",
+        wh_learning_rate=5e-3,
     )
     adapter = make_adapter(decomp, cfg)
 
@@ -100,6 +123,7 @@ def test_wh_sv_coupling_matches_frame_correction_identity_lr_alone(make_decompos
 # lr_alone ablation, wh side: drops the signed e_v factor entirely
 # ---------------------------------------------------------------------------
 
+
 def test_lr_alone_ignores_error_magnitude_wh(make_decomposition, make_adapter):
     """With cfg.lr_mode="fixed" (lr_alone), delta_wh is identical regardless of the
     calibration reference K_cal (which drives e_v's magnitude under the default
@@ -109,13 +133,21 @@ def test_lr_alone_ignores_error_magnitude_wh(make_decomposition, make_adapter):
     D = raw_chs * ext_fact
 
     def run_with_K_cal(k_cal_value: float) -> torch.Tensor:
-        torch.manual_seed(6)   # identical wh/sv/calib/X across calls; only K_cal differs
+        torch.manual_seed(6)  # identical wh/sv/calib/X across calls; only K_cal differs
         decomp, cfg = make_decomposition(
-            M=2, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=300, spike_stride=40,
+            M=2,
+            ext_fact=ext_fact,
+            raw_chs=raw_chs,
+            n_cal=300,
+            spike_stride=40,
             whitening=torch.eye(D) * 1.3,
-            adapt_wh=True, lr_mode="fixed", wh_learning_rate=5e-3,
+            adapt_wh=True,
+            lr_mode="fixed",
+            wh_learning_rate=5e-3,
         )
-        decomp.kl_div_calib_mean = torch.tensor(k_cal_value)   # only knob that changes e_v's magnitude
+        decomp.kl_div_calib_mean = torch.tensor(
+            k_cal_value
+        )  # only knob that changes e_v's magnitude
         adapter = make_adapter(decomp, cfg)
 
         X = torch.randn(50, D) * 2.0
@@ -124,7 +156,7 @@ def test_lr_alone_ignores_error_magnitude_wh(make_decomposition, make_adapter):
         return decomp.whitening - wh_before
 
     delta_v_1 = run_with_K_cal(0.0)
-    delta_v_2 = run_with_K_cal(50.0)   # would drive e_v far from the first run's value
+    delta_v_2 = run_with_K_cal(50.0)  # would drive e_v far from the first run's value
     assert_close(delta_v_1, delta_v_2, atol=1e-6, rtol=1e-5)
 
 
@@ -132,14 +164,15 @@ def test_lr_alone_ignores_error_magnitude_wh(make_decomposition, make_adapter):
 # Full multi-batch adaptation loop: stability + rare safety clip
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.slow
 def test_multibatch_stability_and_rare_safety_clip():
     """Run AdaptDecomp over many synthetic batches with the lr-based update:
     no NaN/Inf, sv stays orthonormal, wh stays finite/invertible, and the safety
     clip engages rarely (not on ~100% of batches like the old max_rel_delta
     scheme, verified empirically on real data before this change)."""
-    from adapt_decomp.adaptation.config import AdaptConfig
     from adapt_decomp.adaptation import AdaptDecomp
+    from adapt_decomp.adaptation.config import AdaptConfig
 
     torch.manual_seed(42)
     raw_chs, ext_fact, M = 3, 2, 2
@@ -210,6 +243,7 @@ def test_multibatch_stability_and_rare_safety_clip():
 # _compute_losses: guarded per-run wh_loss_total/sv_loss_total/total_loss
 # ---------------------------------------------------------------------------
 
+
 def test_compute_losses_medians_wh_and_sv_losses(make_decomposition, make_adapter):
     """Normal (non-diverged) case: total_loss == wh_loss_total + sv_loss_total,
     wh_loss_total the median of the per-batch wh_loss tensor and sv_loss_total
@@ -248,10 +282,11 @@ def test_compute_losses_guards_against_nan_and_divergence(make_decomposition, ma
 # SharedCalibFields / reconcile_with_calib_config
 # ---------------------------------------------------------------------------
 
+
 def test_shared_calib_fields_from_cbss_config_round_trips():
     """from_cbss_config() reads every _SHARED_CBSS_ADAPT_FIELDS entry, and
     nothing else, off a real CBSSConfig."""
-    from adapt_decomp.adaptation.core import SharedCalibFields, _SHARED_CBSS_ADAPT_FIELDS
+    from adapt_decomp.adaptation.core import _SHARED_CBSS_ADAPT_FIELDS, SharedCalibFields
     from adapt_decomp.cbss.config import CBSSConfig
 
     cbss_config = CBSSConfig(ext_fact=3, spike_det_exp=1.5, ext_mode="toeplitz")
@@ -274,7 +309,7 @@ def test_reconcile_with_calib_config_overwrites_disagreeing_fields_and_warns():
     with pytest.warns(UserWarning, match="spike_det_exp"):
         reconciled = reconcile_with_calib_config(adapt_config, shared)
 
-    assert reconciled.spike_det_exp == 1.5   # shared won
+    assert reconciled.spike_det_exp == 1.5  # shared won
     assert adapt_config.spike_det_exp == 9.0  # caller's instance untouched
 
 
@@ -300,6 +335,7 @@ def test_reconcile_with_calib_config_agreeing_fields_stay_silent():
 # ---------------------------------------------------------------------------
 # Construction: process_data(emg, ...) is the only place emg ever enters
 # ---------------------------------------------------------------------------
+
 
 def _make_construction_kwargs():
     """Small, valid AdaptDecomp.__init__ kwargs (no emg) plus emg separately --
@@ -328,9 +364,14 @@ def _make_construction_kwargs():
     emg_online = torch.randn(300, raw_chs)
 
     kwargs = dict(
-        whitening=wh, sep_vectors=sv, base_centr=base_centroids,
-        spikes_centr=spike_centroids, emg_calib=emg_calib,
-        sources_calib=sources_calib, spikes_calib=spikes_calib, adapt_config=cfg,
+        whitening=wh,
+        sep_vectors=sv,
+        base_centr=base_centroids,
+        spikes_centr=spike_centroids,
+        emg_calib=emg_calib,
+        sources_calib=sources_calib,
+        spikes_calib=spikes_calib,
+        adapt_config=cfg,
     )
     return kwargs, emg_online
 
@@ -476,12 +517,11 @@ def test_process_batch_callable_directly_after_plain_construction():
     from adapt_decomp.adaptation import AdaptDecomp
 
     kwargs, _ = _make_construction_kwargs()
-    kwargs["adapt_config"].highcut = 80.0   # valid for fs=200; process_batch always filters
+    kwargs["adapt_config"].highcut = 80.0  # valid for fs=200; process_batch always filters
     kwargs["adapt_config"].powerline = False
-    D = kwargs["adapt_config"].ext_fact * 3   # raw_chs=3 (see _make_construction_kwargs)
 
     adapter = AdaptDecomp(**kwargs)
-    adapter.data_preprocessed = False   # full online mode
+    adapter.data_preprocessed = False  # full online mode
 
     spikes, sources = adapter.process_batch(torch.randn(20, 3))
     assert spikes.shape == (20, kwargs["sep_vectors"].shape[0])
@@ -494,6 +534,7 @@ def test_process_batch_callable_directly_after_plain_construction():
 # parity with the offline path.
 # ---------------------------------------------------------------------------
 
+
 def test_center_and_extend_batch_matches_extend_data_reference(make_decomposition, make_adapter):
     """Two consecutive _center_and_extend_batch calls must match extend_data
     run once on the centred concatenation of both batches, each sliced to
@@ -502,7 +543,11 @@ def test_center_and_extend_batch_matches_extend_data_reference(make_decompositio
 
     ext_fact, raw_chs, M = 3, 2, 2
     decomp, cfg = make_decomposition(
-        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=200, spike_stride=20,
+        M=M,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=200,
+        spike_stride=20,
     )
     adapter = make_adapter(decomp, cfg)
 
@@ -533,7 +578,11 @@ def test_ema_mean_online_seeds_from_first_batch_then_blends(make_decomposition, 
     blend via config.ema_alpha on later calls."""
     ext_fact, raw_chs, M = 2, 2, 2
     decomp, cfg = make_decomposition(
-        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=200, spike_stride=20,
+        M=M,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=200,
+        spike_stride=20,
     )
     adapter = make_adapter(decomp, cfg)
 
@@ -545,7 +594,9 @@ def test_ema_mean_online_seeds_from_first_batch_then_blends(make_decomposition, 
     assert_close(decomp.ema_mean_online, batch1.mean(0, keepdim=True))
 
     adapter._center_and_extend_batch(batch2)
-    expected = cfg.ema_alpha * batch1.mean(0, keepdim=True) + (1 - cfg.ema_alpha) * batch2.mean(0, keepdim=True)
+    expected = cfg.ema_alpha * batch1.mean(0, keepdim=True) + (1 - cfg.ema_alpha) * batch2.mean(
+        0, keepdim=True
+    )
     assert_close(decomp.ema_mean_online, expected)
 
 
@@ -560,18 +611,22 @@ def _prep_batch_process_adapter(make_decomposition, make_adapter, data_preproces
     return adapter, cfg
 
 
-def test_process_batch_uniform_output_eager_mode_first_batch_zero_padded(make_decomposition, make_adapter):
+def test_process_batch_uniform_output_eager_mode_first_batch_zero_padded(
+    make_decomposition, make_adapter
+):
     """process_batch's first call in eager mode must return emg_batch.shape[0]
     rows with the leading ext_fact rows zeroed; later calls are fully populated."""
-    adapter, cfg = _prep_batch_process_adapter(make_decomposition, make_adapter, data_preprocessed=True)
+    adapter, cfg = _prep_batch_process_adapter(
+        make_decomposition, make_adapter, data_preprocessed=True
+    )
     D = adapter.decomp.n
     N = 12
 
     spikes, sources = adapter.process_batch(torch.randn(N, D), batch_idx=0)
     assert spikes.shape == (N, adapter.units)
     assert sources.shape == (N, adapter.units)
-    assert torch.all(spikes[:cfg.ext_fact] == 0)
-    assert torch.all(sources[:cfg.ext_fact] == 0)
+    assert torch.all(spikes[: cfg.ext_fact] == 0)
+    assert torch.all(sources[: cfg.ext_fact] == 0)
     assert adapter.time_preprocess_ms == [0.0]
 
     spikes2, _ = adapter.process_batch(torch.randn(N, D), batch_idx=1)
@@ -579,21 +634,25 @@ def test_process_batch_uniform_output_eager_mode_first_batch_zero_padded(make_de
     assert adapter.time_preprocess_ms == [0.0, 0.0]
 
 
-def test_process_batch_uniform_output_streaming_mode_first_batch_zero_padded(make_decomposition, make_adapter):
+def test_process_batch_uniform_output_streaming_mode_first_batch_zero_padded(
+    make_decomposition, make_adapter
+):
     """process_batch's first call in streaming mode must return
     emg_batch.shape[0] rows with the leading rows zeroed, and log a
     non-negative preprocessing time each call; later calls are fully
     populated. (A near-zero synthetic batch can legitimately measure
     0.0ms on a coarse wall clock, so only non-negativity is checked here.)"""
-    adapter, cfg = _prep_batch_process_adapter(make_decomposition, make_adapter, data_preprocessed=False)
+    adapter, cfg = _prep_batch_process_adapter(
+        make_decomposition, make_adapter, data_preprocessed=False
+    )
     raw_chs = 2
     N = 20
 
     spikes, sources = adapter.process_batch(torch.randn(N, raw_chs), batch_idx=0)
     assert spikes.shape == (N, adapter.units)
     assert sources.shape == (N, adapter.units)
-    assert torch.all(spikes[:cfg.ext_fact] == 0)
-    assert torch.all(sources[:cfg.ext_fact] == 0)
+    assert torch.all(spikes[: cfg.ext_fact] == 0)
+    assert torch.all(sources[: cfg.ext_fact] == 0)
     assert adapter.time_preprocess_ms[0] >= 0.0
 
     spikes2, _ = adapter.process_batch(torch.randn(N, raw_chs), batch_idx=1)
@@ -636,8 +695,10 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
     assert torch.all(out_streaming.preprocess_time_ms >= 0)
     assert_close(
         out_streaming.total_time_ms,
-        out_streaming.wh_time_ms + out_streaming.sv_time_ms
-        + out_streaming.sd_time_ms + out_streaming.preprocess_time_ms,
+        out_streaming.wh_time_ms
+        + out_streaming.sv_time_ms
+        + out_streaming.sd_time_ms
+        + out_streaming.preprocess_time_ms,
     )
 
     # Streaming mode's per-batch state (filter zi, EMA mean, extension FIFO)

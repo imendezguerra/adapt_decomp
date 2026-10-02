@@ -1,7 +1,9 @@
 """EMG extension functions."""
 
-import torch
 from typing import Literal, Optional
+
+import torch
+
 
 def extend_data(
     data: torch.Tensor,
@@ -42,12 +44,10 @@ def extend_data(
     samples, chs = data.shape
     data_ext = torch.zeros((samples, int(chs * ext_fact)), device=device, dtype=data.dtype)
     for i in range(ext_fact):
-        data_ext[i:samples, chs * i: chs * (i + 1)] = data[0:(samples - i), :]
+        data_ext[i:samples, chs * i : chs * (i + 1)] = data[0 : (samples - i), :]
     if ext_mode == "toeplitz":
         data_ext = (
-            data_ext.view(samples, ext_fact, chs)
-            .permute(0, 2, 1)
-            .reshape(samples, chs * ext_fact)
+            data_ext.view(samples, ext_fact, chs).permute(0, 2, 1).reshape(samples, chs * ext_fact)
         )
     elif ext_mode != "block":
         raise ValueError(f"Unknown ext_mode: {ext_mode!r}. Expected 'block' or 'toeplitz'.")

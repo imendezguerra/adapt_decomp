@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Weekly run catches breakage from new upstream releases (pyproject deps are ranges).
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+  WANDB_MODE: disabled
+  # CPU-only torch wheels: avoids downloading ~2 GB of CUDA libraries on Linux.
+  TORCH_INDEX: https://download.pytorch.org/whl/cpu
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1
+
+  test:
+    name: Test (py${{ matrix.python-version }}, ${{ matrix.os }}${{ matrix.full && ', incl. slow' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        # No 3.13: numpy<2 has no Python 3.13 wheels.
+        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.12"
+            full: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install package with dev extras
+        run: |
+          python -m pip install torch --index-url ${{ env.TORCH_INDEX }}
+          python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: python -m pytest -m "${{ matrix.full && 'not repro' || 'not slow and not repro' }}"
+
+  minimum-deps:
+    name: Test (minimum dependency versions, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            ci/constraints-min.txt
+      - name: Install lowest supported dependencies
+        run: |
+          python -m pip install -c ci/constraints-min.txt torch --index-url ${{ env.TORCH_INDEX }}
+          python -m pip install -c ci/constraints-min.txt -e . pytest
+      - name: Run tests
+        run: python -m pytest -m "not slow and not repro"
+
+  pinned-env:
+    name: Pinned environment.yaml + reproducibility (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Create environment from environment.yaml
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yaml
+          cache-environment: true
+      - name: Run tests
+        run: python -m pytest -m "not slow and not repro"
+      # The tutorial data (~1.6 GB) is downloaded once and shared across OSes;
+      # the key is the archive's Zenodo DOI, so a new data version refetches it.
+      - name: Restore NeuroMotion data
+        id: data-cache
+        uses: actions/cache@v4
+        with:
+          path: data/neuromotion/data
+          key: neuromotion-data-zenodo.22880910
+          enableCrossOsArchive: true
+      - name: Download NeuroMotion data
+        if: steps.data-cache.outputs.cache-hit != 'true'
+        run: python scripts/download_data.py get neuromotion-data
+      - name: Reproducibility test (tutorial adaptation vs stored reference)
+        env:
+          REPRO_ARTIFACT_DIR: repro-output
+        run: python -m pytest tests/reproducibility -m repro -rA
+      - name: Upload this platform's fingerprint
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repro-fingerprint-${{ matrix.os }}
+          path: repro-output/

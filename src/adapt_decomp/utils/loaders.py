@@ -1,12 +1,13 @@
 """Data loaders"""
 
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
+
 import h5py
 import numpy as np
 import torch
-from dataclasses import dataclass
-from pathlib import Path
 from scipy.io import loadmat
-from typing import Any, Dict, Literal, Optional, Tuple, TYPE_CHECKING, Union
 
 from adapt_decomp.cbss.data_structure import CBSSResult
 from adapt_decomp.preprocessing.extension import extend_data
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 # ------------------------------------------------------------------
 # Loaders for dataset 1 (neuromotion)
 # ------------------------------------------------------------------
+
 
 def _load_neuromotion(path_file: str) -> Dict:
     """Load neuromotion HDF5 data from the specified file.
@@ -31,18 +33,32 @@ def _load_neuromotion(path_file: str) -> Dict:
         muaps, muap_muscle_labels, muap_angle_labels, paired_units,
         roa_0deg, lags_0deg.
     """
-    data = dict.fromkeys([
-        'emg', 'rms', 'ch_map', 'ch_cols', 'bad_ch',
-        'fs', 'timestamps', 'angle_profile', 'force_profile', 'staircase_phases',
-        'spikes', 'muaps', 'muap_muscle_labels', 'muap_angle_labels',
-        'paired_units', 'roa_0deg', 'lags_0deg'
-    ])
+    data = dict.fromkeys(
+        [
+            "emg",
+            "rms",
+            "ch_map",
+            "ch_cols",
+            "bad_ch",
+            "fs",
+            "timestamps",
+            "angle_profile",
+            "force_profile",
+            "staircase_phases",
+            "spikes",
+            "muaps",
+            "muap_muscle_labels",
+            "muap_angle_labels",
+            "paired_units",
+            "roa_0deg",
+            "lags_0deg",
+        ]
+    )
 
-    with h5py.File(path_file, 'r') as h5:
-
+    with h5py.File(path_file, "r") as h5:
         for key in data.keys():
-            if key in ['staircase_phases', 'paired_units']:
-                data[key] = dict.fromkeys( h5[key].keys() )
+            if key in ["staircase_phases", "paired_units"]:
+                data[key] = dict.fromkeys(h5[key].keys())
                 for subkey in h5[key].keys():
                     data[key][subkey] = h5[key][subkey][()]
             else:
@@ -76,8 +92,7 @@ def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> C
 
     spikes = firings_to_spikes(decomp["firings"], decomp["IPTs"], matlab_index=True)  # [n_mu, T]
     spikes_dict = {
-        i: (np.asarray(firing) - 1).astype(np.int64)
-        for i, firing in enumerate(decomp["firings"])
+        i: (np.asarray(firing) - 1).astype(np.int64) for i, firing in enumerate(decomp["firings"])
     }
 
     extension_mean = (
@@ -143,17 +158,19 @@ def load_example(
     sim_data = _load_neuromotion(path_emg)
     cbss_result = _cbss_result_from_mat_decomp(path_decomp)
     cbss_config = CBSSConfig(
-        preprocess_emg = preprocess,
-        ext_fact = cbss_result.ext_fact,
-        fs = int(sim_data["fs"]),
-        ext_mode = "block",
-        save_emg = False,
+        preprocess_emg=preprocess,
+        ext_fact=cbss_result.ext_fact,
+        fs=int(sim_data["fs"]),
+        ext_mode="block",
+        save_emg=False,
     )
 
     gt_source = sim_data if (path_gt is None or path_gt == path_emg) else _load_neuromotion(path_gt)
     spikes_gt = np.asarray(gt_source["spikes"])
     gt_full_bin, roa_calib = pair_ground_truth(
-        spikes_gt, cbss_result.spikes, fs=int(sim_data["fs"]),
+        spikes_gt,
+        cbss_result.spikes,
+        fs=int(sim_data["fs"]),
     )
 
     return {
@@ -174,6 +191,7 @@ def load_example(
 # ------------------------------------------------------------------
 # Loaders for dataset 2 (muniverse)
 # ------------------------------------------------------------------
+
 
 def _load_bin_spikes_muniverse(path: Union[str, Path], n_samples: int) -> np.ndarray:
     """Load ground-truth firings as binary array of spikes.
@@ -236,7 +254,9 @@ def load_calib(
 
     if calib_loader == "class":
         cbss_result = CBSSResult.load(path_calib)
-        cbss_config = CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None
+        cbss_config = (
+            CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None
+        )
         return cbss_result, cbss_config
     raise ValueError(f"Unknown calib_loader: {calib_loader!r}. Expected 'class'.")
 
@@ -263,7 +283,9 @@ def load_emg(path_emg: Union[str, Path], emg_loader: EmgLoaderName = "npz") -> n
 
 
 def load_gt(
-    path_gt: Union[str, Path], n_samples: int, gt_loader: GtLoaderName = "npz",
+    path_gt: Union[str, Path],
+    n_samples: int,
+    gt_loader: GtLoaderName = "npz",
 ) -> np.ndarray:
     """Load a full ground-truth spike train by gt_loader's format.
 
@@ -289,7 +311,8 @@ def load_gt(
 
 
 def _resolve_pool_loaders(
-    dataset: Dict, defaults: Dict[str, str],
+    dataset: Dict,
+    defaults: Dict[str, str],
 ) -> Tuple[CalibLoaderName, EmgLoaderName, GtLoaderName]:
     """Resolve one dataset's calib_loader/emg_loader/gt_loader against pool defaults.
 
@@ -312,6 +335,7 @@ def _resolve_pool_loaders(
 # ------------------------------------------------------------------
 # Pooled dataset dataclasses
 # ------------------------------------------------------------------
+
 
 @dataclass
 class PooledDatasetMemory:
@@ -415,7 +439,9 @@ class PooledDatasetDisk:
             (emg, calibration, cbss_config, preprocess, gt_paired_bin), matching
             PooledDatasetMemory.resolve()'s shape.
         """
-        calibration, cbss_config = load_calib(self.path_calib, self.path_calib_config, self.calib_loader)
+        calibration, cbss_config = load_calib(
+            self.path_calib, self.path_calib_config, self.calib_loader
+        )
         emg = load_emg(self.path_emg, self.emg_loader)
 
         gt_paired_bin = None
@@ -423,7 +449,8 @@ class PooledDatasetDisk:
             spikes_gt_full = load_gt(self.path_gt, emg.shape[0], self.gt_loader)
             fs = self.fs if self.fs is not None else int(calibration.fs)
             calibration = calibration.select_supervised(
-                spikes_gt_full[: calibration.sources.shape[0]], fs=fs,
+                spikes_gt_full[: calibration.sources.shape[0]],
+                fs=fs,
             )
             gt_paired_bin = spikes_gt_full[:, calibration.gt_matched_indices]
 
@@ -479,7 +506,9 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
     for dataset in data_config["datasets"]:
         calib_loader, emg_loader, gt_loader = _resolve_pool_loaders(dataset, defaults)
         cbss_result, cbss_config = load_calib(
-            root / dataset["path_calib"], root / dataset["path_calib_config"], calib_loader,
+            root / dataset["path_calib"],
+            root / dataset["path_calib_config"],
+            calib_loader,
         )
         emg_full = load_emg(root / dataset["path_emg"], emg_loader)
 
@@ -488,7 +517,8 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
             spikes_gt_full = load_gt(root / dataset["path_gt"], emg_full.shape[0], gt_loader)
             fs = int(dataset["fs"]) if "fs" in dataset else int(cbss_result.fs)
             cbss_result = cbss_result.select_supervised(
-                spikes_gt_full[: cbss_result.sources.shape[0]], fs=fs,
+                spikes_gt_full[: cbss_result.sources.shape[0]],
+                fs=fs,
             )
             gt_paired_bin = spikes_gt_full[:, cbss_result.gt_matched_indices]
 
@@ -568,6 +598,7 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
 # ------------------------------------------------------------------
 # Main loader
 # ------------------------------------------------------------------
+
 
 def load_data(data_config: Dict) -> Dict:
     """Dispatch a data_config to its loader, by data_config["loader"].

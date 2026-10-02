@@ -9,7 +9,9 @@ import torch
 from adapt_decomp.cbss.data_structure import CBSSResult
 
 
-def _make_result(n_mu: int = 3, T: int = 20, D: int = 6, C: int = 2, ext_fact: int = 2) -> CBSSResult:
+def _make_result(
+    n_mu: int = 3, T: int = 20, D: int = 6, C: int = 2, ext_fact: int = 2
+) -> CBSSResult:
     """Small, valid CBSSResult for to_adapt_tensors() tests -- emg set (required),
     timestamps set (enables .fs, unused here but cheap to include)."""
     spikes = np.zeros((T, n_mu), dtype=np.int32)
@@ -70,9 +72,21 @@ def test_to_dict_omits_none_fields():
 
     d = result.to_dict()
 
-    for key in ("sources", "spikes", "spikes_dict", "sil", "cov_isi", "sep_vectors",
-                "whitening", "extension_mean", "spikes_centr", "base_centr", "ext_fact",
-                "emg", "timestamps"):
+    for key in (
+        "sources",
+        "spikes",
+        "spikes_dict",
+        "sil",
+        "cov_isi",
+        "sep_vectors",
+        "whitening",
+        "extension_mean",
+        "spikes_centr",
+        "base_centr",
+        "ext_fact",
+        "emg",
+        "timestamps",
+    ):
         assert key in d
     for key in ("pca_components", "pca_mean", "pnr", "dr", "muaps", "gt_matched_indices", "roa"):
         assert key not in d

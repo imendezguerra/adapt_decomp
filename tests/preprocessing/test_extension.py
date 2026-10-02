@@ -1,7 +1,7 @@
 """Tests for preprocessing/extension.py: extend_data's block/toeplitz modes."""
 
-import torch
 import pytest
+import torch
 from torch.testing import assert_close
 
 from adapt_decomp.preprocessing import extend_data
@@ -34,9 +34,7 @@ def test_extend_data_toeplitz_is_permutation_of_block():
     block = extend_data(data, ext_fact, ext_mode="block")
     toeplitz = extend_data(data, ext_fact, ext_mode="toeplitz")
 
-    reordered = (
-        block.view(samples, ext_fact, chs).permute(0, 2, 1).reshape(samples, chs * ext_fact)
-    )
+    reordered = block.view(samples, ext_fact, chs).permute(0, 2, 1).reshape(samples, chs * ext_fact)
     assert_close(toeplitz, reordered)
 
 

@@ -14,32 +14,53 @@ version = "1.0.0"
 description = "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
 authors = [{ name = "Irene Mendez Guerra", email = "irene.mendez17@imperial.ac.uk" }]
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 
+# Lower bounds only -- the exact, reproducible versions live in environment.yaml.
+# Keep in sync with environment.yaml and ci/constraints-min.txt (checked by
+# ci/check_deps_sync.py in pre-commit and CI).
 dependencies = [
-    "h5py",
-    "matplotlib",
-    "numpy<2.0.0",
-    "scipy",
-    "seaborn",
-    "pandas",
-    "scikit-learn",
-    "pyyaml",
-    "pytest",
-    "ipykernel",
-    "torch",                   # pip version (CPU by default)
-    "wandb",
-    "optuna",
-    "cmaes",                   # required by optuna.samplers.CmaEsSampler
-    "loguru",
-    "plotly",
-    "tqdm",
-    "typer",                   # scripts/run.py's CLI
+    "h5py>=3.10",
+    "matplotlib>=3.8",
+    "numpy>=1.26,<2.0.0",
+    "scipy>=1.11.1",
+    "seaborn>=0.13",
+    "pandas>=2.1",
+    "scikit-learn>=1.3",
+    "pyyaml>=6.0",
+    "torch>=2.7",              # pip version (CPU by default); 2.7 adds slogdet on MPS
+    "wandb>=0.16.4",
+    "optuna>=3.5",
+    "cmaes>=0.10",             # required by optuna.samplers.CmaEsSampler
+    "loguru>=0.7",
+    "plotly>=5.18",
+    "tqdm>=4.66",
+    "typer>=0.12",             # scripts/run.py's CLI
 ]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6", "pre-commit>=3", "ipykernel>=6.29"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests", "scripts"]
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "RUF"]
+# E501: the formatter owns line length (long strings/comments are left alone).
+# RUF001-003: Greek letters and maths symbols in strings/comments are intentional.
+ignore = ["E741", "E501", "RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# Import order in package __init__ files is load-bearing (avoids circular imports).
+"__init__.py" = ["I001", "RUF022"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-q"
 markers = [
     "slow: integration-style tests (Optuna studies, multi-batch adaptation loops) -- excluded by `pytest -m \"not slow\"`",
+    "repro: cross-platform reproducibility test on the NeuroMotion tutorial data (needs `make data`) -- run with `pytest -m repro`",
 ]

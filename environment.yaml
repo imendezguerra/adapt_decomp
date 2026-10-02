@@ -1,0 +1,40 @@
+# Reproducible environment for adapt_decomp: every direct dependency pinned exactly,
+# without build strings, so the same file resolves on Linux, macOS and Windows.
+#
+#   conda env create -f environment.yaml && conda activate adapt_decomp
+#
+# Installs the CPU build of pytorch. For GPU acceleration install a CUDA build of
+# torch afterwards (https://pytorch.org/get-started/locally/).
+#
+# Keep in sync with pyproject.toml's lower bounds (checked by ci/check_deps_sync.py).
+name: adapt_decomp
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.3
+  - pip
+  # Runtime
+  - pytorch==2.11.0
+  - numpy==1.26.4
+  - scipy==1.17.1
+  - scikit-learn==1.9.1
+  - pandas==3.0.2
+  - h5py==3.16.0
+  - matplotlib==3.10.9
+  - seaborn==0.13.2
+  - plotly==7.1.0
+  - tqdm==4.67.3
+  - loguru==0.7.3
+  - pyyaml==6.0.3
+  - optuna==4.8.0
+  - cmaes==0.13.0
+  - wandb==0.26.1
+  - typer==0.27.2
+  # Dev
+  - pytest==9.0.3
+  - ruff==0.16.9
+  - pre-commit==4.6.2
+  - ipykernel==7.2.0
+  - pip:
+      # The package itself (dependencies above already satisfy pyproject.toml).
+      - -e .

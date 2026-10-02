@@ -18,75 +18,61 @@ from adapt_decomp import CBSS, CBSSConfig
 
 config = CBSSConfig(
     # Preprocessing
-    fs=2048.0,                   # sampling frequency, in Hz
-    preprocess_emg=True,         # filter + notch the EMG before extension/whitening
-    lowcut=20.0,                 # high-pass cutoff, in Hz
-    highcut=500.0,               # low-pass cutoff, in Hz
-    filter_order=4,              # Butterworth filter order
-    powerline=True,              # apply powerline notch filtering
-    powerline_freq=50.0,         # powerline frequency to notch out, in Hz (50 or 60)
-    notch_width_hz=1.0,          # half-bandwidth per notch, in Hz
-    notch_n_harmonics=3,         # number of powerline harmonics notched out
-    notch_order=2,               # notch filter order
+    fs=2048.0,  # sampling frequency, in Hz
+    preprocess_emg=True,  # filter + notch the EMG before extension/whitening
+    lowcut=20.0,  # high-pass cutoff, in Hz
+    highcut=500.0,  # low-pass cutoff, in Hz
+    filter_order=4,  # Butterworth filter order
+    powerline=True,  # apply powerline notch filtering
+    powerline_freq=50.0,  # powerline frequency to notch out, in Hz (50 or 60)
+    notch_width_hz=1.0,  # half-bandwidth per notch, in Hz
+    notch_n_harmonics=3,  # number of powerline harmonics notched out
+    notch_order=2,  # notch filter order
     replace_bad_channels=False,  # interpolate ch_mask's False channels with neighbours via ch_map
-    ch_mask=None,                # boolean, length = raw channel count; True = keep, False = drop
-    ch_map=None,                 # electrode grid layout, required if replace_bad_channels
-
+    ch_mask=None,  # boolean, length = raw channel count; True = keep, False = drop
+    ch_map=None,  # electrode grid layout, required if replace_bad_channels
     # Extension
-    ext_fact=10,                 # number of delayed copies per channel
-    ext_mode="block",            # or "toeplitz"
-
+    ext_fact=10,  # number of delayed copies per channel
+    ext_mode="block",  # or "toeplitz"
     # PCA
-    n_components=None,           # or an int, to reduce dimensionality before whitening
-
+    n_components=None,  # or an int, to reduce dimensionality before whitening
     # Whitening
-    whitening_method="ZCA",      # or "PCA"
-    regularization="auto",       # or a float, or None
-    eps=1e-10,                   # numerical stability constant added during whitening
-
+    whitening_method="ZCA",  # or "PCA"
+    regularization="auto",  # or a float, or None
+    eps=1e-10,  # numerical stability constant added during whitening
     # ICA
-    contrast_fun="square",       # or "logcosh", "cube", or "smooth_abs"
-    contrast_exp=3.0,            # only used for "smooth_abs"
-    search_iter=100,             # random re-initialisations attempted
-    ica_iter=100,                # max fixed-point iterations per attemp (early-stopped on convergence)
-    ica_tol=1e-4,                # convergence tolerance on ||w_new . w_prev| - 1|
-
+    contrast_fun="square",  # or "logcosh", "cube", or "smooth_abs"
+    contrast_exp=3.0,  # only used for "smooth_abs"
+    search_iter=100,  # random re-initialisations attempted
+    ica_iter=100,  # max fixed-point iterations per attemp (early-stopped on convergence)
+    ica_tol=1e-4,  # convergence tolerance on ||w_new . w_prev| - 1|
     # Spike detection
-    spike_det_exp=2.0,           # power the source amplitude is raised to before peak detection.
-    spike_min_dist_ms=10.0,      # minimum inter-spike distance, in ms
-
+    spike_det_exp=2.0,  # power the source amplitude is raised to before peak detection.
+    spike_min_dist_ms=10.0,  # minimum inter-spike distance, in ms
     # Refinement loop
-    refinement_loop=True,        # run the iterative refinement loop after initial ICA convergence
-    refinement_mode="sil",       # or "cov_isi" -- metric used to pick the best refinement iteration
-    refine_max_iter=20,          # maximum number of refinement iterations
-
+    refinement_loop=True,  # run the iterative refinement loop after initial ICA convergence
+    refinement_mode="sil",  # or "cov_isi" -- metric used to pick the best refinement iteration
+    refine_max_iter=20,  # maximum number of refinement iterations
     # Quality control
-    sil_th=0.9,                  # minimum silhouette score for a unit to pass quality gating
-    min_spikes=10,               # minimum spike count for a unit to pass quality gating
-
+    sil_th=0.9,  # minimum silhouette score for a unit to pass quality gating
+    min_spikes=10,  # minimum spike count for a unit to pass quality gating
     # Duplicate removal
-    roa_th=0.3,                  # rate-of-agreement threshold above which two units are duplicates
+    roa_th=0.3,  # rate-of-agreement threshold above which two units are duplicates
     run_duplicate_removal=True,  # remove duplicate units after ICA search
-
     # Unit selection (post-hoc filter, applied inside decompose())
-    selection=None,              # or "unsupervised" / "supervised"
-    selection_kwargs=None,       # forwarded to CBSSResult.select_unsupervised()/select_supervised()
-
+    selection=None,  # or "unsupervised" / "supervised"
+    selection_kwargs=None,  # forwarded to CBSSResult.select_unsupervised()/select_supervised()
     # Compute properties
-    compute_properties=True,     # gates pnr/dr/muaps. Required for unsupervised selection
-
+    compute_properties=True,  # gates pnr/dr/muaps. Required for unsupervised selection
     # Result storage
-    save_emg=True,               # required if this result will feed AdaptDecomp later
-
+    save_emg=True,  # required if this result will feed AdaptDecomp later
     # Compute device
-    device="cpu",                # or "cuda"/"mps"; None = auto-select CUDA > MPS > CPU
-    dtype="float32",             # floating point precision used for computation
-
+    device="cpu",  # or "cuda"/"mps"; None = auto-select CUDA > MPS > CPU
+    dtype="float32",  # floating point precision used for computation
     # Reproducibility
-    random_seed=1909,            # fixed by default
-
+    random_seed=1909,  # fixed by default
     # Logging
-    verbose=False,               # print progress during decomposition
+    verbose=False,  # print progress during decomposition
 )
 result = CBSS(config).decompose(emg, timestamps)  # emg: (samples, channels)
 ```
@@ -152,7 +138,7 @@ Three ways to get a ready `CBSSResult` without re-running `decompose()`:
 ```python
 from adapt_decomp import CBSSResult
 
-result = CBSSResult.load("calibration/sub-01_cbss.pkl")   # written by result.save(path)
+result = CBSSResult.load("calibration/sub-01_cbss.pkl")  # written by result.save(path)
 ```
 
 **2. Apply an existing calibration's parameters to new EMG**, reusing its
@@ -160,7 +146,7 @@ extension mean, PCA/whitening matrices, and separation vectors, re-running
 only spike detection:
 
 ```python
-cbss = CBSS(config)                    # same config used to produce `result`
+cbss = CBSS(config)  # same config used to produce `result`
 applied = cbss.apply(new_emg, result, timestamps)
 ```
 
@@ -175,16 +161,19 @@ everywhere downstream expects one. `utils/loaders.py`'s
 
 ```python
 CBSSResult(
-    sources=ipts,            # [T, n_mu]
-    spikes=spikes,           # [T, n_mu] int32
-    spikes_dict=spikes_dict, # {unit_id: sample indices}
-    sep_vectors=sep_vectors, # [dim, n_mu]
-    whitening=whitening,     # [dim, dim]
-    extension_mean=ext_mean, # [1, C*ext_fact]
-    spikes_centr=spike_centr, base_centr=base_centr,  # [n_mu] each
-    sil=sil, cov_isi=cov_isi,                          # [n_mu] each
+    sources=ipts,  # [T, n_mu]
+    spikes=spikes,  # [T, n_mu] int32
+    spikes_dict=spikes_dict,  # {unit_id: sample indices}
+    sep_vectors=sep_vectors,  # [dim, n_mu]
+    whitening=whitening,  # [dim, dim]
+    extension_mean=ext_mean,  # [1, C*ext_fact]
+    spikes_centr=spike_centr,
+    base_centr=base_centr,  # [n_mu] each
+    sil=sil,
+    cov_isi=cov_isi,  # [n_mu] each
     ext_fact=ext_fact,
-    emg=emg_calib, timestamps=timestamps,   # required if used with AdaptDecomp
+    emg=emg_calib,
+    timestamps=timestamps,  # required if used with AdaptDecomp
 )
 ```
 
@@ -195,7 +184,7 @@ reduction; every other optional field (`pnr`, `dr`, `muaps`,
 ## Saving a calibration
 
 ```python
-result.save("calibration/sub-01_cbss.pkl")   # pickle round-trip via CBSSResult.load()
+result.save("calibration/sub-01_cbss.pkl")  # pickle round-trip via CBSSResult.load()
 ```
 
 `utils/loaders.py`'s `load_pooled_cbss_memory`/`load_pooled_cbss_disk` (see

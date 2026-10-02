@@ -1,6 +1,7 @@
 """Functions to preprocess EMG signals"""
 
 from typing import List, Literal, Optional, Tuple
+
 import numpy as np
 from scipy.signal import butter, sosfilt
 
@@ -40,10 +41,15 @@ def _build_sos_stages(
     stages = [butter(filter_order, [highpass, lowpass], fs=fs, btype="band", output="sos")]
     if notch_filter:
         for harmonic in notch_freq * np.arange(1, notch_n_harmonics + 1):
-            stages.append(butter(
-                notch_order, [harmonic - notch_width_hz, harmonic + notch_width_hz],
-                fs=fs, btype="bandstop", output="sos",
-            ))
+            stages.append(
+                butter(
+                    notch_order,
+                    [harmonic - notch_width_hz, harmonic + notch_width_hz],
+                    fs=fs,
+                    btype="bandstop",
+                    output="sos",
+                )
+            )
     return stages
 
 
@@ -78,8 +84,15 @@ def preprocess_emg(
     """
     out = np.asarray(data, dtype=np.float64)
     sos_stages = _build_sos_stages(
-        fs, highpass, lowpass, filter_order,
-        notch_filter, notch_freq, notch_width_hz, notch_n_harmonics, notch_order,
+        fs,
+        highpass,
+        lowpass,
+        filter_order,
+        notch_filter,
+        notch_freq,
+        notch_width_hz,
+        notch_n_harmonics,
+        notch_order,
     )
     for sos in sos_stages:
         out = sosfilt(sos, out, axis=0)
@@ -122,8 +135,15 @@ def preprocess_emg_stateful(
     """
     out = np.asarray(data, dtype=np.float64)
     sos_stages = _build_sos_stages(
-        fs, highpass, lowpass, filter_order,
-        notch_filter, notch_freq, notch_width_hz, notch_n_harmonics, notch_order,
+        fs,
+        highpass,
+        lowpass,
+        filter_order,
+        notch_filter,
+        notch_freq,
+        notch_width_hz,
+        notch_n_harmonics,
+        notch_order,
     )
     zi_new = []
     for i, sos in enumerate(sos_stages):
@@ -189,8 +209,10 @@ def replace_bad_channels(
         r0, c0 = int(row_idx[0]), int(col_idx[0])
         coords = np.array([[r0, c0]], dtype=int) + offsets  # [8, 2]
         in_bounds = (
-            (coords[:, 0] >= 0) & (coords[:, 0] < n_rows)
-            & (coords[:, 1] >= 0) & (coords[:, 1] < n_cols)
+            (coords[:, 0] >= 0)
+            & (coords[:, 0] < n_rows)
+            & (coords[:, 1] >= 0)
+            & (coords[:, 1] < n_cols)
         )
         coords = coords[in_bounds]
         neigh_ch = ch_map[coords[:, 0], coords[:, 1]]

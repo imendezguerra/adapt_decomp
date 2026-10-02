@@ -15,10 +15,9 @@ from torch.utils.data import Dataset
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.ops import stable_cov
 from adapt_decomp.preprocessing import extend_data as _extend_data
-from adapt_decomp.preprocessing import filter_kwargs
+from adapt_decomp.preprocessing import filter_kwargs, validate_channel_selection
 from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
 from adapt_decomp.preprocessing import select_channels as select_channels_fn
-from adapt_decomp.preprocessing import validate_channel_selection
 
 
 class Data(Dataset):
@@ -34,7 +33,7 @@ class Data(Dataset):
 
         Args:
             emg (torch.Tensor): Raw EMG data with shape (samples, channels).
-            preprocess (Optional[bool], optional): Whether to filter emg and 
+            preprocess (Optional[bool], optional): Whether to filter emg and
                 apply channel selection beforev entering. When False, emg is
                 only mean-centered instead. Defaults to True.
             config (Optional[AdaptConfig], optional): Online adaptation
@@ -60,7 +59,7 @@ class Data(Dataset):
 
         self.emg_ext = self.emg_ext.to(device=config.device, dtype=torch.float32)
         self.labels = torch.arange(emg.shape[0]).to(device=config.device)
-    
+
         if config.ext_mode == "toeplitz":
             ext_offset = offset.repeat_interleave(config.ext_fact)
         elif config.ext_mode == "block":
@@ -251,7 +250,8 @@ class Decomposition:
             warnings.warn(
                 "'ipts_calib' is deprecated and will be removed in a future "
                 "version; use 'sources_calib' instead.",
-                FutureWarning, stacklevel=2,
+                FutureWarning,
+                stacklevel=2,
             )
             if sources_calib is None:
                 sources_calib = ipts_calib
@@ -281,20 +281,16 @@ class Decomposition:
         # --- Immutable PCA projection (None = identity, i.e. no reduction) ---
         self.pca_components = (
             pca_components.to(dtype=torch.float32, device=self.device)
-            if pca_components is not None else None
+            if pca_components is not None
+            else None
         )
         self.pca_mean = (
-            pca_mean.to(dtype=torch.float32, device=self.device)
-            if pca_mean is not None else None
+            pca_mean.to(dtype=torch.float32, device=self.device) if pca_mean is not None else None
         )
 
         # --- Immutable calibration centroid references ---
-        self.spikes_centr_cal = spikes_centr.to(
-            dtype=torch.float32, device=self.device
-        )
-        self.base_centr_cal = base_centr.to(
-            dtype=torch.float32, device=self.device
-        )
+        self.spikes_centr_cal = spikes_centr.to(dtype=torch.float32, device=self.device)
+        self.base_centr_cal = base_centr.to(dtype=torch.float32, device=self.device)
 
         # n: whitening-space dimension (extended channel count, or PCA-reduced
         # count when pca_components is set)
@@ -380,8 +376,13 @@ class Decomposition:
 
         # Build FIFO buffer with length at least D to keep Rz full-rank (default = 2×D)
         auto_fifo = 2 * self.n
-        self.fifo_samples = max(self.n, self.fifo_length_cfg if (self.fifo_length_cfg is not None and self.fifo_length_cfg > 0) else auto_fifo)
-        self.fifo_cov = X_cal[-self.fifo_samples:].clone()
+        self.fifo_samples = max(
+            self.n,
+            self.fifo_length_cfg
+            if (self.fifo_length_cfg is not None and self.fifo_length_cfg > 0)
+            else auto_fifo,
+        )
+        self.fifo_cov = X_cal[-self.fifo_samples :].clone()
 
         # Precompute inmutable variables for whitening loss and update
         self._compute_calib_kl_stats(X_cal)
@@ -401,9 +402,9 @@ class Decomposition:
             with shape (N_cal_ext, n).
         """
         # Extend, center, and optionally apply PCA
-        X_cal = _extend_data(
-            self.emg_calib, self.ext_fact, ext_mode=self.ext_mode
-        ).to(device=self.device)
+        X_cal = _extend_data(self.emg_calib, self.ext_fact, ext_mode=self.ext_mode).to(
+            device=self.device
+        )
         X_cal = X_cal - X_cal.mean(0, keepdim=True)
         return self._apply_pca(X_cal)
 
@@ -421,7 +422,7 @@ class Decomposition:
 
         needs_full_rz = self.wh_mode == "kl_to_cal"
         if needs_full_rz:
-            Z_cal  = X_cal @ self.whitening.T
+            Z_cal = X_cal @ self.whitening.T
             Rz_cal = stable_cov(Z_cal, rowvar=False, rho=self.shrinkage, I=self.I, ddof=0)
             sign, logdet = torch.linalg.slogdet(Rz_cal)
             self.trace_cal = Rz_cal.trace()
@@ -436,7 +437,9 @@ class Decomposition:
                     self.Rz_cal_inv = self.I.clone()
                     self.logdet_cal = torch.zeros(1, device=self.device).squeeze()
         else:
-            self.kl_div_calib_mean = torch.zeros(1, device=self.device).squeeze()   # overridden below
+            self.kl_div_calib_mean = torch.zeros(
+                1, device=self.device
+            ).squeeze()  # overridden below
             self.trace_cal = torch.tensor(float(self.n), device=self.device)  # target trace(I) = D
 
     def _compute_mean_sigma_kl_cal(self, X_cal: torch.Tensor) -> None:
@@ -450,13 +453,14 @@ class Decomposition:
         Returns:
             None
         """
-        # Use a max number of batches to compute statistics 
+        # Use a max number of batches to compute statistics
         all_starts = torch.arange(
             0, X_cal.shape[0] - self.fifo_samples + 1, self.batch_size, device=self.device
         )
         if self.max_sigma_batches > 0 and len(all_starts) > self.max_sigma_batches:
-            sel = torch.linspace(0, len(all_starts) - 1, self.max_sigma_batches,
-                                 dtype=torch.long, device=self.device)
+            sel = torch.linspace(
+                0, len(all_starts) - 1, self.max_sigma_batches, dtype=torch.long, device=self.device
+            )
             starts = all_starts[sel]
         else:
             starts = all_starts
@@ -466,13 +470,13 @@ class Decomposition:
         _K_chunks: list[torch.Tensor] = []
 
         for c in range(0, len(starts), _chunk):
-            s = starts[c : c + _chunk]                              # [cs]
-            X_w = X_cal[s[:, None] + _arange[None, :]]             # [cs, fifo_samples, D]
+            s = starts[c : c + _chunk]  # [cs]
+            X_w = X_cal[s[:, None] + _arange[None, :]]  # [cs, fifo_samples, D]
             X_w = X_w - X_w.mean(1, keepdim=True)
-            Z_w = X_w @ self.whitening.T                                    # [cs, fifo_samples, D]
+            Z_w = X_w @ self.whitening.T  # [cs, fifo_samples, D]
             # stable_cov batches over the leading [cs] dim (replaces the old torch.bmm).
             Rz = stable_cov(Z_w, rowvar=False, rho=self.shrinkage, I=self.I, ddof=0)  # [cs, D, D]
-            signs, logdets = torch.linalg.slogdet(Rz)              # [cs]
+            signs, logdets = torch.linalg.slogdet(Rz)  # [cs]
             valid = signs > 0
             if not valid.any():
                 continue
@@ -481,7 +485,7 @@ class Decomposition:
                 tr = Rz_v.diagonal(dim1=-2, dim2=-1).sum(-1)
                 _K_chunks.append(0.5 * (tr - ld_v - self.n))
             else:  # kl_to_cal
-                A = self.Rz_cal_inv @ Rz_v                          # [D,D] @ [n,D,D]
+                A = self.Rz_cal_inv @ Rz_v  # [D,D] @ [n,D,D]
                 tr_A = A.diagonal(dim1=-2, dim2=-1).sum(-1)
                 _K_chunks.append(0.5 * (tr_A - (ld_v - self.logdet_cal) - self.n))
 
@@ -509,7 +513,7 @@ class Decomposition:
         Returns:
             None
         """
-        self.fifo_cov = torch.cat([self.fifo_cov, emg_batch], dim=0)[-self.fifo_samples:]
+        self.fifo_cov = torch.cat([self.fifo_cov, emg_batch], dim=0)[-self.fifo_samples :]
 
     def _compute_Rz_from_fifo(self) -> torch.Tensor:
         """Apply current wh to the FIFO and return the regularised whitened covariance.
@@ -522,7 +526,7 @@ class Decomposition:
             (n, n).
         """
         X_fifo = self.fifo_cov - self.fifo_cov.mean(0, keepdim=True)
-        Z_fifo = X_fifo @ self.whitening.T          # [fifo_samples, D]
+        Z_fifo = X_fifo @ self.whitening.T  # [fifo_samples, D]
         return stable_cov(Z_fifo, rowvar=False, rho=self.shrinkage, I=self.I, ddof=0)
 
     # ------------------------------------------------------------------
@@ -544,16 +548,22 @@ class Decomposition:
 
         # Compute contrast values during calibration per batch or spikes during calibration
         if self.contrast_scope == "batch_based":
-            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_batch_based(sources)
+            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_batch_based(
+                sources
+            )
         else:
-            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_spike_based(sources)
+            self.contrast_calib_mean, self.contrast_calib_std = self._compute_kappa_spike_based(
+                sources
+            )
 
         # EMA of ||grad_sv_row|| (per unit) used to normalize the sv natural-gradient
         # direction to unit scale (see update_sv_spike_gated). None = not yet seeded;
-        # the first online batch seeds each unit directly from its own value. 
+        # the first online batch seeds each unit directly from its own value.
         self.ema_gradnorm_sv: Optional[torch.Tensor] = None
 
-    def _compute_kappa_batch_based(self, sources: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _compute_kappa_batch_based(
+        self, sources: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Vectorised batch-wise kappa mean/std over reshaped fixed-size batches.
 
         Args:
@@ -565,19 +575,22 @@ class Decomposition:
             contrast_calib_std, each with shape (M,).
         """
         from adapt_decomp.cbss.ica import log_cosh
+
         M = sources.shape[1]
         n_full = (sources.shape[0] // self.batch_size) * self.batch_size
         if n_full >= 2 * self.batch_size:
             sources_b = sources[:n_full].reshape(-1, self.batch_size, M)
-            batch_kappas = log_cosh(sources_b).mean(dim=1)   # [n_batches, M]
+            batch_kappas = log_cosh(sources_b).mean(dim=1)  # [n_batches, M]
             contrast_calib_mean = batch_kappas.mean(dim=0)
             contrast_calib_std = batch_kappas.std(dim=0).clamp_min(1e-7)
         else:
-            contrast_calib_mean = log_cosh(sources).mean(dim=0)   # fallback: full-dataset
+            contrast_calib_mean = log_cosh(sources).mean(dim=0)  # fallback: full-dataset
             contrast_calib_std = torch.full((M,), 1e-7, device=self.device)
         return contrast_calib_mean, contrast_calib_std
 
-    def _compute_kappa_spike_based(self, sources: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _compute_kappa_spike_based(
+        self, sources: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Per-unit, spike-masked kappa mean/std via a per-batch loop (irregular masks).
 
         Args:
@@ -589,6 +602,7 @@ class Decomposition:
             contrast_calib_std, each with shape (M,).
         """
         from adapt_decomp.cbss.ica import log_cosh
+
         M = sources.shape[1]
         batch_kappas = []
         # Seed kappa_b fallback with full-dataset spike-based estimate
@@ -614,7 +628,7 @@ class Decomposition:
             contrast_calib_mean = _kappa_t.mean(dim=0)
             contrast_calib_std = _kappa_t.std(dim=0).clamp_min(1e-7)
         else:
-            contrast_calib_mean = kappa_seed   # fallback: full-dataset estimate
+            contrast_calib_mean = kappa_seed  # fallback: full-dataset estimate
             contrast_calib_std = torch.full((M,), 1e-7, device=self.device)
         return contrast_calib_mean, contrast_calib_std
 
@@ -634,7 +648,7 @@ class Decomposition:
         self.source_fifo: Optional[torch.Tensor] = None
 
         sources = self.sources_calib.to(self.device)  # [N_cal, M]
-        spikes = self.spikes_calib.to(self.device)     # [N_cal, M] int32
+        spikes = self.spikes_calib.to(self.device)  # [N_cal, M] int32
 
         sources_det = sources.abs().pow(self.spike_det_exp)
 
@@ -775,7 +789,8 @@ class AdaptationResult:
             warnings.warn(
                 "AdaptationResult's 'ipts' field is deprecated and will be "
                 "removed in a future version; use 'sources' instead.",
-                FutureWarning, stacklevel=2,
+                FutureWarning,
+                stacklevel=2,
             )
             if self.sources is None:
                 self.sources = self.ipts
@@ -804,9 +819,16 @@ class AdaptationResult:
             "total_time_ms": self.total_time_ms,
         }
         for key in (
-            "wh_loss", "sv_loss", "wh_trace",
-            "wh_loss_total", "sv_loss_total", "total_loss",
-            "diagnostics", "gt_matched_indices", "roa", "sil",
+            "wh_loss",
+            "sv_loss",
+            "wh_trace",
+            "wh_loss_total",
+            "sv_loss_total",
+            "total_loss",
+            "diagnostics",
+            "gt_matched_indices",
+            "roa",
+            "sil",
         ):
             value = getattr(self, key)
             if value is not None:

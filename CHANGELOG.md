@@ -5,6 +5,27 @@ All notable changes to `adapt_decomp` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Pre-commit hooks (whitespace/YAML/TOML checks, ruff lint + format, dependency-spec sync
+  check, fast tests on push) and GitHub Actions CI: tests on Python 3.10–3.12 across
+  Linux/macOS/Windows, a minimum-dependency-versions job, and the pinned environment on all
+  three OSes.
+- Cross-platform reproducibility test (`tests/reproducibility/`): the tutorial's adaptation is
+  checked against a stored reference on every OS.
+- `Makefile` with common tasks.
+
+### Changed
+
+- `environment.yaml` (exact, cross-platform pins) replaces the Windows-only
+  `environment.lock.yaml`.
+- `pyproject.toml` dependencies now have lower bounds; `pytest` and `ipykernel` moved to the
+  `dev` extra. Minimum Python is 3.10 (the code already required it) and minimum torch is 2.7
+  (earlier versions lack `slogdet` on Apple's MPS backend).
+- Codebase formatted and linted with ruff.
+
 ## [1.0.0] - 2026-09-22
 
 Full architectural rewrite of the package around two self-contained

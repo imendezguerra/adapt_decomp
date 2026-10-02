@@ -4,23 +4,28 @@ and AdaptationResult's save/load contract.
 """
 
 import numpy as np
-import torch
 import pytest
+import torch
 from torch.testing import assert_close
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import Data, RawData
 from adapt_decomp.preprocessing import extend_data
 
-
 # ---------------------------------------------------------------------------
 # Centroid initialisation from calibration
 # ---------------------------------------------------------------------------
 
+
 def test_centroid_init_from_calibration(make_decomposition):
     """After init_sd_update(), adaptive centroids equal calibration centroids."""
     decomp, _ = make_decomposition(
-        M=3, ext_fact=10, raw_chs=2, n_cal=500, spike_stride=50, orthonormal_sv=False,
+        M=3,
+        ext_fact=10,
+        raw_chs=2,
+        n_cal=500,
+        spike_stride=50,
+        orthonormal_sv=False,
     )
     assert_close(decomp.spikes_centr, decomp.spikes_centr_cal)
     assert_close(decomp.base_centr, decomp.base_centr_cal)
@@ -30,21 +35,26 @@ def test_centroid_init_from_calibration(make_decomposition):
 # FIFO covariance full rank when batch < D
 # ---------------------------------------------------------------------------
 
+
 def test_fifo_cov_full_rank(make_decomposition):
     """With fifo_length = D and batch_size < D, Rz from FIFO is full rank."""
     ext_fact, raw_chs, M = 10, 2, 3
-    D = raw_chs * ext_fact   # extended channels = 20
+    D = raw_chs * ext_fact  # extended channels = 20
     decomp, _ = make_decomposition(
-        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=300, spike_stride=50,
-        fifo_length=D,   # exactly D samples
+        M=M,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=300,
+        spike_stride=50,
+        fifo_length=D,  # exactly D samples
     )
 
     # Push one small batch (batch_size < D)
-    batch = torch.randn(10, D)   # 10 << D=20
+    batch = torch.randn(10, D)  # 10 << D=20
     decomp._update_fifo_cov(batch)
     Rz = decomp._compute_Rz_from_fifo()
 
-    sign, logdet = torch.linalg.slogdet(Rz)
+    sign, _logdet = torch.linalg.slogdet(Rz)
     assert sign.item() > 0, "Rz must be positive definite (full rank)"
     rank = torch.linalg.matrix_rank(Rz)
     assert rank.item() == D
@@ -54,12 +64,17 @@ def test_fifo_cov_full_rank(make_decomposition):
 # wh_mode = "kl_to_cal": KL(Rz_cal ‖ Rz_cal) = 0, and > 0 when drifted
 # ---------------------------------------------------------------------------
 
+
 def test_wh_mode_kl_to_cal_zero_at_calibration(make_decomposition):
     """KL(Rz_cal ‖ Rz_cal) must be exactly zero; Rz_cal_inv @ Rz_cal must equal I."""
     ext_fact, raw_chs, M = 2, 3, 2
     D = raw_chs * ext_fact
     decomp, _ = make_decomposition(
-        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=500, spike_stride=40,
+        M=M,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=500,
+        spike_stride=40,
         wh_mode="kl_to_cal",
     )
 
@@ -88,7 +103,11 @@ def test_wh_mode_kl_to_cal_nonzero_on_drift(make_decomposition):
     ext_fact, raw_chs, M, N_cal = 2, 3, 2, 500
     D = raw_chs * ext_fact
     decomp, _ = make_decomposition(
-        M=M, ext_fact=ext_fact, raw_chs=raw_chs, n_cal=N_cal, spike_stride=40,
+        M=M,
+        ext_fact=ext_fact,
+        raw_chs=raw_chs,
+        n_cal=N_cal,
+        spike_stride=40,
         wh_mode="kl_to_cal",
     )
 
@@ -120,6 +139,7 @@ def test_wh_mode_kl_to_cal_nonzero_on_drift(make_decomposition):
 # this reorganisation -- worth revisiting separately.
 # ---------------------------------------------------------------------------
 
+
 def test_whitening_error_computation():
     """Verify e_v_raw = K - K_cal and that K >= 0 for near-identity Rz."""
     D = 8
@@ -127,9 +147,9 @@ def test_whitening_error_computation():
     # Build a Rz slightly off identity
     noise = torch.randn(D, D) * 0.05
     Rz = I + 0.5 * (noise + noise.T)
-    Rz = (1 - 1e-3) * Rz + 1e-3 * I   # shrinkage
+    Rz = (1 - 1e-3) * Rz + 1e-3 * I  # shrinkage
 
-    sign, logdet = torch.linalg.slogdet(Rz)
+    _sign, logdet = torch.linalg.slogdet(Rz)
     K = 0.5 * (Rz.trace() - logdet - D)
     K_cal = torch.tensor(0.1)
 
@@ -143,23 +163,29 @@ def test_whitening_error_computation():
 # ext_mode is honoured by Decomposition, not silently defaulted to "block"
 # ---------------------------------------------------------------------------
 
+
 def test_decomposition_uses_configured_ext_mode(make_decomposition):
     """Decomposition.init_wh_update must extend emg_calib with AdaptConfig.ext_mode,
     not silently fall back to 'block' -- verified via the FIFO buffer it seeds."""
     ext_fact = 2
     decomp, _ = make_decomposition(
-        M=2, ext_fact=ext_fact, raw_chs=3, n_cal=300, spike_stride=40,
+        M=2,
+        ext_fact=ext_fact,
+        raw_chs=3,
+        n_cal=300,
+        spike_stride=40,
         ext_mode="toeplitz",
     )
 
     expected = extend_data(decomp.emg_calib, ext_fact, ext_mode="toeplitz")
     expected = expected - expected.mean(0, keepdim=True)
-    assert_close(decomp.fifo_cov, expected[-decomp.fifo_samples:])
+    assert_close(decomp.fifo_cov, expected[-decomp.fifo_samples :])
 
 
 # ---------------------------------------------------------------------------
 # Data channel selection (ch_mask/ch_map/replace_bad_channels)
 # ---------------------------------------------------------------------------
+
 
 def test_data_ch_mask_drop_shrinks_emg_ext_width():
     """ch_mask set (drop mode): Data.emg_ext's channel width reflects the
@@ -167,7 +193,7 @@ def test_data_ch_mask_drop_shrinks_emg_ext_width():
     since channel selection only runs alongside filtering (see Data.__init__)."""
     ext_fact, raw_chs = 2, 4
     emg = torch.randn(100, raw_chs)
-    ch_mask = np.array([True, False, True, True])   # 3 good channels
+    ch_mask = np.array([True, False, True, True])  # 3 good channels
     config = AdaptConfig(ext_fact=ext_fact, ch_mask=ch_mask)
     data = Data(emg, preprocess=True, config=config)
     assert data.emg_ext.shape[1] == 3 * ext_fact
@@ -199,7 +225,7 @@ def test_data_ch_mask_length_mismatch_raises():
     preprocess=True, since channel selection only runs alongside filtering
     (see Data.__init__)."""
     emg = torch.randn(50, 4)
-    ch_mask = np.array([True, False, True])   # length 3, emg has 4 channels
+    ch_mask = np.array([True, False, True])  # length 3, emg has 4 channels
     config = AdaptConfig(ext_fact=2, ch_mask=ch_mask)
     with pytest.raises(ValueError, match="ch_mask"):
         Data(emg, preprocess=True, config=config)
@@ -208,6 +234,7 @@ def test_data_ch_mask_length_mismatch_raises():
 # ---------------------------------------------------------------------------
 # RawData: minimal Dataset contract for the streaming mode
 # ---------------------------------------------------------------------------
+
 
 def test_raw_data_length_matches_emg_rows():
     emg = torch.randn(37, 4)
@@ -233,6 +260,7 @@ def test_raw_data_dtype_and_device():
 # ---------------------------------------------------------------------------
 # AdaptationResult save/load (pickle round-trip)
 # ---------------------------------------------------------------------------
+
 
 def test_adaptation_result_save_load_roundtrip(tmp_path):
     """AdaptationResult.save()/.load() should round-trip tensors via pickle."""
@@ -261,6 +289,7 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
 def test_adaptation_result_load_rejects_wrong_type(tmp_path):
     """AdaptationResult.load() must raise ValueError if the pickle holds a different type."""
     import pickle
+
     from adapt_decomp.adaptation.data_structures import AdaptationResult
 
     path = tmp_path / "not_a_result.pkl"
@@ -298,6 +327,7 @@ def test_adaptation_result_sil_roundtrip(tmp_path):
 def test_adaptation_result_sil_defaults_none_for_legacy_pickle(tmp_path):
     """A pickle written before `sil` existed should load with sil is None, not AttributeError."""
     import pickle
+
     from adapt_decomp.adaptation.data_structures import AdaptationResult
 
     batches, M = 4, 2
@@ -340,7 +370,13 @@ def test_decomposition_ipts_calib_deprecated_alias_warns():
 
     with pytest.warns(FutureWarning, match="ipts_calib"):
         decomp = Decomposition(
-            wh, sv, base_cal, spike_cal, emg_cal, spikes_cal, cfg,
+            wh,
+            sv,
+            base_cal,
+            spike_cal,
+            emg_cal,
+            spikes_cal,
+            cfg,
             ipts_calib=sources_cal,
         )
 

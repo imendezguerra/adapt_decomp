@@ -1,5 +1,6 @@
 # Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters
 
+[![CI](https://github.com/imendezguerra/adapt_decomp/actions/workflows/ci.yml/badge.svg)](https://github.com/imendezguerra/adapt_decomp/actions/workflows/ci.yml)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22902494.svg)](https://doi.org/10.5281/zenodo.22902494)
 
 This repository contains functions to adaptively decompose electromyography (EMG) into motor unit firings during dynamic conditions in real-time (~22 ms per 100 ms batch, CPU only with loss calculation) based on online learning metrics with tunable hyperparameters as described in [Mendez Guerra et al, JNE, 2024](https://dx.doi.org/10.1088/1741-2552/ad5ebf). The code is implemented in Python using PyTorch.
@@ -49,9 +50,10 @@ flowchart LR
 
 ## Table of Contents
 - [Installation](#installation)
-- [Dcomumentation](#Dcomumentation)
+- [Documentation](#documentation)
 - [Tutorial](#tutorial)
 - [FDSI Benchmark](#fdsi-benchmark)
+- [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
 - [Citation](#citation)
@@ -68,22 +70,19 @@ To set up the project locally do the following:
     ```sh
     cd adapt_decomp
     ```
-3. Create the conda environment from the `environment.lock.yaml` file:
+3. Create and activate the conda environment from `environment.yaml` (every dependency pinned to an exact version; also installs the package in editable mode):
     ```sh
-    conda env create -f environment.lock.yaml
-    ```
-4. Activate the environment:
-    ```sh
+    conda env create -f environment.yaml
     conda activate adapt_decomp
     ```
-5. Install the package:
+    Alternatively, with pip only (dependency versions are not pinned):
     ```sh
-    pip install -e .
+    pip install -e ".[dev]"
     ```
 
-Please note that `environment.lock.yaml` only installs the `cpu` version of `pytorch`. To enable GPU acceleration, `cuda` will need to be installed manually (check command [here](https://pytorch.org/get-started/locally/)).
+Please note that `environment.yaml` only installs the `cpu` version of `pytorch`. To enable GPU acceleration, `cuda` will need to be installed manually (check command [here](https://pytorch.org/get-started/locally/)).
 
-The code has been tested on macOS, Windows, and Linux.
+The code is tested on macOS, Windows, and Linux in CI (see [Development](#development)).
 
 ## Documentation
 
@@ -151,6 +150,43 @@ unzip '*.zip' -d data/
 
 Each dataset folder then contains its own `README.md` describing how the data was generated
 and what every field means.
+
+## Development
+
+Install the git hooks once (`pre-commit` comes with the `dev` extras / `environment.yaml`).
+They lint and format on every commit, check the dependency specs are in sync, and run the
+fast tests on every push:
+
+```sh
+pre-commit install
+pre-commit run --all-files   # optional: run every hook on the whole repo now
+```
+
+Common tasks are in the `Makefile` (`make test`, `make test-all`, `make lint`, ...).
+
+**Dependencies** are declared in three places that must agree (enforced by
+`ci/check_deps_sync.py` in pre-commit and CI):
+
+| File | Holds | Tested by |
+|------|-------|-----------|
+| `pyproject.toml` | lower bounds (what `pip install` resolves) | CI on Python 3.10–3.12, Linux/macOS/Windows; weekly against new releases |
+| `environment.yaml` | exact pins of every direct dependency (the reproducible environment) | CI on Linux/macOS/Windows |
+| `ci/constraints-min.txt` | the lower bounds, pinned | CI `minimum-deps` job |
+
+To change a dependency, update all three together.
+
+**Reproducibility.** `tests/reproducibility/` re-runs the tutorial's adaptation (section 2.2,
+NeuroMotion data, CPU) and compares spike trains, rate of agreement with the ground truth,
+losses and final parameters against a stored reference. CI runs it on Linux, macOS and Windows
+from `environment.yaml`. Locally:
+
+```sh
+make data    # download the NeuroMotion tutorial data (~1.6 GB), once
+make repro   # pytest tests/reproducibility -m repro
+```
+
+Only regenerate the reference (`make reference`) when results are *meant* to change, and say so
+in `CHANGELOG.md`.
 
 ## Contributing
 We welcome contributions! Here's how you can contribute:

@@ -24,9 +24,9 @@ def test_find_peaks_multisource_has_one_canonical_implementation():
     """spikes/detection.py must be the single canonical find_peaks_multisource --
     adaptation/ops.py and spikes/metrics.py both import it from there rather than
     holding independent copies (ops.py used to carry its own byte-identical copy)."""
-    from adapt_decomp.spikes.detection import find_peaks_multisource
     from adapt_decomp.adaptation import ops as adaptation_ops
     from adapt_decomp.spikes import metrics as spikes_metrics
+    from adapt_decomp.spikes.detection import find_peaks_multisource
 
     assert adaptation_ops.find_peaks_multisource is find_peaks_multisource
     assert spikes_metrics.find_peaks_multisource is find_peaks_multisource

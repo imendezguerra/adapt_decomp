@@ -4,31 +4,31 @@ No torch device/IO/Decomposition setup needed -- these are the cheapest,
 fastest tests in the suite and the ones to run on every change.
 """
 
-import torch
 import pytest
+import torch
 from torch.testing import assert_close
 
-from adapt_decomp.cbss.ica import log_cosh
 from adapt_decomp.adaptation.ops import (
+    classify_peaks_from_adaptive_centroids,
     clip_global_delta,
     clip_rowwise_delta,
-    orthonormalize_rows_qr,
+    gate_spikes_by_iqr,
     orthonormalize_rows_gram_schmidt,
-    classify_peaks_from_adaptive_centroids,
+    orthonormalize_rows_qr,
     update_centroids_from_peaks,
     update_sv_spike_gated,
-    gate_spikes_by_iqr,
 )
-
+from adapt_decomp.cbss.ica import log_cosh
 
 # ---------------------------------------------------------------------------
 # clip_global_delta
 # ---------------------------------------------------------------------------
 
+
 def test_clip_global_delta_clips():
     """Delta whose norm exceeds max_rel_delta * ref_norm is scaled down."""
     ref = torch.ones(4)
-    delta = torch.ones(4) * 10.0   # norm >> ref norm
+    delta = torch.ones(4) * 10.0  # norm >> ref norm
     clipped = clip_global_delta(delta, ref, max_rel_delta=0.1)
     assert torch.linalg.norm(clipped) <= 0.1 * torch.linalg.norm(ref) + 1e-6
 
@@ -45,26 +45,28 @@ def test_clip_global_delta_noop():
 # clip_rowwise_delta
 # ---------------------------------------------------------------------------
 
+
 def test_clip_rowwise_delta_clips():
     """Each row of delta is clipped independently."""
     ref = torch.ones(3, 4)
     delta = torch.zeros(3, 4)
-    delta[0] = 100.0   # row 0: way too large
-    delta[1] = 0.001   # row 1: fine
-    delta[2] = 100.0   # row 2: way too large
+    delta[0] = 100.0  # row 0: way too large
+    delta[1] = 0.001  # row 1: fine
+    delta[2] = 100.0  # row 2: way too large
     clipped = clip_rowwise_delta(delta, ref, max_rel_delta=0.1)
 
     row_norms_clipped = torch.linalg.norm(clipped, dim=1)
     row_norms_ref = torch.linalg.norm(ref, dim=1)
 
     assert row_norms_clipped[0] <= 0.1 * row_norms_ref[0] + 1e-6
-    assert_close(clipped[1], delta[1])   # row 1 unchanged
+    assert_close(clipped[1], delta[1])  # row 1 unchanged
     assert row_norms_clipped[2] <= 0.1 * row_norms_ref[2] + 1e-6
 
 
 # ---------------------------------------------------------------------------
 # classify_peaks_from_adaptive_centroids
 # ---------------------------------------------------------------------------
+
 
 def test_classify_peaks_uses_adaptive_centroids():
     """spike_mask is True only where sources_det exceeds the adaptive threshold."""
@@ -73,8 +75,8 @@ def test_classify_peaks_uses_adaptive_centroids():
     base_centroids = torch.tensor([1.0, 2.0])
     # threshold = base + 0.5 * (spike - base) = [2.5, 4.0]
     sources_det = torch.zeros(N, M)
-    sources_det[5, 0] = 3.0   # above threshold 2.5 → spike
-    sources_det[5, 1] = 3.0   # below threshold 4.0 → not spike
+    sources_det[5, 0] = 3.0  # above threshold 2.5 → spike
+    sources_det[5, 1] = 3.0  # below threshold 4.0 → not spike
     sources_det[10, 1] = 5.0  # above threshold 4.0 → spike
     peak_mask = torch.zeros(N, M, dtype=torch.bool)
     peak_mask[5, :] = True
@@ -96,13 +98,15 @@ def test_classify_peaks_not_frozen_cal():
 
     # With high spike_centroids → threshold high → no spikes
     spike_mask_high = classify_peaks_from_adaptive_centroids(
-        sources_det, peak_mask,
+        sources_det,
+        peak_mask,
         spike_centroids=torch.tensor([8.0]),
         base_centroids=torch.tensor([1.0]),
     )
     # With low spike_centroids → threshold low → all spikes
     spike_mask_low = classify_peaks_from_adaptive_centroids(
-        sources_det, peak_mask,
+        sources_det,
+        peak_mask,
         spike_centroids=torch.tensor([3.5]),
         base_centroids=torch.tensor([1.0]),
     )
@@ -113,6 +117,7 @@ def test_classify_peaks_not_frozen_cal():
 # ---------------------------------------------------------------------------
 # update_centroids_from_peaks — update and skip logic
 # ---------------------------------------------------------------------------
+
 
 def _make_centroid_inputs(N=100, M=2):
     spike_centroids = torch.tensor([4.0] * M)
@@ -136,8 +141,13 @@ def test_centroid_update_with_sufficient_spikes():
     """Centroid updates when spike/base counts meet minima."""
     sources, peak_mask, spike_mask, sc, bc = _make_centroid_inputs()
     new_sc, new_bc = update_centroids_from_peaks(
-        sources, peak_mask, spike_mask, sc, bc,
-        min_spikes_for_centroid=1, min_base_peaks_for_centroid=3,
+        sources,
+        peak_mask,
+        spike_mask,
+        sc,
+        bc,
+        min_spikes_for_centroid=1,
+        min_base_peaks_for_centroid=3,
     )
     # Should differ from originals (not stuck)
     assert not torch.all(new_sc == sc) or not torch.all(new_bc == bc)
@@ -155,8 +165,13 @@ def test_centroid_update_skipped_few_samples():
     sc = torch.tensor([4.0] * M)
     bc = torch.tensor([1.0] * M)
     new_sc, new_bc = update_centroids_from_peaks(
-        sources, peak_mask, spike_mask, sc, bc,
-        min_spikes_for_centroid=1, min_base_peaks_for_centroid=3,
+        sources,
+        peak_mask,
+        spike_mask,
+        sc,
+        bc,
+        min_spikes_for_centroid=1,
+        min_base_peaks_for_centroid=3,
     )
     assert_close(new_sc, sc)
     assert_close(new_bc, bc)
@@ -167,17 +182,22 @@ def test_centroid_update_reverted_if_invalid():
     N, M = 50, 1
     # Set up so batch spike values are below base_centroids
     sources = torch.zeros(N, M)
-    sources[10, 0] = 0.1   # tiny "spike"
+    sources[10, 0] = 0.1  # tiny "spike"
     spike_mask = torch.zeros(N, M, dtype=torch.bool)
     spike_mask[10, 0] = True
     peak_mask = spike_mask.clone()
 
     sc = torch.tensor([4.0])
-    bc = torch.tensor([3.5])   # already close; tiny spike will collapse ordering
+    bc = torch.tensor([3.5])  # already close; tiny spike will collapse ordering
     new_sc, new_bc = update_centroids_from_peaks(
-        sources, peak_mask, spike_mask, sc, bc,
-        centroid_momentum=0.0,   # full replacement to make the violation obvious
-        min_spikes_for_centroid=1, min_base_peaks_for_centroid=0,
+        sources,
+        peak_mask,
+        spike_mask,
+        sc,
+        bc,
+        centroid_momentum=0.0,  # full replacement to make the violation obvious
+        min_spikes_for_centroid=1,
+        min_base_peaks_for_centroid=0,
     )
     assert torch.all(new_sc > new_bc)
 
@@ -185,6 +205,7 @@ def test_centroid_update_reverted_if_invalid():
 # ---------------------------------------------------------------------------
 # update_sv_spike_gated
 # ---------------------------------------------------------------------------
+
 
 def test_no_sv_update_no_spikes():
     """All-zero spike_mask → delta_sv is all zero (sv unchanged after update + orth)."""
@@ -196,8 +217,12 @@ def test_no_sv_update_no_spikes():
     spike_mask = torch.zeros(N, M, dtype=torch.bool)
     kappa_cal = torch.zeros(M)
 
-    sv_new, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+    _sv_new, diag = update_sv_spike_gated(
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
@@ -214,12 +239,16 @@ def test_only_active_sources_get_delta_sv():
     Z = torch.randn(N, D)
     sources = Z @ sv.T
     spike_mask = torch.zeros(N, M, dtype=torch.bool)
-    spike_mask[::5, 0] = True   # source 0 has spikes
-    spike_mask[::7, 2] = True   # source 2 has spikes
+    spike_mask[::5, 0] = True  # source 0 has spikes
+    spike_mask[::7, 2] = True  # source 2 has spikes
     kappa_cal = torch.zeros(M)
 
     _, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
@@ -257,12 +286,20 @@ def test_debug_mode_returns_diagnostics():
     kappa_cal = torch.zeros(M)
 
     _, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
     )
     required_keys = {
-        "kappa", "contrast_error",
-        "spike_counts", "active", "delta_sv_norm", "orthogonality_error",
+        "kappa",
+        "contrast_error",
+        "spike_counts",
+        "active",
+        "delta_sv_norm",
+        "orthogonality_error",
     }
     assert required_keys.issubset(set(diag.keys()))
 
@@ -280,12 +317,20 @@ def test_contrast_scope_batch_vs_spike():
     spike_mask[::3] = True
 
     _, diag_batch = update_sv_spike_gated(
-        sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv.clone(),
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=0.0,
         contrast_scope="batch_based",
     )
     _, diag_spike = update_sv_spike_gated(
-        sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv.clone(),
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=0.0,
         contrast_scope="spike_based",
     )
@@ -304,7 +349,11 @@ def test_sv_update_requires_at_least_one_spike():
     kappa_cal = torch.zeros(M)
 
     sv_new, _ = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
         contrast_scope="spike_based",
     )
@@ -316,6 +365,7 @@ def test_sv_update_requires_at_least_one_spike():
 # wh_learning_rate/lr_sv direction-normalized update: proportionality,
 # safety-net-is-rare, EMA smoothing
 # ---------------------------------------------------------------------------
+
 
 def test_delta_sv_scales_with_error_magnitude():
     """With a loose safety clip, delta_sv_norm scales linearly with |e_b| -- the
@@ -333,9 +383,14 @@ def test_delta_sv_scales_with_error_magnitude():
     def delta_norm_for(e_b_target: torch.Tensor) -> float:
         kappa_cal = kappa - e_b_target
         _, diag = update_sv_spike_gated(
-            sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-            max_rel_delta_sv=1e6,   # effectively unclipped
-            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
+            sv.clone(),
+            Z,
+            sources,
+            kappa_cal,
+            spike_mask=spike_mask,
+            max_rel_delta_sv=1e6,  # effectively unclipped
+            contrast_scope="batch_based",
+            sigma_kappa_cal=sigma_kappa_cal,
             lr_sv=1e-3,
         )
         return diag["delta_sv_norm"][0].item()
@@ -358,18 +413,23 @@ def test_safety_clip_engages_only_for_extreme_error():
     sigma_kappa_cal = torch.ones(M)
     kappa = log_cosh(sources).mean(dim=0)
     lr_sv = 1e-3
-    safety_ceiling = 20.0 * lr_sv   # matches AdaptConfig.safety_clip_multiplier_sv default
+    safety_ceiling = 20.0 * lr_sv  # matches AdaptConfig.safety_clip_multiplier_sv default
 
     def run(e_b_target: torch.Tensor):
         kappa_cal = kappa - e_b_target
         return update_sv_spike_gated(
-            sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
+            sv.clone(),
+            Z,
+            sources,
+            kappa_cal,
+            spike_mask=spike_mask,
             max_rel_delta_sv=safety_ceiling,
-            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
+            contrast_scope="batch_based",
+            sigma_kappa_cal=sigma_kappa_cal,
             lr_sv=lr_sv,
         )
 
-    _, diag_typical = run(torch.tensor([2.0]))     # well within the ~20-sigma margin
+    _, diag_typical = run(torch.tensor([2.0]))  # well within the ~20-sigma margin
     _, diag_extreme = run(torch.tensor([1000.0]))  # deliberately pathological
 
     assert diag_typical["delta_sv_norm"][0].item() == pytest.approx(
@@ -393,9 +453,14 @@ def test_ema_gradnorm_cold_start_seeds_directly():
     kappa_cal = torch.zeros(M)
 
     _, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
-        contrast_scope="batch_based", ema_gradnorm_sv=None,
+        contrast_scope="batch_based",
+        ema_gradnorm_sv=None,
     )
     G = torch.tanh(sources)
     grad_sv = (G.T @ Z) / N
@@ -416,9 +481,15 @@ def test_ema_gradnorm_blends_on_subsequent_call():
     alpha = 0.8
 
     _, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1.0,
-        contrast_scope="batch_based", ema_gradnorm_sv=prior_ema, ema_alpha=alpha,
+        contrast_scope="batch_based",
+        ema_gradnorm_sv=prior_ema,
+        ema_alpha=alpha,
     )
     G = torch.tanh(sources)
     grad_sv = (G.T @ Z) / N
@@ -433,6 +504,7 @@ def test_ema_gradnorm_blends_on_subsequent_call():
 # main (v1)'s fixed-learning-rate update (sv's sign flips from an
 # error-correcting descent to an unconditional ascent).
 # ---------------------------------------------------------------------------
+
 
 def test_lr_alone_ignores_error_magnitude_sv():
     """With lr_alone=True, delta_sv_norm is identical regardless of e_b's magnitude --
@@ -451,10 +523,16 @@ def test_lr_alone_ignores_error_magnitude_sv():
     def delta_norm_for(e_b_target: torch.Tensor) -> float:
         kappa_cal = kappa - e_b_target
         _, diag = update_sv_spike_gated(
-            sv.clone(), Z, sources, kappa_cal, spike_mask=spike_mask,
-            max_rel_delta_sv=1e6,   # effectively unclipped
-            contrast_scope="batch_based", sigma_kappa_cal=sigma_kappa_cal,
-            lr_sv=1e-3, lr_mode="fixed",
+            sv.clone(),
+            Z,
+            sources,
+            kappa_cal,
+            spike_mask=spike_mask,
+            max_rel_delta_sv=1e6,  # effectively unclipped
+            contrast_scope="batch_based",
+            sigma_kappa_cal=sigma_kappa_cal,
+            lr_sv=1e-3,
+            lr_mode="fixed",
         )
         return diag["delta_sv_norm"][0].item()
 
@@ -480,14 +558,22 @@ def test_lr_alone_is_natural_gradient_ascent_for_sv():
     lr_sv = 2e-3
 
     _, diag = update_sv_spike_gated(
-        sv, Z, sources, kappa_cal, spike_mask=spike_mask,
+        sv,
+        Z,
+        sources,
+        kappa_cal,
+        spike_mask=spike_mask,
         max_rel_delta_sv=1e6,
-        contrast_scope="batch_based", lr_sv=lr_sv, lr_mode="fixed",
+        contrast_scope="batch_based",
+        lr_sv=lr_sv,
+        lr_mode="fixed",
     )
     G = torch.tanh(sources)
     grad_sv = (G.T @ Z) / N
     expected_delta = lr_sv * grad_sv
-    assert_close(diag["delta_sv_norm"], torch.linalg.norm(expected_delta, dim=1), atol=1e-5, rtol=1e-4)
+    assert_close(
+        diag["delta_sv_norm"], torch.linalg.norm(expected_delta, dim=1), atol=1e-5, rtol=1e-4
+    )
     # Sign check: applying sv + delta_sv moves each row TOWARD grad_sv (ascent), not away.
     sv_new = sv + expected_delta
     assert ((sv_new * grad_sv).sum(dim=1) > (sv * grad_sv).sum(dim=1)).all()
@@ -496,6 +582,7 @@ def test_lr_alone_is_natural_gradient_ascent_for_sv():
 # ---------------------------------------------------------------------------
 # gate_spikes_by_iqr
 # ---------------------------------------------------------------------------
+
 
 def _make_iqr_gate_inputs(N=50, M=3):
     torch.manual_seed(0)
@@ -535,7 +622,7 @@ def test_gate_spikes_by_iqr_outlier_spike_excluded():
     spike_mask[3, 0] = True
     # peak_power=2, use_abs=True: sources_det = |sources|^2
     # upper_gate = 4.0 + 3*0.5 = 5.5; set sources so sources_det = 6.0 > 5.5
-    sources[3, 0] = 6.0 ** 0.5
+    sources[3, 0] = 6.0**0.5
     Q75_cal = torch.tensor([4.0])
     IQR_cal = torch.tensor([0.5])
     out = gate_spikes_by_iqr(sources, spike_mask, Q75_cal, IQR_cal, gate_factor=3.0)

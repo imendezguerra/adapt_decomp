@@ -25,11 +25,11 @@ class CBSSConfig:
     filter_order: int = 4
     powerline: bool = True
     powerline_freq: float = 50.0
-    notch_width_hz: float = 1.0      # half-bandwidth per notch, in Hz
+    notch_width_hz: float = 1.0  # half-bandwidth per notch, in Hz
     notch_n_harmonics: int = 3
     notch_order: int = 2
     replace_bad_channels: bool = False
-    ch_mask: Optional[np.ndarray] = None   # boolean, length = raw channel count; True = keep
+    ch_mask: Optional[np.ndarray] = None  # boolean, length = raw channel count; True = keep
     ch_map: Optional[np.ndarray] = None
 
     # Extension
@@ -46,7 +46,7 @@ class CBSSConfig:
 
     # ICA
     contrast_fun: Literal["logcosh", "square", "cube", "smooth_abs"] = "square"
-    contrast_exp: float = 3.0       # Only used for smooth_abs
+    contrast_exp: float = 3.0  # Only used for smooth_abs
     search_iter: int = 100
     ica_iter: int = 100
     ica_tol: float = 1e-4
@@ -74,8 +74,10 @@ class CBSSConfig:
     # behaviour with no selection configured.
     # - unsupervised: selection based on motor unit properties
     # - supervised: selection based on ground truth
-    selection: Literal["unsupervised", "supervised", None] = None 
-    selection_kwargs: Optional[Dict[str, Any]] = None  # forwarded to CBSSResult.select_unsupervised()/select_supervised()
+    selection: Literal["unsupervised", "supervised", None] = None
+    selection_kwargs: Optional[Dict[str, Any]] = (
+        None  # forwarded to CBSSResult.select_unsupervised()/select_supervised()
+    )
 
     # Compute properties
     compute_properties: bool = True
@@ -84,7 +86,7 @@ class CBSSConfig:
     save_emg: bool = True
 
     # Compute device (None = auto: CUDA > MPS > CPU)
-    device: Optional[Literal['cpu', 'mps', 'cuda']] = 'cpu'
+    device: Optional[Literal["cpu", "mps", "cuda"]] = "cpu"
     dtype: torch.dtype = torch.float32
 
     # Reproducibility

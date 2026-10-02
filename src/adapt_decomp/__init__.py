@@ -10,7 +10,7 @@ from adapt_decomp.adaptation import (
 from adapt_decomp.utils.plots import (
     plot_sep_vectors_comp,
     plot_whitening_comp,
-    plot_sep_vectors_diff
+    plot_sep_vectors_diff,
 )
 from adapt_decomp.utils.loaders import (
     load_data,

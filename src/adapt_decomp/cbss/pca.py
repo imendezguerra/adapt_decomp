@@ -1,8 +1,10 @@
 """PCA dimensionality reduction for extended EMG data."""
 
+from typing import Optional, Tuple
+
 import torch
 from sklearn.decomposition import PCA
-from typing import Optional, Tuple
+
 
 def pca_reduction(
     emg_ext: torch.Tensor,

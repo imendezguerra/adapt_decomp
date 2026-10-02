@@ -3,6 +3,7 @@
 import torch
 from torch.nn import functional as F
 
+
 @torch.no_grad()
 def detect_spikes(
     source: torch.Tensor,
@@ -32,15 +33,19 @@ def detect_spikes(
             - sil (float, optional): Silhouette score if compute_sil is True.
     """
     # Apply peak detection to the source signal using torch
-    peak_mask, peak_values = find_peaks_multisource(source.unsqueeze(1), min_dist, peak_power, use_abs)
-    peak_values = peak_values[:, 0]                      
+    peak_mask, peak_values = find_peaks_multisource(
+        source.unsqueeze(1), min_dist, peak_power, use_abs
+    )
+    peak_values = peak_values[:, 0]
     peaks = peak_mask[:, 0].nonzero(as_tuple=True)[0]
 
     # If centroids are provided, use them to classify peaks; otherwise, compute centroids using k-means clustering
     if spike_centroid is not None and base_centroid is not None:
         spike_thr = base_centroid + (spike_centroid - base_centroid) / 2
         labels = (peak_values[peaks] > spike_thr).long()
-        centers = torch.tensor([base_centroid, spike_centroid], dtype=peak_values.dtype, device=source.device)
+        centers = torch.tensor(
+            [base_centroid, spike_centroid], dtype=peak_values.dtype, device=source.device
+        )
     else:
         if peaks.shape[0] < 2:
             empty = torch.empty(0, dtype=torch.long, device=source.device)
@@ -50,7 +55,7 @@ def detect_spikes(
             sc = float(spike_centroid) if spike_centroid is not None else 0.0
             bc = float(base_centroid) if base_centroid is not None else 0.0
             vals = (empty, sc, bc)
-            return vals + (0.0,) if compute_sil else vals
+            return (*vals, 0.0) if compute_sil else vals
         labels, centers = _kmeans2_1d(peak_values[peaks])
 
     # Determine the spike cluster and extract the indices of detected spikes
@@ -59,9 +64,18 @@ def detect_spikes(
 
     # If compute_sil is False, return the spike indices and centroids; otherwise, compute the silhouette score
     if not compute_sil:
-        return (spike_idx, float(centers[spike_cluster].item()), float(centers[1 - spike_cluster].item()))
+        return (
+            spike_idx,
+            float(centers[spike_cluster].item()),
+            float(centers[1 - spike_cluster].item()),
+        )
     sil = _sil_peaks(source, peaks, labels, centers, peak_power, use_abs)
-    return (spike_idx, float(centers[spike_cluster].item()), float(centers[1 - spike_cluster].item()), float(sil))
+    return (
+        spike_idx,
+        float(centers[spike_cluster].item()),
+        float(centers[1 - spike_cluster].item()),
+        float(sil),
+    )
 
 
 @torch.no_grad()
@@ -89,7 +103,7 @@ def find_peaks_multisource(
         tuple[torch.Tensor, torch.Tensor]: A tuple containing the peak mask and the detected peak values.
     """
 
-    N, M = sources.shape
+    N, _M = sources.shape
     sources_det = sources.abs().pow(peak_power) if use_abs else sources.pow(peak_power)
 
     win = 2 * min_dist + 1
@@ -107,7 +121,9 @@ def find_peaks_multisource(
 
     strict_mask = torch.zeros_like(sources_det, dtype=torch.bool)
     if N >= 3:
-        strict_mask[1:-1] = (sources_det[1:-1] > sources_det[:-2]) & (sources_det[1:-1] > sources_det[2:])
+        strict_mask[1:-1] = (sources_det[1:-1] > sources_det[:-2]) & (
+            sources_det[1:-1] > sources_det[2:]
+        )
     peak_mask = strict_mask & (sources_det == pooled) & (sources_det > 0)
 
     return peak_mask, sources_det
@@ -125,13 +141,13 @@ def _kmeans2_1d(vals: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """
     sorted_vals, sort_idx = vals.sort()
     N = sorted_vals.shape[0]
-    cs  = sorted_vals.cumsum(0)
-    cs2 = (sorted_vals ** 2).cumsum(0)
-    ks  = torch.arange(1, N, device=vals.device, dtype=vals.dtype)
-    n0, n1  = ks, N - ks
+    cs = sorted_vals.cumsum(0)
+    cs2 = (sorted_vals**2).cumsum(0)
+    ks = torch.arange(1, N, device=vals.device, dtype=vals.dtype)
+    n0, n1 = ks, N - ks
     s0, s2_0 = cs[:-1], cs2[:-1]
     s1, s2_1 = cs[-1] - s0, cs2[-1] - s2_0
-    cost = (s2_0 - s0 ** 2 / n0) + (s2_1 - s1 ** 2 / n1)
+    cost = (s2_0 - s0**2 / n0) + (s2_1 - s1**2 / n1)
     k = int(cost.argmin().item()) + 1
     labels_sorted = torch.zeros(N, dtype=torch.long, device=vals.device)
     labels_sorted[k:] = 1
@@ -140,6 +156,7 @@ def _kmeans2_1d(vals: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     c0 = sorted_vals[:k].median()
     c1 = sorted_vals[k:].median()
     return labels, torch.stack([c0, c1])
+
 
 @torch.no_grad()
 def _sil_peaks(
@@ -163,7 +180,7 @@ def _sil_peaks(
     Returns:
         float: Silhouette score.
     """
-    
+
     source_sil = source.abs().pow(peak_power) if use_abs else source.pow(peak_power)
     peak_vals = source_sil[peaks]
     spike_cluster = int(centers.argmax().item())
@@ -175,5 +192,3 @@ def _sil_peaks(
     between = float(D[spike_mask, 1 - spike_cluster].sum().item())
     denom = max(within, between)
     return float((between - within) / denom) if denom > 0 else 0.0
-
-

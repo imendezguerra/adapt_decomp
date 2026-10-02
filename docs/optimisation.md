@@ -70,21 +70,27 @@ the first place) and pass a one-entry `pool`:
 
 ```python
 from adapt_decomp.adaptation.config import AdaptConfig
-from adapt_decomp.adaptation.optimize import optimize_adapt_decomp_pooled_memory, DEFAULT_PARAM_SPACE
+from adapt_decomp.adaptation.optimize import (
+    optimize_adapt_decomp_pooled_memory,
+    DEFAULT_PARAM_SPACE,
+)
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 
 pool = {
     "my-recording": PooledDatasetMemory(
-        emg=emg, calibration=calibration, cbss_config=cbss_config,
-        preprocess=True, gt_paired_bin=gt_paired_bin,   # gt_paired_bin optional
+        emg=emg,
+        calibration=calibration,
+        cbss_config=cbss_config,
+        preprocess=True,
+        gt_paired_bin=gt_paired_bin,  # gt_paired_bin optional
     ),
 }
 best_config, study = optimize_adapt_decomp_pooled_memory(
     pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,   # {"wh_learning_rate": ("log_float", 1e-4, 5e-2), ...}
+    param_space=DEFAULT_PARAM_SPACE,  # {"wh_learning_rate": ("log_float", 1e-4, 5e-2), ...}
     n_trials=50,
     base_config=AdaptConfig(ext_fact=cbss_config.ext_fact),
-    compute_roa=True,                  # requires every dataset's gt_paired_bin
+    compute_roa=True,  # requires every dataset's gt_paired_bin
 )
 print(best_config.wh_learning_rate, study.best_value)
 ```
@@ -98,9 +104,11 @@ everyday objective (ground truth isn't available outside simulation):
 
 ```python
 best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, objective="roa",   # compute_roa=True implied
+    pool=pool,
+    param_space=DEFAULT_PARAM_SPACE,
+    objective="roa",  # compute_roa=True implied
 )
-print(100 - study.best_value, "% RoA")   # study.best_value is the inverted loss, not raw RoA
+print(100 - study.best_value, "% RoA")  # study.best_value is the inverted loss, not raw RoA
 ```
 
 Or run the runnable version of the snippet above via
@@ -123,15 +131,24 @@ Identical call, more pool entries — nothing else changes:
 ```python
 pool = {
     "triangular-ramp40s": PooledDatasetMemory(
-        emg=emg_1, calibration=calib_1, cbss_config=cbss_config_1, gt_paired_bin=gt_1,
+        emg=emg_1,
+        calibration=calib_1,
+        cbss_config=cbss_config_1,
+        gt_paired_bin=gt_1,
     ),
     "triangular-ramp10s": PooledDatasetMemory(
-        emg=emg_2, calibration=calib_2, cbss_config=cbss_config_2, gt_paired_bin=gt_2,
+        emg=emg_2,
+        calibration=calib_2,
+        cbss_config=cbss_config_2,
+        gt_paired_bin=gt_2,
     ),
 }
 best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50,
-    base_config=AdaptConfig(ext_fact=cbss_config_1.ext_fact), compute_roa=True,
+    pool=pool,
+    param_space=DEFAULT_PARAM_SPACE,
+    n_trials=50,
+    base_config=AdaptConfig(ext_fact=cbss_config_1.ext_fact),
+    compute_roa=True,
 )
 ```
 
@@ -167,7 +184,9 @@ from adapt_decomp.adaptation.config import load_yaml
 from adapt_decomp.utils import load_data
 
 pool = load_data(load_yaml("configs/data_configs/fdsi_pool_memory_example.yaml"))
-best_config, study = optimize_adapt_decomp_pooled_memory(pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50)
+best_config, study = optimize_adapt_decomp_pooled_memory(
+    pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50
+)
 ```
 
 Ground truth, when `path_gt` is set, is matched to each dataset's calibration
@@ -186,7 +205,9 @@ loaded data), loading and discarding each dataset fresh, per trial:
 from adapt_decomp.adaptation.optimize import optimize_adapt_decomp_pooled_disk
 
 pool = load_data(load_yaml("configs/data_configs/fdsi_pool_disk_example.yaml"))
-best_config, study = optimize_adapt_decomp_pooled_disk(pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50)
+best_config, study = optimize_adapt_decomp_pooled_disk(
+    pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50
+)
 ```
 
 Both functions share the identical `param_space`/`objective`/`n_trials`/
@@ -209,7 +230,9 @@ config, and the completed study to disk as they're found:
 
 ```python
 outputs, best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, best_result_path="runs/best",
+    pool=pool,
+    param_space=DEFAULT_PARAM_SPACE,
+    best_result_path="runs/best",
 )
 ```
 
@@ -228,14 +251,26 @@ reload one.
 
 ```python
 {
-    "trial_number": int, "loss": float, "objective": str,
-    "sv_loss": float, "wh_loss": float, "total_loss": float,   # pooled sums
+    "trial_number": int,
+    "loss": float,
+    "objective": str,
+    "sv_loss": float,
+    "wh_loss": float,
+    "total_loss": float,  # pooled sums
     "params": dict,
-    "per_dataset": {name: {"loss": float, "sv_loss": float, "wh_loss": float,
-                            "total_loss": float,
-                            "roa": float, "roa_mean": float,          # if compute_roa
-                            "roa_per_unit": list[float]}},            # if compute_roa
-    "roa": float, "roa_mean": float,   # pooled sum / mean-of-means, if compute_roa
+    "per_dataset": {
+        name: {
+            "loss": float,
+            "sv_loss": float,
+            "wh_loss": float,
+            "total_loss": float,
+            "roa": float,
+            "roa_mean": float,  # if compute_roa
+            "roa_per_unit": list[float],
+        }
+    },  # if compute_roa
+    "roa": float,
+    "roa_mean": float,  # pooled sum / mean-of-means, if compute_roa
 }
 ```
 
@@ -247,7 +282,8 @@ to wandb/mlflow/print without this module depending on a specific tracker:
 
 ```python
 optimize_adapt_decomp_pooled_memory(
-    ..., on_trial=lambda log: print(log["trial_number"], log["loss"]),
+    ...,
+    on_trial=lambda log: print(log["trial_number"], log["loss"]),
 )
 ```
 
@@ -272,8 +308,8 @@ rescaling of `wh_loss`/`sv_loss` into `total_loss` tracks what you actually
 care about — empirically, no such rescaling beat `sv_loss` alone, and a
 retrospective Pareto front over already-run single-objective studies' trials
 contained meaningfully better-RoA trials than the single-scalar search had
-settled on (see
-`notebooks/muniverse_simulations/fdsi_33_loss_roa_correlation_silent_window_confound.ipynb`).
+settled on (see the comparison of the three searches in
+[`05_comparison_sv_loss_pareto_roa.ipynb`](../notebooks/fdsi_benchmark/05_comparison_sv_loss_pareto_roa.ipynb)).
 
 ```mermaid
 flowchart LR
@@ -288,16 +324,18 @@ Same pool/`param_space`/`base_config`/`compute_roa`/`roa_kwargs`/`n_trials`/
 
 ```python
 from adapt_decomp.adaptation.optimize import (
-    optimize_adapt_decomp_pooled_memory_pareto, DEFAULT_OBJECTIVES,
-    _select_min_sv_loss, _select_max_roa_mean,
+    optimize_adapt_decomp_pooled_memory_pareto,
+    DEFAULT_OBJECTIVES,
+    _select_min_sv_loss,
+    _select_max_roa_mean,
 )
 
 best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
     pool=pool,
     param_space=DEFAULT_PARAM_SPACE,
-    objectives=DEFAULT_OBJECTIVES,   # ("wh_loss", "sv_loss"); any 2+ ObjectiveNames, no duplicates
+    objectives=DEFAULT_OBJECTIVES,  # ("wh_loss", "sv_loss"); any 2+ ObjectiveNames, no duplicates
     n_trials=100,
-    compute_roa=True,                # optional; "roa" need not be in objectives to log it
+    compute_roa=True,  # optional; "roa" need not be in objectives to log it
 )
 ```
 
@@ -330,8 +368,11 @@ best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
 
 ```python
 best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, objectives=("sv_loss", "roa"),
-    compute_roa=True, selection_rule=_select_max_roa_mean,
+    pool=pool,
+    param_space=DEFAULT_PARAM_SPACE,
+    objectives=("sv_loss", "roa"),
+    compute_roa=True,
+    selection_rule=_select_max_roa_mean,
 )
 ```
 
@@ -355,22 +396,26 @@ single `"loss"` key, since no single scalar was scored:
 
 ```python
 {
-    "trial_number": int, "objectives": tuple[str, ...], "values": tuple[float, ...],
-    "sv_loss": float, "wh_loss": float, "total_loss": float,   # pooled sums, always present
+    "trial_number": int,
+    "objectives": tuple[str, ...],
+    "values": tuple[float, ...],
+    "sv_loss": float,
+    "wh_loss": float,
+    "total_loss": float,  # pooled sums, always present
     "params": dict,
-    "per_dataset": 
-      {name: 
-        {
-          "sv_loss": float,
-          "wh_loss": float,
-          "total_loss": float,
-          "roa": float,
-          "roa_mean": float,          # if compute_roa
-          "roa_per_unit": list[float] # if compute_roa
+    "per_dataset": {
+        name: {
+            "sv_loss": float,
+            "wh_loss": float,
+            "total_loss": float,
+            "roa": float,
+            "roa_mean": float,  # if compute_roa
+            "roa_per_unit": list[float],  # if compute_roa
         }
-      },            
-    "on_front": bool,                   # only when best_result_path is set
-    "roa": float, "roa_mean": float,    # pooled sum / mean-of-means, if compute_roa
+    },
+    "on_front": bool,  # only when best_result_path is set
+    "roa": float,
+    "roa_mean": float,  # pooled sum / mean-of-means, if compute_roa
 }
 ```
 

@@ -15,10 +15,10 @@ from adapt_decomp.preprocessing import (
     validate_channel_selection,
 )
 
-
 # ---------------------------------------------------------------------------
 # No-op: ch_mask=None
 # ---------------------------------------------------------------------------
+
 
 def test_select_channels_noop_when_ch_mask_none():
     """ch_mask=None must pass emg through unchanged, regardless of ch_map/interpolate."""
@@ -31,6 +31,7 @@ def test_select_channels_noop_when_ch_mask_none():
 # ---------------------------------------------------------------------------
 # Drop mode
 # ---------------------------------------------------------------------------
+
 
 def test_select_channels_drop_matches_boolean_indexing():
     """ch_mask set, interpolate=False: drop must equal emg[:, ch_mask] exactly."""
@@ -55,10 +56,11 @@ def test_select_channels_drop_used_even_with_ch_map_when_not_interpolating():
 # Interpolate mode
 # ---------------------------------------------------------------------------
 
+
 def test_select_channels_interpolate_preserves_channel_count():
     """interpolate=True with ch_mask+ch_map set: channel count is unchanged (in-place fill)."""
     emg = np.random.randn(30, 4).astype(np.float32)
-    ch_mask = np.array([True, True, True, False])   # channel 3 is bad
+    ch_mask = np.array([True, True, True, False])  # channel 3 is bad
     ch_map = np.array([[0, 1], [2, 3]])
     out = select_channels(emg, ch_mask=ch_mask, ch_map=ch_map, interpolate=True)
     assert out.shape == emg.shape
@@ -81,6 +83,7 @@ def test_select_channels_interpolate_requires_ch_map_else_drops():
 # ---------------------------------------------------------------------------
 # preprocess_emg_stateful: per-batch filtering with zi threaded across calls
 # ---------------------------------------------------------------------------
+
 
 def test_preprocess_emg_stateful_matches_whole_array_call():
     """Filtering in two zi-threaded chunks must match filtering the whole
@@ -113,6 +116,7 @@ def test_preprocess_emg_stateful_single_chunk_matches_preprocess_emg():
 # validate_channel_selection: shared guard for ch_mask/ch_map/replace_bad_channels
 # ---------------------------------------------------------------------------
 
+
 def test_validate_channel_selection_replace_without_ch_map_raises():
     """replace_bad_channels=True with ch_map=None must raise ValueError."""
     with pytest.raises(ValueError, match="ch_map"):
@@ -126,7 +130,9 @@ def test_validate_channel_selection_length_mismatch_raises():
     with pytest.raises(ValueError, match="ch_mask"):
         validate_channel_selection(
             ch_mask=np.array([True, False, True]),
-            ch_map=None, replace_bad_channels=False, n_raw_channels=4,
+            ch_map=None,
+            replace_bad_channels=False,
+            n_raw_channels=4,
         )
 
 

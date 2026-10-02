@@ -67,7 +67,7 @@ def test_get_sil_excludes_spike_peaks_from_base_population():
 
     # Expected score using ONLY the genuine base peaks -- if the 4 spike-coincident
     # peaks leaked into the base population instead of being excluded, this would differ.
-    spike_vals, base_vals = spike_amps ** 2, base_amps ** 2
+    spike_vals, base_vals = spike_amps**2, base_amps**2
     spike_centroid, base_centroid = spike_vals.median(), base_vals.median()
     within = ((spike_vals - spike_centroid) ** 2).sum()
     between = ((spike_vals - base_centroid) ** 2).sum()

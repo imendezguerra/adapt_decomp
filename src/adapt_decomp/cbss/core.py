@@ -5,15 +5,16 @@ from __future__ import annotations
 import os
 from typing import Dict, List, Optional, Union
 
-from loguru import logger
 import numpy as np
 import torch
+from loguru import logger
 
 from adapt_decomp.cbss.config import CBSSConfig
-from adapt_decomp.cbss.ica import _fast_fixed_point_ica, _gram_schmidt_deflate, _normalize
 from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.cbss.ica import _fast_fixed_point_ica, _gram_schmidt_deflate, _normalize
 from adapt_decomp.cbss.pca import pca_reduction
 from adapt_decomp.cbss.whitening import whiten
+from adapt_decomp.preprocessing import extend_data, filter_kwargs, preprocess_emg, select_channels
 from adapt_decomp.spikes import detect_spikes, remove_duplicates, spikes_dict_to_binary
 from adapt_decomp.spikes.metrics import (
     emg_to_ch_array,
@@ -22,7 +23,6 @@ from adapt_decomp.spikes.metrics import (
     get_muaps,
     get_pulse_to_noise_ratio,
 )
-from adapt_decomp.preprocessing import extend_data, filter_kwargs, preprocess_emg, select_channels
 
 
 class CBSS:
@@ -124,9 +124,13 @@ class CBSS:
         deflation_basis: Optional[torch.Tensor],
     ) -> dict:
         best = {
-            "w": w, "source": source, "spike_idx": spike_idx,
-            "spike_centr": spike_centr, "base_centr": base_centr,
-            "sil": sil, "cov_isi": self._cov_isi_from_idx(spike_idx, timestamps),
+            "w": w,
+            "source": source,
+            "spike_idx": spike_idx,
+            "spike_centr": spike_centr,
+            "base_centr": base_centr,
+            "sil": sil,
+            "cov_isi": self._cov_isi_from_idx(spike_idx, timestamps),
         }
         for _ in range(self.config.refine_max_iter):
             w_ref = emg_wh[best["spike_idx"]].mean(0)
@@ -139,7 +143,9 @@ class CBSS:
             if not torch.isfinite(source).all():
                 break
             spike_idx, spike_centr, base_centr, sil = detect_spikes(
-                source, self.config.spike_min_dist, peak_power=self.config.spike_det_exp,
+                source,
+                self.config.spike_min_dist,
+                peak_power=self.config.spike_det_exp,
             )
             cov_isi = self._cov_isi_from_idx(spike_idx, timestamps)
             if self.config.refinement_mode == "sil":
@@ -148,27 +154,50 @@ class CBSS:
             else:
                 if not np.isfinite(cov_isi) or cov_isi >= best["cov_isi"]:
                     break
-            best = {"w": w_ref, "source": source, "spike_idx": spike_idx,
-                    "spike_centr": spike_centr, "base_centr": base_centr, "sil": sil, "cov_isi": cov_isi}
+            best = {
+                "w": w_ref,
+                "source": source,
+                "spike_idx": spike_idx,
+                "spike_centr": spike_centr,
+                "base_centr": base_centr,
+                "sil": sil,
+                "cov_isi": cov_isi,
+            }
         return best
 
     def _empty_result(self, dict_results: Dict, dim: int) -> Dict:
-        dict_results.update({
-            "sources": torch.zeros((0, 0)),
-            "spikes_dict": {},
-            "spikes": torch.zeros((0, 0), dtype=torch.int32),
-            "sil": torch.empty(0, dtype=torch.float32),
-            "cov_isi": torch.empty(0, dtype=torch.float32),
-            "sep_vectors": torch.zeros((dim, 0)),
-            "spikes_centr": torch.empty(0, dtype=torch.float32),
-            "base_centr": torch.empty(0, dtype=torch.float32),
-        })
+        dict_results.update(
+            {
+                "sources": torch.zeros((0, 0)),
+                "spikes_dict": {},
+                "spikes": torch.zeros((0, 0), dtype=torch.int32),
+                "sil": torch.empty(0, dtype=torch.float32),
+                "cov_isi": torch.empty(0, dtype=torch.float32),
+                "sep_vectors": torch.zeros((dim, 0)),
+                "spikes_centr": torch.empty(0, dtype=torch.float32),
+                "base_centr": torch.empty(0, dtype=torch.float32),
+            }
+        )
         return dict_results
 
     @staticmethod
     def _to_numpy(result: Dict) -> Dict:
-        for key in ("sources", "spikes", "sil", "cov_isi", "sep_vectors", "spikes_centr",
-                    "base_centr", "whitening", "extension_mean", "pnr", "dr", "muaps", "emg", "timestamps"):
+        for key in (
+            "sources",
+            "spikes",
+            "sil",
+            "cov_isi",
+            "sep_vectors",
+            "spikes_centr",
+            "base_centr",
+            "whitening",
+            "extension_mean",
+            "pnr",
+            "dr",
+            "muaps",
+            "emg",
+            "timestamps",
+        ):
             value = result.get(key)
             if isinstance(value, torch.Tensor):
                 result[key] = value.detach().cpu().numpy()
@@ -203,7 +232,9 @@ class CBSS:
         emg_t = (
             self._preprocess_emg(emg_np, self.config.fs)
             if self.config.preprocess_emg
-            else torch.from_numpy(emg_np.astype(np.float32)).to(device=self._device, dtype=self._dtype)
+            else torch.from_numpy(emg_np.astype(np.float32)).to(
+                device=self._device, dtype=self._dtype
+            )
         )
         timestamps_t = self._make_timestamps(timestamps, emg_t.shape[0])
 
@@ -235,9 +266,13 @@ class CBSS:
         # 5. Duplicate removal
         if self.config.run_duplicate_removal:
             dict_results = remove_duplicates(
-                dict_results, fs=self.config.fs, roa_th=self.config.roa_th,
-                tol_spike_ms=self.config.spike_min_dist_ms, dtype=self._dtype,
-                device=str(self._device), verbose=self.config.verbose,
+                dict_results,
+                fs=self.config.fs,
+                roa_th=self.config.roa_th,
+                tol_spike_ms=self.config.spike_min_dist_ms,
+                dtype=self._dtype,
+                device=str(self._device),
+                verbose=self.config.verbose,
             )
 
         # 6. Binary spike matrix
@@ -255,7 +290,9 @@ class CBSS:
             spikes_dict = dict_results.get("spikes_dict", {})
             if sources is not None and spikes_dict:
                 sources_d = torch.as_tensor(sources, dtype=self._dtype, device=self._device)
-                spike_trains = spikes_dict_to_binary(spikes_dict, sources_d.shape[0], device=self._device)
+                spike_trains = spikes_dict_to_binary(
+                    spikes_dict, sources_d.shape[0], device=self._device
+                )
                 dict_results["pnr"] = get_pulse_to_noise_ratio(
                     spike_trains, sources_d, self.config.ext_fact, self.config.spike_min_dist
                 ).cpu()
@@ -303,7 +340,9 @@ class CBSS:
             )
         return result
 
-    def _extraction_loop_full(self, emg_wh: torch.Tensor, timestamps: torch.Tensor, dict_results: Dict) -> Dict:
+    def _extraction_loop_full(
+        self, emg_wh: torch.Tensor, timestamps: torch.Tensor, dict_results: Dict
+    ) -> Dict:
         """Extraction loop that properly accumulates sep_vectors."""
         samples, dim = emg_wh.shape
         sources: List[torch.Tensor] = []
@@ -326,9 +365,12 @@ class CBSS:
                 w = _gram_schmidt_deflate(w, torch.stack(deflation_basis, dim=1), self.config.eps)
 
             ica_result = _fast_fixed_point_ica(
-                w=w, z=emg_wh.T,
+                w=w,
+                z=emg_wh.T,
                 contrast_fun_type=self.config.contrast_fun,
-                max_iter=self.config.ica_iter, tol=self.config.ica_tol, eps=self.config.eps,
+                max_iter=self.config.ica_iter,
+                tol=self.config.ica_tol,
+                eps=self.config.eps,
                 deflation_basis=torch.stack(deflation_basis, dim=1) if deflation_basis else None,
                 contrast_exp=self.config.contrast_exp,
             )
@@ -343,12 +385,21 @@ class CBSS:
 
             if self.config.refinement_loop and spike_idx.shape[0] >= self.config.min_spikes:
                 d_out = self._refinement_loop(
-                    emg_wh, timestamps, w, source, spike_idx, spike_centr, base_centr, sil,
+                    emg_wh,
+                    timestamps,
+                    w,
+                    source,
+                    spike_idx,
+                    spike_centr,
+                    base_centr,
+                    sil,
                     torch.stack(deflation_basis, dim=1) if deflation_basis else None,
                 )
                 w = d_out["w"]
                 spike_idx, spike_centr, base_centr, sil = detect_spikes(
-                    d_out["source"], self.config.spike_min_dist, peak_power=self.config.spike_det_exp
+                    d_out["source"],
+                    self.config.spike_min_dist,
+                    peak_power=self.config.spike_det_exp,
                 )
                 source = emg_wh @ w
                 cov_isi = self._cov_isi_from_idx(spike_idx, timestamps)
@@ -378,15 +429,17 @@ class CBSS:
             logger.warning("CBSS found no motor units.")
             return self._empty_result(dict_results, dim)
 
-        dict_results.update({
-            "sources": torch.stack(sources, dim=1).cpu(),
-            "spikes_dict": spikes_dict,
-            "sil": torch.tensor(sil_vals),
-            "cov_isi": torch.tensor(cov_vals),
-            "sep_vectors": torch.stack(accepted_filters, dim=1).cpu(),
-            "spikes_centr": torch.tensor(sc_list, dtype=self._dtype),
-            "base_centr": torch.tensor(bc_list, dtype=self._dtype),
-        })
+        dict_results.update(
+            {
+                "sources": torch.stack(sources, dim=1).cpu(),
+                "spikes_dict": spikes_dict,
+                "sil": torch.tensor(sil_vals),
+                "cov_isi": torch.tensor(cov_vals),
+                "sep_vectors": torch.stack(accepted_filters, dim=1).cpu(),
+                "spikes_centr": torch.tensor(sc_list, dtype=self._dtype),
+                "base_centr": torch.tensor(bc_list, dtype=self._dtype),
+            }
+        )
         return dict_results
 
     def apply(
@@ -404,34 +457,43 @@ class CBSS:
         emg_t = (
             self._preprocess_emg(emg_np, self.config.fs)
             if self.config.preprocess_emg
-            else torch.from_numpy(emg_np.astype(np.float32)).to(device=self._device, dtype=self._dtype)
+            else torch.from_numpy(emg_np.astype(np.float32)).to(
+                device=self._device, dtype=self._dtype
+            )
         )
         emg_original = emg_t
         timestamps_t = self._make_timestamps(timestamps, emg_t.shape[0])
 
         emg_ext = extend_data(emg_t, self.config.ext_fact, ext_mode=self.config.ext_mode)
-        ext_mean = torch.from_numpy(result.extension_mean).to(device=self._device, dtype=self._dtype)
+        ext_mean = torch.from_numpy(result.extension_mean).to(
+            device=self._device, dtype=self._dtype
+        )
         emg_ext = emg_ext - ext_mean
         emg_ext[: self.config.ext_fact, :] = 0
         emg_ext[-self.config.ext_fact :, :] = 0
 
         if result.pca_components is not None:
             pca_mean = torch.from_numpy(result.pca_mean).to(device=self._device, dtype=self._dtype)
-            pca_comps = torch.from_numpy(result.pca_components).to(device=self._device, dtype=self._dtype)
+            pca_comps = torch.from_numpy(result.pca_components).to(
+                device=self._device, dtype=self._dtype
+            )
             emg_pca = (emg_ext - pca_mean) @ pca_comps.T
         else:
             emg_pca = emg_ext
 
         W = torch.from_numpy(result.whitening).to(device=self._device, dtype=self._dtype)
         emg_wh = emg_pca @ W.T
-        sep_vectors = torch.from_numpy(result.sep_vectors).to(device=self._device, dtype=self._dtype)
+        sep_vectors = torch.from_numpy(result.sep_vectors).to(
+            device=self._device, dtype=self._dtype
+        )
         n_mu = sep_vectors.shape[1]
 
         if n_mu == 0:
             return CBSSResult(
                 sources=np.zeros((emg_wh.shape[0], 0), dtype=np.float32),
                 spikes=np.zeros((emg_wh.shape[0], 0), dtype=np.int32),
-                spikes_dict={}, sil=np.empty(0, dtype=np.float32),
+                spikes_dict={},
+                sil=np.empty(0, dtype=np.float32),
                 cov_isi=np.empty(0, dtype=np.float32),
                 sep_vectors=result.sep_vectors,
                 whitening=result.whitening,
@@ -454,8 +516,12 @@ class CBSS:
             sc = torch.tensor(float(result.spikes_centr[i]), dtype=self._dtype, device=self._device)
             bc = torch.tensor(float(result.base_centr[i]), dtype=self._dtype, device=self._device)
             spike_idx, _, _, sil = detect_spikes(
-                sources_t[:, i], self.config.spike_min_dist, spike_centroid=sc, base_centroid=bc,
-                peak_power=self.config.spike_det_exp, compute_sil=True,
+                sources_t[:, i],
+                self.config.spike_min_dist,
+                spike_centroid=sc,
+                base_centroid=bc,
+                peak_power=self.config.spike_det_exp,
+                compute_sil=True,
             )
             cov_isi = self._cov_isi_from_idx(spike_idx, timestamps_t)
             spikes_dict[i] = spike_idx.cpu().numpy()
@@ -485,9 +551,13 @@ class CBSS:
 
         if self.config.compute_properties:
             sources_d = torch.from_numpy(sources_np).to(device=self._device, dtype=self._dtype)
-            applied.pnr = get_pulse_to_noise_ratio(
-                spike_trains_dev, sources_d, self.config.ext_fact, self.config.spike_min_dist
-            ).cpu().numpy()
+            applied.pnr = (
+                get_pulse_to_noise_ratio(
+                    spike_trains_dev, sources_d, self.config.ext_fact, self.config.spike_min_dist
+                )
+                .cpu()
+                .numpy()
+            )
             applied.dr = get_discharge_rate(spike_trains_dev, timestamps_t).cpu().numpy()
             applied.muaps = self._compute_muaps(spike_trains_dev, emg_original).cpu().numpy()
 

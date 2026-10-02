@@ -1,11 +1,11 @@
 """Configuration dataclass for adaptive EMG decomposition."""
 
-import yaml
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
 import numpy as np
+import yaml
 
 from adapt_decomp.utils import to_yaml_safe, validate_literals
 
@@ -50,21 +50,23 @@ class AdaptConfig(_LegacyConfig):
     notch_order: int = 2
 
     # Bad-channel handling shared with CBSSConfig
-    ch_mask: Optional[np.ndarray] = None   # boolean, length = raw channel count; True = keep
-    ch_map: Optional[np.ndarray] = None    # electrode map (only needed to replicate interpolation online)
-    replace_bad_channels: bool = False     # False = drop bad channels, True = interpolate bad channels
+    ch_mask: Optional[np.ndarray] = None  # boolean, length = raw channel count; True = keep
+    ch_map: Optional[np.ndarray] = (
+        None  # electrode map (only needed to replicate interpolation online)
+    )
+    replace_bad_channels: bool = False  # False = drop bad channels, True = interpolate bad channels
 
     # Extension parameters (to be inherited from calibration)
     ext_fact: int = 10
-    ext_mode: Literal["block", "toeplitz"] = "block" 
+    ext_mode: Literal["block", "toeplitz"] = "block"
 
     # Decomposition adaptation flags
     batch_ms: int = 100
-    adapt_wh: bool = True        # Adapt whitening
-    adapt_sv: bool = True        # Adapt separation vectors
-    adapt_sd: bool = True        # Adapt spike detection
-    compute_loss: bool = True    # Log wh_loss and sv_loss
-    save_params: bool = False    # Save newly adapted parameters per batch
+    adapt_wh: bool = True  # Adapt whitening
+    adapt_sv: bool = True  # Adapt separation vectors
+    adapt_sd: bool = True  # Adapt spike detection
+    compute_loss: bool = True  # Log wh_loss and sv_loss
+    save_params: bool = False  # Save newly adapted parameters per batch
 
     # Main adaptation hyperparameters to tune
     wh_learning_rate: float = 5e-3
@@ -76,25 +78,33 @@ class AdaptConfig(_LegacyConfig):
     lr_mode: Literal["fixed", "rel_error"] = "fixed"
 
     # Whitening
-    wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"  # Reference point for calibration
-    wh_sv_coupling: bool = False    # Propagate the first-order frame correction from each wh step to sv.
+    wh_mode: Literal["kl_to_identity", "kl_to_cal"] = (
+        "kl_to_identity"  # Reference point for calibration
+    )
+    wh_sv_coupling: bool = (
+        False  # Propagate the first-order frame correction from each wh step to sv.
+    )
 
-    # Separation vectors 
-    contrast_scope: Literal["batch_based", "spike_based"] = "spike_based" # Samples to use for separation vector update
-    sv_epochs: int = 1       # Max number of separation vector updates per batch
-    sv_tol: float = 1e-4     # Convergence tolerance in case multiple updates per batch for early stopping
+    # Separation vectors
+    contrast_scope: Literal["batch_based", "spike_based"] = (
+        "spike_based"  # Samples to use for separation vector update
+    )
+    sv_epochs: int = 1  # Max number of separation vector updates per batch
+    sv_tol: float = (
+        1e-4  # Convergence tolerance in case multiple updates per batch for early stopping
+    )
 
     # Spike detection
-    spike_min_dist_ms: int = 10              # Minimum inter-spike distance in ms
+    spike_min_dist_ms: int = 10  # Minimum inter-spike distance in ms
     spike_min_dist: int = field(init=False)  # Derived: samples
-    spike_det_exp: float = 2.0               # Exponent for spike detection
-    centroid_momentum: float = 0.95          # Momentum for centroid EMA update
+    spike_det_exp: float = 2.0  # Exponent for spike detection
+    centroid_momentum: float = 0.95  # Momentum for centroid EMA update
 
     # ---- Constants ----
-    
+
     # Numerical stability constants
-    shrinkage: float = 1e-3         # Tikhonov shrinkage on per-FIFO covariance
-    eps: float = 1e-7               # Numerical stability floor
+    shrinkage: float = 1e-3  # Tikhonov shrinkage on per-FIFO covariance
+    eps: float = 1e-7  # Numerical stability floor
 
     # Safety clip multipliers
     safety_clip_multiplier_wh: float = 20.0
@@ -103,8 +113,10 @@ class AdaptConfig(_LegacyConfig):
 
     # Fifo constants for calibration parameter estimation
     fifo_length: Optional[int] = None  # If None, defaults to 2x number of varaibles
-    source_fifo_batches: int = 2    # Past batches of sources prepended for edge spike support
-    max_sigma_batches: int = 300    # Max number of calibration batches used to compute mean and std of signal properties
+    source_fifo_batches: int = 2  # Past batches of sources prepended for edge spike support
+    max_sigma_batches: int = (
+        300  # Max number of calibration batches used to compute mean and std of signal properties
+    )
 
     # Debugging
     debug: bool = False
@@ -130,11 +142,7 @@ class AdaptConfig(_LegacyConfig):
         Returns:
             Dict[str, Any]: Mapping of constructor field name to YAML-safe value.
         """
-        return {
-            f.name: to_yaml_safe(getattr(self, f.name))
-            for f in fields(self)
-            if f.init
-        }
+        return {f.name: to_yaml_safe(getattr(self, f.name)) for f in fields(self) if f.init}
 
     def to_yaml(self, path: Union[str, Path]) -> None:
         """Write this config to a YAML file, creating parent directories as needed.

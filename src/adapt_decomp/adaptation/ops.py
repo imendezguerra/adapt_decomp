@@ -8,18 +8,18 @@ from adapt_decomp.cbss.ica import log_cosh
 from adapt_decomp.spikes.detection import find_peaks_multisource
 
 __all__ = [
+    "classify_peaks_from_adaptive_centroids",
     "clip_global_delta",
     "clip_rowwise_delta",
-    "stable_cov",
-    "orthonormalize_rows_qr",
-    "orthonormalize_rows_gram_schmidt",
-    "orthonormalize_rows",
-    "find_peaks_multisource",
-    "classify_peaks_from_adaptive_centroids",
-    "update_centroids_from_peaks",
     "compute_contrast_error",
-    "update_sv_spike_gated",
+    "find_peaks_multisource",
     "gate_spikes_by_iqr",
+    "orthonormalize_rows",
+    "orthonormalize_rows_gram_schmidt",
+    "orthonormalize_rows_qr",
+    "stable_cov",
+    "update_centroids_from_peaks",
+    "update_sv_spike_gated",
 ]
 
 
@@ -194,7 +194,9 @@ def update_centroids_from_peaks(
 
     Returns (new_spike_centroids, new_base_centroids), both shape [M].
     """
-    sources_det = sources.abs().pow(peak_power) if use_abs_for_detection else sources.pow(peak_power)
+    sources_det = (
+        sources.abs().pow(peak_power) if use_abs_for_detection else sources.pow(peak_power)
+    )
     base_mask = peak_mask & ~spike_mask
     M = sources.shape[1]
 
@@ -214,8 +216,7 @@ def update_centroids_from_peaks(
 
         if base_vals.numel() >= min_base_peaks_for_centroid:
             candidate = (
-                centroid_momentum * base_centroids[j]
-                + (1.0 - centroid_momentum) * base_vals.mean()
+                centroid_momentum * base_centroids[j] + (1.0 - centroid_momentum) * base_vals.mean()
             )
             new_base[j] = candidate
 
@@ -343,7 +344,12 @@ def update_sv_spike_gated(
     N, M = sources.shape
 
     kappa, e_sv, active, spike_counts = compute_contrast_error(
-        sources, spike_mask, kappa_cal, contrast_scope, sigma_kappa_cal, eps,
+        sources,
+        spike_mask,
+        kappa_cal,
+        contrast_scope,
+        sigma_kappa_cal,
+        eps,
     )
     if contrast_scope == "batch_based":
         # Full-batch ICA natural-gradient direction — no spike gating
@@ -357,22 +363,22 @@ def update_sv_spike_gated(
         grad_sv = grad_sv * active[:, None]
 
     # Compute the gradient norm via EMA for relative error normalisation
-    grad_sv_norm = torch.linalg.norm(grad_sv, dim=1)   # [M], instantaneous
+    grad_sv_norm = torch.linalg.norm(grad_sv, dim=1)  # [M], instantaneous
     new_ema_gradnorm_sv = (
-        grad_sv_norm.detach() if ema_gradnorm_sv is None
+        grad_sv_norm.detach()
+        if ema_gradnorm_sv is None
         else (ema_alpha * ema_gradnorm_sv + (1 - ema_alpha) * grad_sv_norm).detach()
     )
     sv_row_norm = torch.linalg.norm(sv, dim=1, keepdim=True)
-    if lr_mode == "fixed": # Fixed learning rate
+    if lr_mode == "fixed":  # Fixed learning rate
         delta_sv_target = lr_sv * grad_sv
-    else: # learning rate with relative error and norm normalisation via EMA
+    else:  # learning rate with relative error and norm normalisation via EMA
         delta_sv_target = (
-            -lr_sv * sv_row_norm * e_sv[:, None]
-            * grad_sv / (new_ema_gradnorm_sv[:, None] + eps)
+            -lr_sv * sv_row_norm * e_sv[:, None] * grad_sv / (new_ema_gradnorm_sv[:, None] + eps)
         )
 
-    # Clip update 
-    delta_sv_raw_norm = torch.linalg.norm(delta_sv_target, dim=1)   # pre-safety-clip target norm
+    # Clip update
+    delta_sv_raw_norm = torch.linalg.norm(delta_sv_target, dim=1)  # pre-safety-clip target norm
     delta_sv = clip_rowwise_delta(delta_sv_target, sv, max_rel_delta_sv, eps)  # rare safety net
 
     # Compute new separation vectors and orthonormalise
@@ -383,13 +389,13 @@ def update_sv_spike_gated(
     _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
     _fallback = torch.full_like(e_sv, -3.0)
     diag = {
-        "kappa":          torch.where(active, kappa,  _nan),        
-        "contrast_error": torch.where(active, e_sv,   _fallback),  
-        "spike_counts":   spike_counts,
-        "active":         active,
-        "delta_sv_norm":     torch.linalg.norm(delta_sv, dim=1),
+        "kappa": torch.where(active, kappa, _nan),
+        "contrast_error": torch.where(active, e_sv, _fallback),
+        "spike_counts": spike_counts,
+        "active": active,
+        "delta_sv_norm": torch.linalg.norm(delta_sv, dim=1),
         "delta_sv_raw_norm": delta_sv_raw_norm,
-        "ema_gradnorm_sv":    new_ema_gradnorm_sv,
+        "ema_gradnorm_sv": new_ema_gradnorm_sv,
         "orthogonality_error": torch.linalg.norm(
             sv_new @ sv_new.T - torch.eye(M, device=sv.device, dtype=sv.dtype)
         ),
@@ -414,6 +420,8 @@ def gate_spikes_by_iqr(
     fence Q75_cal + gate_factor * IQR_cal. Excluded spikes still appear in the
     output spike train but do not update centroids or separation vectors.
     """
-    sources_det = sources.abs().pow(peak_power) if use_abs_for_detection else sources.pow(peak_power)
+    sources_det = (
+        sources.abs().pow(peak_power) if use_abs_for_detection else sources.pow(peak_power)
+    )
     upper_gate = Q75_cal + gate_factor * IQR_cal.clamp_min(eps)  # [M]
-    return spike_mask & (sources_det <= upper_gate[None, :])            # [N, M] bool
+    return spike_mask & (sources_det <= upper_gate[None, :])  # [N, M] bool

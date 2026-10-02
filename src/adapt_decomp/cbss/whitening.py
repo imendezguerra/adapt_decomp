@@ -1,6 +1,7 @@
 """Whitening functions for EMG data."""
 
 from typing import Literal, Tuple
+
 import torch
 
 

@@ -2,23 +2,23 @@
 
 from typing import Dict, List, Literal, Optional, Tuple
 
-import numpy as np
-import pandas as pd
+import matplotlib.colors as colors
 import matplotlib.pyplot as plt
+import numpy as np
+import optuna
+import pandas as pd
+import plotly.graph_objects as go
 import seaborn as sns
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import matplotlib.colors as colors
-
-import optuna
-import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
 
 def plot_whitening_comp(
     wh1: np.ndarray,
     wh2: np.ndarray,
-    palette: Optional[str] = 'magma',
-    ax: Optional[plt.Axes] = None
-    ) -> plt.Axes:
+    palette: Optional[str] = "magma",
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
     """Compare two whitening matrices.
 
     Args:
@@ -32,38 +32,39 @@ def plot_whitening_comp(
     """
 
     if ax is None:
-        fig, ax = plt.subplots(1, 3, figsize=(12, 5), layout='tight')
+        _fig, ax = plt.subplots(1, 3, figsize=(12, 5), layout="tight")
 
     vmin = np.min([wh1, wh2])
     vmax = np.max([wh1, wh2])
 
     im0 = ax[0].imshow(wh1, cmap=palette, vmin=vmin, vmax=vmax)
-    ax[0].set(title='Whitening 1', xticks=[], yticks=[])
+    ax[0].set(title="Whitening 1", xticks=[], yticks=[])
     divider0 = make_axes_locatable(ax[0])
     cax0 = divider0.append_axes("right", size="5%", pad=0.05)
 
     im1 = ax[1].imshow(wh2, cmap=palette, vmin=vmin, vmax=vmax)
-    ax[1].set(title='Whitening 2', xticks=[], yticks=[])
+    ax[1].set(title="Whitening 2", xticks=[], yticks=[])
     divider1 = make_axes_locatable(ax[1])
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
 
-    im2 = ax[2].imshow(wh1 - wh2, cmap='coolwarm', norm=colors.CenteredNorm())
-    ax[2].set(title='Difference', xticks=[], yticks=[])
+    im2 = ax[2].imshow(wh1 - wh2, cmap="coolwarm", norm=colors.CenteredNorm())
+    ax[2].set(title="Difference", xticks=[], yticks=[])
     divider2 = make_axes_locatable(ax[2])
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
 
-    plt.colorbar(im0, cax=cax0, orientation='vertical')
-    plt.colorbar(im1, cax=cax1, orientation='vertical')
-    plt.colorbar(im2, cax=cax2, orientation='vertical')
-    
+    plt.colorbar(im0, cax=cax0, orientation="vertical")
+    plt.colorbar(im1, cax=cax1, orientation="vertical")
+    plt.colorbar(im2, cax=cax2, orientation="vertical")
+
     return ax
+
 
 def plot_sep_vectors_comp(
     sv1: np.ndarray,
     sv2: np.ndarray,
-    palette: Optional[str] = 'magma',
-    ax: Optional[plt.Axes] = None
-    ) -> plt.Axes:
+    palette: Optional[str] = "magma",
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
     """Compare two separation vectors.
 
     Args:
@@ -76,40 +77,41 @@ def plot_sep_vectors_comp(
     """
 
     if ax is None:
-        fig, ax = plt.subplots(3, 1, figsize=(12, 5), layout='tight')
+        _fig, ax = plt.subplots(3, 1, figsize=(12, 5), layout="tight")
 
     vmin = np.amin([sv1, sv2])
     vmax = np.amax([sv1, sv2])
 
-    im0 = ax[0].imshow(sv1, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
-    ax[0].set(title='Separation vectors 1', xticks=[], yticks=[])
+    im0 = ax[0].imshow(sv1, cmap=palette, vmin=vmin, vmax=vmax, aspect="auto")
+    ax[0].set(title="Separation vectors 1", xticks=[], yticks=[])
     divider0 = make_axes_locatable(ax[0])
     cax0 = divider0.append_axes("right", size="5%", pad=0.05)
 
-    im1 = ax[1].imshow(sv2, cmap=palette, vmin=vmin, vmax=vmax, aspect='auto')
-    ax[1].set(title='Separation vectors 2', xticks=[], yticks=[])
+    im1 = ax[1].imshow(sv2, cmap=palette, vmin=vmin, vmax=vmax, aspect="auto")
+    ax[1].set(title="Separation vectors 2", xticks=[], yticks=[])
     divider1 = make_axes_locatable(ax[1])
     cax1 = divider1.append_axes("right", size="5%", pad=0.05)
 
-    im2 = ax[2].imshow(sv1 - sv2, cmap='coolwarm', aspect='auto', norm=colors.CenteredNorm())
-    ax[2].set(title='Difference', xticks=[], yticks=[])
+    im2 = ax[2].imshow(sv1 - sv2, cmap="coolwarm", aspect="auto", norm=colors.CenteredNorm())
+    ax[2].set(title="Difference", xticks=[], yticks=[])
     divider2 = make_axes_locatable(ax[2])
     cax2 = divider2.append_axes("right", size="5%", pad=0.05)
 
-    plt.colorbar(im0, cax=cax0, orientation='vertical')
-    plt.colorbar(im1, cax=cax1, orientation='vertical')
-    plt.colorbar(im2, cax=cax2, orientation='vertical')
-    
+    plt.colorbar(im0, cax=cax0, orientation="vertical")
+    plt.colorbar(im1, cax=cax1, orientation="vertical")
+    plt.colorbar(im2, cax=cax2, orientation="vertical")
+
     return ax
+
 
 def plot_sep_vectors_diff(
     sv: np.ndarray,
     ch_map: Optional[np.ndarray],
-    palette: Optional[str] = 'coolwarm',
-    ax: Optional[plt.Axes] = None
-    ) -> plt.Axes:
+    palette: Optional[str] = "coolwarm",
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
     """Plot the separation vectors difference.
-    
+
     Args:
         sv (np.ndarray): Separation vectors with shape (units, channels).
         ch_map (Optional[np.ndarray]): Channel map. Defaults to None.
@@ -117,14 +119,14 @@ def plot_sep_vectors_diff(
         ax (Optional[plt.Axes], optional): Axes to plot. Defaults to None.
     Returns:
         plt.Axes: Axes with the plots.
-    """ 
-    
+    """
+
     units = sv.shape[0]
 
     if ax is None:
         cols = 3
         rows = -(-units // cols)
-        fig, ax = plt.subplots(rows, cols, figsize=(12, 2 * rows), layout='tight')
+        _fig, ax = plt.subplots(rows, cols, figsize=(12, 2 * rows), layout="tight")
         ax = np.ravel(ax)
 
     if ch_map is None:
@@ -133,21 +135,18 @@ def plot_sep_vectors_diff(
     v = np.amax(np.abs(sv))
 
     for unit in range(units):
-
-        im = ax[unit].imshow(sv[unit, ch_map], cmap=palette, aspect='auto', vmin=-v, vmax=v)
-        ax[unit].set(title=f'Unit {unit}', xticks=[], yticks=[])
+        im = ax[unit].imshow(sv[unit, ch_map], cmap=palette, aspect="auto", vmin=-v, vmax=v)
+        ax[unit].set(title=f"Unit {unit}", xticks=[], yticks=[])
         divider = make_axes_locatable(ax[unit])
         cax = divider.append_axes("right", size="5%", pad=0.05)
-        plt.colorbar(im, cax=cax, orientation='vertical')
+        plt.colorbar(im, cax=cax, orientation="vertical")
 
     return ax
 
 
 def _check_signal_dicts(
-    primary: Dict[str, np.ndarray],
-    primary_name: str,
-    **aux: Optional[Dict[str, np.ndarray]]
-    ) -> None:
+    primary: Dict[str, np.ndarray], primary_name: str, **aux: Optional[Dict[str, np.ndarray]]
+) -> None:
     """Validate a primary named-array dict and any auxiliary dicts keyed against it.
 
     Args:
@@ -172,9 +171,7 @@ def _check_signal_dicts(
     first_shape = next(iter(shapes.values()))
     mismatched = {name: shape for name, shape in shapes.items() if shape != first_shape}
     if mismatched:
-        raise ValueError(
-            f"All {primary_name} arrays must share one shape; got {shapes}."
-        )
+        raise ValueError(f"All {primary_name} arrays must share one shape; got {shapes}.")
 
     for aux_name, aux_dict in aux.items():
         if aux_dict is None:
@@ -211,8 +208,7 @@ def _restrict_time_range(
 
     mask = (timestamps >= time_range[0]) & (timestamps <= time_range[1])
     sliced = tuple(
-        None if d is None else {name: arr[mask] for name, arr in d.items()}
-        for d in signal_dicts
+        None if d is None else {name: arr[mask] for name, arr in d.items()} for d in signal_dicts
     )
     return (timestamps[mask], *sliced)
 
@@ -224,7 +220,7 @@ def plot_spikes(
     sil: Optional[Dict[str, np.ndarray]] = None,
     pair_gap: float = 1.0,
     pair_step: float = 3.0,
-    palette: Optional[str] = 'tab10',
+    palette: Optional[str] = "tab10",
     time_range: Optional[Tuple[float, float]] = None,
     ax: Optional[plt.Axes] = None,
 ) -> plt.Axes:
@@ -260,7 +256,7 @@ def plot_spikes(
     Returns:
         plt.Axes: Axes with the plot.
     """
-    _check_signal_dicts(spikes, 'spikes', roa=roa, sil=sil)
+    _check_signal_dicts(spikes, "spikes", roa=roa, sil=sil)
     timestamps, spikes = _restrict_time_range(timestamps, time_range, spikes)
     names = list(spikes.keys())
     n_units = next(iter(spikes.values())).shape[1]
@@ -268,7 +264,7 @@ def plot_spikes(
     palette_colors = sns.color_palette(palette, n_colors=n_signals)
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(10, max(3, 0.6 * n_units)), layout='constrained')
+        _fig, ax = plt.subplots(figsize=(10, max(3, 0.6 * n_units)), layout="constrained")
 
     ytick_pos, ytick_labels = [], []
     for unit in range(n_units):
@@ -276,26 +272,32 @@ def plot_spikes(
         for i, name in enumerate(names):
             idxs = np.flatnonzero(spikes[name][:, unit])
             y = group_y0 + i * pair_gap
-            ax.plot(timestamps[idxs], np.full_like(idxs, y), '|', markersize=8,
-                    color=palette_colors[i], label=name if unit == 0 else None)
+            ax.plot(
+                timestamps[idxs],
+                np.full_like(idxs, y),
+                "|",
+                markersize=8,
+                color=palette_colors[i],
+                label=name if unit == 0 else None,
+            )
 
-        label_lines = [f'MU {unit}']
+        label_lines = [f"MU {unit}"]
         for name in names:
             if roa is not None and name in roa:
-                label_lines.append(f'{name} RoA = {roa[name][unit] * 100:.1f}%')
+                label_lines.append(f"{name} RoA = {roa[name][unit] * 100:.1f}%")
         for name in names:
             if sil is not None and name in sil:
-                label_lines.append(f'{name} SIL = {sil[name][unit]:.2f}')
+                label_lines.append(f"{name} SIL = {sil[name][unit]:.2f}")
 
         ytick_pos.append(group_y0 + (n_signals - 1) * pair_gap / 2)
-        ytick_labels.append('\n'.join(label_lines))
+        ytick_labels.append("\n".join(label_lines))
 
     ax.set_yticks(ytick_pos)
     ax.set_yticklabels(ytick_labels)
-    ax.set(xlabel='Time (s)')
+    ax.set(xlabel="Time (s)")
     if time_range is not None:
         ax.set_xlim(time_range)
-    ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
+    ax.legend(loc="upper right", bbox_to_anchor=(1.15, 1))
     return ax
 
 
@@ -305,7 +307,7 @@ def plot_sources(
     spikes: Optional[Dict[str, np.ndarray]] = None,
     roa: Optional[Dict[str, np.ndarray]] = None,
     sil: Optional[Dict[str, np.ndarray]] = None,
-    palette: Optional[str] = 'tab10',
+    palette: Optional[str] = "tab10",
     time_range: Optional[Tuple[float, float]] = None,
     axs: Optional[np.ndarray] = None,
     square_sources: bool = True,
@@ -342,7 +344,7 @@ def plot_sources(
     Returns:
         np.ndarray: Axes array used for the plot.
     """
-    _check_signal_dicts(sources, 'sources', spikes=spikes, roa=roa, sil=sil)
+    _check_signal_dicts(sources, "sources", spikes=spikes, roa=roa, sil=sil)
     if spikes is not None:
         for name, spikes_arr in spikes.items():
             if spikes_arr.shape != sources[name].shape:
@@ -351,7 +353,7 @@ def plot_sources(
                     f"{sources[name].shape} to match sources[{name!r}]."
                 )
     if square_sources:
-        sources = {name: arr ** 2 for name, arr in sources.items()}
+        sources = {name: arr**2 for name, arr in sources.items()}
     timestamps, sources, spikes = _restrict_time_range(timestamps, time_range, sources, spikes)
 
     names = list(sources.keys())
@@ -360,7 +362,9 @@ def plot_sources(
     palette_colors = sns.color_palette(palette, n_colors=n_signals)
 
     if axs is None:
-        fig, axs = plt.subplots(n_units, 1, figsize=(12, n_units), layout='constrained', sharex=True)
+        _fig, axs = plt.subplots(
+            n_units, 1, figsize=(12, n_units), layout="constrained", sharex=True
+        )
     axs = np.atleast_1d(axs)
 
     for unit in range(n_units):
@@ -369,24 +373,29 @@ def plot_sources(
             ax.plot(timestamps, sources[name][:, unit], label=name, color=palette_colors[i])
             if spikes is not None and name in spikes:
                 mask = spikes[name][:, unit].astype(bool)
-                ax.plot(timestamps[mask], sources[name][:, unit][mask],
-                        linestyle='None', marker='.', color=palette_colors[i])
+                ax.plot(
+                    timestamps[mask],
+                    sources[name][:, unit][mask],
+                    linestyle="None",
+                    marker=".",
+                    color=palette_colors[i],
+                )
 
-        label_lines = [f'MU {unit}']
+        label_lines = [f"MU {unit}"]
         for name in names:
             if roa is not None and name in roa:
-                label_lines.append(f'{name} RoA = {roa[name][unit] * 100:.1f}%')
+                label_lines.append(f"{name} RoA = {roa[name][unit] * 100:.1f}%")
         for name in names:
             if sil is not None and name in sil:
-                label_lines.append(f'{name} SIL = {sil[name][unit]:.2f}')
+                label_lines.append(f"{name} SIL = {sil[name][unit]:.2f}")
 
-        ax.set(ylabel='\n'.join(label_lines))
+        ax.set(ylabel="\n".join(label_lines))
         if time_range is not None:
             ax.set_xlim(time_range)
         if n_signals > 1:
-            ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1))
+            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1))
         if unit == n_units - 1:
-            ax.set(xlabel='Time (s)')
+            ax.set(xlabel="Time (s)")
 
     return axs
 
@@ -397,7 +406,7 @@ def plot_metric_heatmap(
     configs: List[str],
     conditions: List[str],
     snr_levels: List[int],
-    agg: Literal['mean', 'median', 'pct_ge_threshold'] = 'mean',
+    agg: Literal["mean", "median", "pct_ge_threshold"] = "mean",
     threshold: Optional[float] = None,
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
@@ -418,7 +427,7 @@ def plot_metric_heatmap(
             same units as value_col. Defaults to None.
         vmin (float, optional): Minimum value for the heatmap color scale. Defaults
             to None (auto).
-        vmax (float, optional): Maximum value for the heatmap color scale. Defaults 
+        vmax (float, optional): Maximum value for the heatmap color scale. Defaults
             to None (auto).
         axs (Optional[np.ndarray], optional): Axes array, one per config. Defaults to None.
 
@@ -426,30 +435,47 @@ def plot_metric_heatmap(
         np.ndarray: Axes array used for the plot.
     """
     if axs is None:
-        fig, axs = plt.subplots(1, len(configs), figsize=(5 * len(configs), 4), layout='constrained')
+        _fig, axs = plt.subplots(
+            1, len(configs), figsize=(5 * len(configs), 4), layout="constrained"
+        )
     axs = np.ravel(axs)
 
-    if agg == 'pct_ge_threshold':
+    if agg == "pct_ge_threshold":
         if threshold is None:
             raise ValueError("threshold must be provided when agg='pct_ge_threshold'.")
-        agg_fn = lambda x: (x >= threshold).sum() / len(x) * 100
-        label = f'% units >= {threshold:g}'
+
+        def agg_fn(x):
+            return (x >= threshold).sum() / len(x) * 100
+
+        label = f"% units >= {threshold:g}"
     else:
         agg_fn = agg
-        label = f'{agg.capitalize()} {value_col}'
+        label = f"{agg.capitalize()} {value_col}"
 
     if vmax is not None and vmax <= 1:
-        fmt_str = '.2f'
+        fmt_str = ".2f"
     else:
-        fmt_str = '.1f' 
+        fmt_str = ".1f"
 
     for ax, cfg in zip(axs, configs):
-        pivot = (df_metric[df_metric['config'] == cfg]
-                 .groupby(['condition', 'snr'])[value_col].agg(agg_fn).unstack('snr')
-                 .reindex(index=conditions, columns=snr_levels))
-        sns.heatmap(pivot, annot=True, fmt=fmt_str, cmap='YlGn', vmin=vmin, vmax=vmax,
-                    ax=ax, cbar_kws={'label': label})
-        ax.set(title=cfg, xlabel='SNR (dB)', ylabel='Condition')
+        pivot = (
+            df_metric[df_metric["config"] == cfg]
+            .groupby(["condition", "snr"])[value_col]
+            .agg(agg_fn)
+            .unstack("snr")
+            .reindex(index=conditions, columns=snr_levels)
+        )
+        sns.heatmap(
+            pivot,
+            annot=True,
+            fmt=fmt_str,
+            cmap="YlGn",
+            vmin=vmin,
+            vmax=vmax,
+            ax=ax,
+            cbar_kws={"label": label},
+        )
+        ax.set(title=cfg, xlabel="SNR (dB)", ylabel="Condition")
     return axs
 
 
@@ -480,24 +506,33 @@ def plot_metric_boxplot(
         np.ndarray: Axes array used for the plot.
     """
     if axs is None:
-        fig, axs = plt.subplots(1, len(configs), figsize=(6 * len(configs), 4.5),
-                                 layout='constrained', sharey=True)
+        _fig, axs = plt.subplots(
+            1, len(configs), figsize=(6 * len(configs), 4.5), layout="constrained", sharey=True
+        )
     axs = np.ravel(axs)
 
-    snr_order = [f'{s} dB' for s in snr_levels]
+    snr_order = [f"{s} dB" for s in snr_levels]
     df_plot = df_metric.copy()
-    df_plot['SNR'] = df_plot['snr'].astype(str) + ' dB'
+    df_plot["SNR"] = df_plot["snr"].astype(str) + " dB"
 
     for ax, cfg in zip(axs, configs):
-        sub_df = df_plot[df_plot['config'] == cfg]
-        sns.boxplot(data=sub_df, x='condition', y=value_col, hue='SNR', hue_order=snr_order,
-                    order=conditions, palette='Blues_d',
-                    flierprops=dict(marker='.', markersize=3, alpha=0.4), ax=ax)
-        ax.set(ylabel=value_col, xlabel='Condition', title=cfg, ylim=(vmin, vmax))
-        ax.tick_params(axis='x', rotation=15)
+        sub_df = df_plot[df_plot["config"] == cfg]
+        sns.boxplot(
+            data=sub_df,
+            x="condition",
+            y=value_col,
+            hue="SNR",
+            hue_order=snr_order,
+            order=conditions,
+            palette="Blues_d",
+            flierprops=dict(marker=".", markersize=3, alpha=0.4),
+            ax=ax,
+        )
+        ax.set(ylabel=value_col, xlabel="Condition", title=cfg, ylim=(vmin, vmax))
+        ax.tick_params(axis="x", rotation=15)
         if ax is not axs[0]:
             ax.get_legend().remove()
-    axs[0].legend(title='SNR', fontsize=8)
+    axs[0].legend(title="SNR", fontsize=8)
     return axs
 
 
@@ -528,22 +563,43 @@ def plot_phase_bar(
     """
     n_tri = len(triangular_conditions)
     if axs is None:
-        fig, axs = plt.subplots(len(configs), n_tri, figsize=(5 * n_tri, 4 * len(configs)),
-                                 layout='constrained', sharey=True)
+        _fig, axs = plt.subplots(
+            len(configs),
+            n_tri,
+            figsize=(5 * n_tri, 4 * len(configs)),
+            layout="constrained",
+            sharey=True,
+        )
     axs = np.atleast_2d(axs)
 
     for row, cfg in enumerate(configs):
         for col, cond in enumerate(triangular_conditions):
             ax = axs[row, col]
-            df_c = df_phase[(df_phase['condition'] == cond) & (df_phase['config'] == cfg)].copy()
-            df_c['SNR'] = df_c['snr'].astype(str) + ' dB'
-            sns.barplot(data=df_c, x='phase', y='roa_pct', hue='SNR',
-                        hue_order=[f'{s} dB' for s in snr_levels], order=phase_order,
-                        estimator='mean', errorbar='sd', capsize=0.1, palette='Blues_d', ax=ax)
-            ax.set(xlabel='', ylabel='Mean RoA (%)' if col == 0 else '',
-                   title=f'{cfg} -- {cond}', ylim=(0, 105))
+            df_c = df_phase[(df_phase["condition"] == cond) & (df_phase["config"] == cfg)].copy()
+            df_c["SNR"] = df_c["snr"].astype(str) + " dB"
+            sns.barplot(
+                data=df_c,
+                x="phase",
+                y="roa_pct",
+                hue="SNR",
+                hue_order=[f"{s} dB" for s in snr_levels],
+                order=phase_order,
+                estimator="mean",
+                errorbar="sd",
+                capsize=0.1,
+                palette="Blues_d",
+                ax=ax,
+            )
+            ax.set(
+                xlabel="",
+                ylabel="Mean RoA (%)" if col == 0 else "",
+                title=f"{cfg} -- {cond}",
+                ylim=(0, 105),
+            )
             ax.set_xticks(range(len(phase_order)))
-            ax.set_xticklabels([phase_labels[p] for p in phase_order], rotation=20, ha='right', fontsize=9)
+            ax.set_xticklabels(
+                [phase_labels[p] for p in phase_order], rotation=20, ha="right", fontsize=9
+            )
             if col != 0:
                 ax.get_legend().remove()
     return axs
@@ -579,41 +635,73 @@ def plot_roa_summary_figure(
         np.ndarray: Axes array used for the plot.
     """
     if axs is None:
-        fig, axs = plt.subplots(len(adapted_configs), 2, figsize=(15, 4.5 * len(adapted_configs)),
-                                 layout='constrained')
+        _fig, axs = plt.subplots(
+            len(adapted_configs), 2, figsize=(15, 4.5 * len(adapted_configs)), layout="constrained"
+        )
     axs = np.atleast_2d(axs)
 
-    palette = sns.color_palette('Blues', n_colors=len(snr_levels))
+    palette = sns.color_palette("Blues", n_colors=len(snr_levels))
     colors_snr = dict(zip(sorted(snr_levels, reverse=True), palette[::-1]))
 
     for row, cfg in enumerate(adapted_configs):
         # -- Left: overall mean +/- SD RoA per condition, one line per SNR --
-        cfg_df = df_roa[df_roa['config'] == cfg]
-        stats_by = cfg_df.groupby(['condition', 'snr'])['roa_pct'].agg(['mean', 'std']).reset_index()
+        cfg_df = df_roa[df_roa["config"] == cfg]
+        stats_by = (
+            cfg_df.groupby(["condition", "snr"])["roa_pct"].agg(["mean", "std"]).reset_index()
+        )
         for snr in snr_levels:
-            sub_df = stats_by[stats_by['snr'] == snr].set_index('condition').reindex(conditions)
-            axs[row, 0].errorbar(conditions, sub_df['mean'], yerr=sub_df['std'], marker='o',
-                                  capsize=3, label=f'{snr} dB', color=colors_snr[snr])
-        axs[row, 0].set(ylabel='Mean RoA (%)', title=f'Overall RoA -- {cfg}', ylim=(0, 105), xlabel='Condition')
+            sub_df = stats_by[stats_by["snr"] == snr].set_index("condition").reindex(conditions)
+            axs[row, 0].errorbar(
+                conditions,
+                sub_df["mean"],
+                yerr=sub_df["std"],
+                marker="o",
+                capsize=3,
+                label=f"{snr} dB",
+                color=colors_snr[snr],
+            )
+        axs[row, 0].set(
+            ylabel="Mean RoA (%)", title=f"Overall RoA -- {cfg}", ylim=(0, 105), xlabel="Condition"
+        )
         axs[row, 0].set_xticks(range(len(conditions)))
         axs[row, 0].set_xticklabels(
-            [f'{c}\n(held out)' if c in holdout_conditions else c for c in conditions], rotation=20, ha='right')
+            [f"{c}\n(held out)" if c in holdout_conditions else c for c in conditions],
+            rotation=20,
+            ha="right",
+        )
         for tick_label, cond in zip(axs[row, 0].get_xticklabels(), conditions):
             if cond in holdout_conditions:
-                tick_label.set_fontweight('bold')
-                tick_label.set_color('firebrick')
-        axs[row, 0].legend(title='SNR', fontsize=9)
+                tick_label.set_fontweight("bold")
+                tick_label.set_color("firebrick")
+        axs[row, 0].legend(title="SNR", fontsize=9)
 
         # -- Right: three-phase RoA (mean +/- SD) over all triangular conditions --
-        phase_cfg_df = df_phase[df_phase['config'] == cfg].copy()
+        phase_cfg_df = df_phase[df_phase["config"] == cfg].copy()
         if len(phase_cfg_df):
-            phase_cfg_df['SNR'] = phase_cfg_df['snr'].astype(str) + ' dB'
-            sns.barplot(data=phase_cfg_df, x='phase', y='roa_pct', hue='SNR',
-                        hue_order=[f'{s} dB' for s in snr_levels], order=phase_order,
-                        estimator='mean', errorbar='sd', capsize=0.1, palette='Blues_d', ax=axs[row, 1])
+            phase_cfg_df["SNR"] = phase_cfg_df["snr"].astype(str) + " dB"
+            sns.barplot(
+                data=phase_cfg_df,
+                x="phase",
+                y="roa_pct",
+                hue="SNR",
+                hue_order=[f"{s} dB" for s in snr_levels],
+                order=phase_order,
+                estimator="mean",
+                errorbar="sd",
+                capsize=0.1,
+                palette="Blues_d",
+                ax=axs[row, 1],
+            )
             axs[row, 1].set_xticks(range(len(phase_order)))
-            axs[row, 1].set_xticklabels([phase_labels[p] for p in phase_order], rotation=20, ha='right')
-        axs[row, 1].set(ylabel='Mean RoA (%)', title=f'Phase RoA (triangular) -- {cfg}', ylim=(0, 105), xlabel='')
+            axs[row, 1].set_xticklabels(
+                [phase_labels[p] for p in phase_order], rotation=20, ha="right"
+            )
+        axs[row, 1].set(
+            ylabel="Mean RoA (%)",
+            title=f"Phase RoA (triangular) -- {cfg}",
+            ylim=(0, 105),
+            xlabel="",
+        )
 
     return axs
 
@@ -621,8 +709,12 @@ def plot_roa_summary_figure(
 def plot_optimisation_landscape(
     study: optuna.Study,
     title: str,
-    loss_cols: Tuple[str, str, str] = ('user_attrs_wh_loss', 'user_attrs_sv_loss', 'user_attrs_total_loss'),
-    roa_col: str = 'user_attrs_roa_mean_pooled',
+    loss_cols: Tuple[str, str, str] = (
+        "user_attrs_wh_loss",
+        "user_attrs_sv_loss",
+        "user_attrs_total_loss",
+    ),
+    roa_col: str = "user_attrs_roa_mean_pooled",
     best_trial: Optional[optuna.trial.FrozenTrial] = None,
     showlegend: bool = True,
 ) -> List[List[go.Scatter]]:
@@ -656,39 +748,59 @@ def plot_optimisation_landscape(
             loss_cols are present at all.
     """
     trials_df = study.trials_dataframe()
-    trials_df = trials_df[trials_df['state'] == 'COMPLETE']
+    trials_df = trials_df[trials_df["state"] == "COMPLETE"]
 
     available_cols = [c for c in loss_cols if c in trials_df.columns]
-    if not available_cols and 'value' in trials_df.columns:
-        available_cols = ['value']
+    if not available_cols and "value" in trials_df.columns:
+        available_cols = ["value"]
 
     has_roa = roa_col in trials_df.columns
     roa_series = trials_df[roa_col] if has_roa else pd.Series(np.nan, index=trials_df.index)
     max_roa_idx = roa_series.idxmax() if has_roa and roa_series.notna().any() else None
     columns: List[List[go.Scatter]] = []
     for loss_col in available_cols:
-        traces = [go.Scatter(
-            x=trials_df[loss_col], y=roa_series, mode='markers',
-            marker=dict(size=8, color='#4C72B0'), text=trials_df['number'],
-            name=title, legendgroup=title, showlegend=(loss_col == available_cols[0]),
-        )]
+        traces = [
+            go.Scatter(
+                x=trials_df[loss_col],
+                y=roa_series,
+                mode="markers",
+                marker=dict(size=8, color="#4C72B0"),
+                text=trials_df["number"],
+                name=title,
+                legendgroup=title,
+                showlegend=(loss_col == available_cols[0]),
+            )
+        ]
         if max_roa_idx is not None:
             row = trials_df.loc[max_roa_idx]
-            traces.append(go.Scatter(
-                x=[row[loss_col]], y=[row[roa_col]], mode='markers',
-                marker=dict(size=16, color='gold', symbol='star', line=dict(width=1, color='black')),
-                name='max RoA', legendgroup='max_roa',
-                showlegend=(showlegend and loss_col == available_cols[0]),
-            ))
-        if best_trial is not None and loss_col.replace('user_attrs_', '') in best_trial.user_attrs:
-            key = loss_col.replace('user_attrs_', '')
-            traces.append(go.Scatter(
-                x=[best_trial.user_attrs[key]], y=[best_trial.user_attrs.get('roa_mean_pooled')],
-                mode='markers', marker=dict(size=14, color='red', symbol='diamond',
-                                             line=dict(width=1, color='black')),
-                name='selected', legendgroup='selected',
-                showlegend=(showlegend and loss_col == available_cols[0]),
-            ))
+            traces.append(
+                go.Scatter(
+                    x=[row[loss_col]],
+                    y=[row[roa_col]],
+                    mode="markers",
+                    marker=dict(
+                        size=16, color="gold", symbol="star", line=dict(width=1, color="black")
+                    ),
+                    name="max RoA",
+                    legendgroup="max_roa",
+                    showlegend=(showlegend and loss_col == available_cols[0]),
+                )
+            )
+        if best_trial is not None and loss_col.replace("user_attrs_", "") in best_trial.user_attrs:
+            key = loss_col.replace("user_attrs_", "")
+            traces.append(
+                go.Scatter(
+                    x=[best_trial.user_attrs[key]],
+                    y=[best_trial.user_attrs.get("roa_mean_pooled")],
+                    mode="markers",
+                    marker=dict(
+                        size=14, color="red", symbol="diamond", line=dict(width=1, color="black")
+                    ),
+                    name="selected",
+                    legendgroup="selected",
+                    showlegend=(showlegend and loss_col == available_cols[0]),
+                )
+            )
         columns.append(traces)
     return columns
 
@@ -698,8 +810,8 @@ def plot_pareto_scatter(
     pareto_front: List[optuna.trial.FrozenTrial],
     selected_trial: optuna.trial.FrozenTrial,
     title: str,
-    objectives: Tuple[str, str] = ('wh_loss', 'sv_loss'),
-    roa_col: str = 'user_attrs_roa_mean_pooled',
+    objectives: Tuple[str, str] = ("wh_loss", "sv_loss"),
+    roa_col: str = "user_attrs_roa_mean_pooled",
     showlegend: bool = True,
 ) -> List[go.Scatter]:
     """Plotly Pareto-front traces: wh_loss vs sv_loss, colour=RoA, front line + two markers.
@@ -723,38 +835,65 @@ def plot_pareto_scatter(
         List[go.Scatter]: The traces for one panel.
     """
     trials_df = study.trials_dataframe()
-    trials_df = trials_df[trials_df['state'] == 'COMPLETE']
-    x_col, y_col = f'values_{objectives[0]}', f'values_{objectives[1]}'
+    trials_df = trials_df[trials_df["state"] == "COMPLETE"]
+    x_col, y_col = f"values_{objectives[0]}", f"values_{objectives[1]}"
     front_numbers = {t.number for t in pareto_front}
 
-    traces = [go.Scatter(
-        x=trials_df[x_col], y=trials_df[y_col], mode='markers',
-        marker=dict(size=8, color=trials_df[roa_col], colorscale='Viridis',
-                    showscale=showlegend, colorbar=dict(title='RoA') if showlegend else None),
-        text=trials_df['number'], name='trials', showlegend=False,
-    )]
+    traces = [
+        go.Scatter(
+            x=trials_df[x_col],
+            y=trials_df[y_col],
+            mode="markers",
+            marker=dict(
+                size=8,
+                color=trials_df[roa_col],
+                colorscale="Viridis",
+                showscale=showlegend,
+                colorbar=dict(title="RoA") if showlegend else None,
+            ),
+            text=trials_df["number"],
+            name="trials",
+            showlegend=False,
+        )
+    ]
 
-    front_df = trials_df[trials_df['number'].isin(front_numbers)].sort_values(x_col)
-    traces.append(go.Scatter(
-        x=front_df[x_col], y=front_df[y_col], mode='lines+markers',
-        line=dict(color='black', width=1, dash='dot'), marker=dict(size=4, color='black'),
-        name='Pareto front', showlegend=showlegend,
-    ))
+    front_df = trials_df[trials_df["number"].isin(front_numbers)].sort_values(x_col)
+    traces.append(
+        go.Scatter(
+            x=front_df[x_col],
+            y=front_df[y_col],
+            mode="lines+markers",
+            line=dict(color="black", width=1, dash="dot"),
+            marker=dict(size=4, color="black"),
+            name="Pareto front",
+            showlegend=showlegend,
+        )
+    )
 
     max_roa_row = trials_df.loc[trials_df[roa_col].idxmax()]
-    traces.append(go.Scatter(
-        x=[max_roa_row[x_col]], y=[max_roa_row[y_col]], mode='markers',
-        marker=dict(size=16, color='gold', symbol='star', line=dict(width=1, color='black')),
-        name='max RoA', showlegend=showlegend,
-    ))
+    traces.append(
+        go.Scatter(
+            x=[max_roa_row[x_col]],
+            y=[max_roa_row[y_col]],
+            mode="markers",
+            marker=dict(size=16, color="gold", symbol="star", line=dict(width=1, color="black")),
+            name="max RoA",
+            showlegend=showlegend,
+        )
+    )
 
     sel_number = selected_trial.number
-    sel_row = trials_df[trials_df['number'] == sel_number].iloc[0]
-    traces.append(go.Scatter(
-        x=[sel_row[x_col]], y=[sel_row[y_col]], mode='markers',
-        marker=dict(size=14, color='red', symbol='diamond', line=dict(width=1, color='black')),
-        name='selected', showlegend=showlegend,
-    ))
+    sel_row = trials_df[trials_df["number"] == sel_number].iloc[0]
+    traces.append(
+        go.Scatter(
+            x=[sel_row[x_col]],
+            y=[sel_row[y_col]],
+            mode="markers",
+            marker=dict(size=14, color="red", symbol="diamond", line=dict(width=1, color="black")),
+            name="selected",
+            showlegend=showlegend,
+        )
+    )
     return traces
 
 
@@ -778,7 +917,7 @@ def plot_optimisation_landscape_grid(
     Returns:
         go.Figure: The composed figure.
     """
-    loss_cols = ('user_attrs_wh_loss', 'user_attrs_sv_loss', 'user_attrs_total_loss')
+    loss_cols = ("user_attrs_wh_loss", "user_attrs_sv_loss", "user_attrs_total_loss")
     row_keys = list(studies)
 
     # Not every cached study logged all three per-trial losses -- older studies (predating
@@ -788,22 +927,31 @@ def plot_optimisation_landscape_grid(
     first_df = studies[row_keys[0]].trials_dataframe()
     available = [c for c in loss_cols if c in first_df.columns]
     if not available:
-        available = ['value'] if 'value' in first_df.columns else []
-    col_titles = [c.replace('user_attrs_', '') for c in available] or ['(no logged loss columns)']
+        available = ["value"] if "value" in first_df.columns else []
+    col_titles = [c.replace("user_attrs_", "") for c in available] or ["(no logged loss columns)"]
     n_cols = max(len(col_titles), 1)
 
-    fig = make_subplots(rows=len(row_keys), cols=n_cols,
-                         subplot_titles=[f'{titles[k]} -- {c}' for k in row_keys for c in col_titles])
+    fig = make_subplots(
+        rows=len(row_keys),
+        cols=n_cols,
+        subplot_titles=[f"{titles[k]} -- {c}" for k in row_keys for c in col_titles],
+    )
     for row, key in enumerate(row_keys, start=1):
-        panel = plot_optimisation_landscape(studies[key], titles[key], loss_cols=loss_cols,
-                                             best_trial=best_trials[key], showlegend=(row == 1))
+        panel = plot_optimisation_landscape(
+            studies[key],
+            titles[key],
+            loss_cols=loss_cols,
+            best_trial=best_trials[key],
+            showlegend=(row == 1),
+        )
         for col, trace_group in enumerate(panel, start=1):
             for trace in trace_group:
                 fig.add_trace(trace, row=row, col=col)
-            fig.update_xaxes(title_text=col_titles[col - 1], type='log', row=row, col=col)
-            fig.update_yaxes(title_text='pooled RoA (%)', row=row, col=col)
-    fig.update_layout(height=450 * len(row_keys), width=1500,
-                       title='Optimisation landscape -- RoA vs pooled loss')
+            fig.update_xaxes(title_text=col_titles[col - 1], type="log", row=row, col=col)
+            fig.update_yaxes(title_text="pooled RoA (%)", row=row, col=col)
+    fig.update_layout(
+        height=450 * len(row_keys), width=1500, title="Optimisation landscape -- RoA vs pooled loss"
+    )
     return fig
 
 
@@ -829,12 +977,16 @@ def plot_pareto_scatter_grid(
     col_keys = list(studies)
     fig = make_subplots(rows=1, cols=len(col_keys), subplot_titles=col_keys)
     for col, key in enumerate(col_keys, start=1):
-        traces = plot_pareto_scatter(studies[key], pareto_fronts[key],
-                                      selected_trials[key], key, showlegend=(col == 1))
+        traces = plot_pareto_scatter(
+            studies[key], pareto_fronts[key], selected_trials[key], key, showlegend=(col == 1)
+        )
         for trace in traces:
             fig.add_trace(trace, row=1, col=col)
-        fig.update_xaxes(title_text='wh_loss', type='log', row=1, col=col)
-        fig.update_yaxes(title_text='sv_loss', type='log', row=1, col=col)
-    fig.update_layout(height=550, width=650 * len(col_keys),
-                       title='Real Pareto front -- wh_loss vs sv_loss, coloured by RoA')
+        fig.update_xaxes(title_text="wh_loss", type="log", row=1, col=col)
+        fig.update_yaxes(title_text="sv_loss", type="log", row=1, col=col)
+    fig.update_layout(
+        height=550,
+        width=650 * len(col_keys),
+        title="Real Pareto front -- wh_loss vs sv_loss, coloured by RoA",
+    )
     return fig

@@ -14,13 +14,13 @@ from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import AdaptationResult, Data, Decomposition, RawData
 from adapt_decomp.adaptation.io import H5ParamsBatchWriter
 from adapt_decomp.adaptation.ops import (
-    clip_global_delta,
-    find_peaks_multisource,
     classify_peaks_from_adaptive_centroids,
-    update_centroids_from_peaks,
+    clip_global_delta,
     compute_contrast_error,
-    update_sv_spike_gated,
+    find_peaks_multisource,
     gate_spikes_by_iqr,
+    update_centroids_from_peaks,
+    update_sv_spike_gated,
 )
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.core import CBSS
@@ -87,9 +87,7 @@ class AdaptDecomp:
             UserWarning lists what changed; see reconcile_with_calib_config.
         """
         if not isinstance(calibration, CBSSResult):
-            raise TypeError(
-                f"calibration must be a CBSSResult, got {type(calibration)}"
-            )
+            raise TypeError(f"calibration must be a CBSSResult, got {type(calibration)}")
         if calibration.emg is None:
             raise ValueError(
                 "calibration.emg is None. Use calibrate_and_process() which sets save_emg=True."
@@ -214,7 +212,10 @@ class AdaptDecomp:
 
         # Build the model, then run adaptation over the full recording.
         instance = cls.from_calibration(
-            calibration, cbss_config=cbss_config, adapt_config=adapt_config, save_path=save_path,
+            calibration,
+            cbss_config=cbss_config,
+            adapt_config=adapt_config,
+            save_path=save_path,
         )
         outputs = instance.process_data(emg, preprocess=preprocess, processing_mode=processing_mode)
         return outputs, calibration
@@ -280,7 +281,8 @@ class AdaptDecomp:
             warnings.warn(
                 "'ipts_calib' is deprecated and will be removed in a future "
                 "version; use 'sources_calib' instead.",
-                FutureWarning, stacklevel=2,
+                FutureWarning,
+                stacklevel=2,
             )
             if sources_calib is None:
                 sources_calib = ipts_calib
@@ -303,9 +305,15 @@ class AdaptDecomp:
 
         # Build decomposition object
         self.decomp = Decomposition(
-            whitening, sep_vectors, base_centr, spikes_centr,
-            emg_calib, spikes_calib, config=self.config,
-            pca_components=pca_components, pca_mean=pca_mean,
+            whitening,
+            sep_vectors,
+            base_centr,
+            spikes_centr,
+            emg_calib,
+            spikes_calib,
+            config=self.config,
+            pca_components=pca_components,
+            pca_mean=pca_mean,
             sources_calib=sources_calib,
         )
         self.save_path = save_path
@@ -333,7 +341,8 @@ class AdaptDecomp:
                 "instead. emg passed here is only used if .run() is called "
                 "afterward (equivalent to process_data(emg, "
                 "processing_mode='offline')).",
-                FutureWarning, stacklevel=2,
+                FutureWarning,
+                stacklevel=2,
             )
 
     def init_data(
@@ -432,12 +441,14 @@ class AdaptDecomp:
             i_t = torch.tensor(batch_idx, device=self.config.device)
 
             if self.config.save_params:
-                self.saver._append({
-                    "whitening": self.decomp.whitening.cpu().numpy(),
-                    "sep_vectors": self.decomp.sep_vectors.cpu().numpy(),
-                    "base_centr": self.decomp.base_centr.cpu().numpy(),
-                    "spikes_centr": self.decomp.spikes_centr.cpu().numpy(),
-                })
+                self.saver._append(
+                    {
+                        "whitening": self.decomp.whitening.cpu().numpy(),
+                        "sep_vectors": self.decomp.sep_vectors.cpu().numpy(),
+                        "base_centr": self.decomp.base_centr.cpu().numpy(),
+                        "spikes_centr": self.decomp.spikes_centr.cpu().numpy(),
+                    }
+                )
 
             spikes, sources = self.process_batch(emg_batch, i_t)
             self._spikes_accum.append(spikes)
@@ -471,7 +482,8 @@ class AdaptDecomp:
         warnings.warn(
             "AdaptDecomp.run() is deprecated and will be removed in a "
             "future version; use process_data(emg, ...) instead.",
-            FutureWarning, stacklevel=2,
+            FutureWarning,
+            stacklevel=2,
         )
         return self.process_data(self._emg_raw, processing_mode="offline")
 
@@ -542,8 +554,10 @@ class AdaptDecomp:
         # Remove outlier spikes from separation vector and centroid updates
         if self.config.adapt_sd or self.config.adapt_sv:
             trusted_spike_mask = gate_spikes_by_iqr(
-                sources, spike_mask,
-                self.decomp.Q75_cal, self.decomp.IQR_cal,
+                sources,
+                spike_mask,
+                self.decomp.Q75_cal,
+                self.decomp.IQR_cal,
                 gate_factor=3.0,
                 peak_power=self.config.spike_det_exp,
                 use_abs_for_detection=True,
@@ -566,7 +580,10 @@ class AdaptDecomp:
             N_called, self.decomp.sep_vectors.shape[0], dtype=torch.int32, device=self.config.device
         )
         sources_out = torch.zeros(
-            N_called, self.decomp.sep_vectors.shape[0], dtype=torch.float32, device=self.config.device
+            N_called,
+            self.decomp.sep_vectors.shape[0],
+            dtype=torch.float32,
+            device=self.config.device,
         )
         spikes_out[pad_offset:] = spike_mask.to(torch.int32)
         sources_out[pad_offset:] = sources
@@ -596,8 +613,10 @@ class AdaptDecomp:
             # Only checkable once the raw channel count is known, on the
             # first batch; later batches can't change it mid-run.
             validate_channel_selection(
-                self.config.ch_mask, self.config.ch_map,
-                self.config.replace_bad_channels, emg_batch.shape[1],
+                self.config.ch_mask,
+                self.config.ch_map,
+                self.config.replace_bad_channels,
+                emg_batch.shape[1],
             )
 
         emg_np, zi_new = preprocess_emg_stateful(
@@ -634,7 +653,8 @@ class AdaptDecomp:
 
         batch_mean = emg_batch.mean(0, keepdim=True)
         self.decomp.ema_mean_online = (
-            batch_mean.detach() if self.decomp.ema_mean_online is None
+            batch_mean.detach()
+            if self.decomp.ema_mean_online is None
             else (
                 self.config.ema_alpha * self.decomp.ema_mean_online
                 + (1 - self.config.ema_alpha) * batch_mean
@@ -693,7 +713,6 @@ class AdaptDecomp:
         # Only run if adapt_wh or compute_loss is True
         coupling_matrix = None
         if self.config.adapt_wh or self.config.compute_loss:
-
             # Compute the whitened covariance Rz for this batch (from the FIFO)
             Rz = self._compute_wh_covariance(X)
 
@@ -726,16 +745,18 @@ class AdaptDecomp:
                 if self.config.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
                     d = self.diagnostics.setdefault(idx, {})
-                    d.update({
-                        "K":                K_online.item(),
-                        "K_cal":            self.decomp.kl_div_calib_mean.item(),
-                        "whitening_error":  e_wh.item(),
-                        "delta_wh_norm":     wh_diag["delta_wh_norm"],
-                        "delta_wh_raw_norm": wh_diag["delta_wh_raw_norm"],
-                        "Rz_trace":         Rz.trace().item(),
-                        "Rz_logdet":        logdet.item(),
-                        "wh_norm":           torch.linalg.norm(self.decomp.whitening).item(),
-                    })
+                    d.update(
+                        {
+                            "K": K_online.item(),
+                            "K_cal": self.decomp.kl_div_calib_mean.item(),
+                            "whitening_error": e_wh.item(),
+                            "delta_wh_norm": wh_diag["delta_wh_norm"],
+                            "delta_wh_raw_norm": wh_diag["delta_wh_raw_norm"],
+                            "Rz_trace": Rz.trace().item(),
+                            "Rz_logdet": logdet.item(),
+                            "wh_norm": torch.linalg.norm(self.decomp.whitening).item(),
+                        }
+                    )
 
         # Return whitened data and wh-sv coupling update (init to None)
         return X @ self.decomp.whitening.T, coupling_matrix
@@ -779,16 +800,16 @@ class AdaptDecomp:
 
         if self.config.wh_mode == "kl_to_identity":
             K_online = 0.5 * (Rz.trace() - logdet - self.decomp.n)
-            K_ref    = self.decomp.kl_div_calib_mean
-            e_wh_raw  = K_online - K_ref
+            K_ref = self.decomp.kl_div_calib_mean
+            e_wh_raw = K_online - K_ref
             direction = Rz - self.decomp.I
         else:  # kl_to_cal
-            A         = self.decomp.Rz_cal_inv @ Rz
-            logdet_A  = logdet - self.decomp.logdet_cal
-            K_online  = 0.5 * (A.trace() - logdet_A - self.decomp.n)
-            K_ref     = self.decomp.kl_div_calib_mean
-            e_wh_raw   = K_online - K_ref
-            direction = A.T - self.decomp.I   # exact steepest direction, not A - I; see Notes above
+            A = self.decomp.Rz_cal_inv @ Rz
+            logdet_A = logdet - self.decomp.logdet_cal
+            K_online = 0.5 * (A.trace() - logdet_A - self.decomp.n)
+            K_ref = self.decomp.kl_div_calib_mean
+            e_wh_raw = K_online - K_ref
+            direction = A.T - self.decomp.I  # exact steepest direction, not A - I; see Notes above
 
         # Z-score the whitening error so eta_wh is scale-free across contractions.
         sigma_K = getattr(self.decomp, "kl_div_calib_std", None)
@@ -823,30 +844,38 @@ class AdaptDecomp:
         """
 
         # Compute the direction of the whitening update
-        if self.config.lr_mode == "fixed": # Fixed learning rate
+        if self.config.lr_mode == "fixed":  # Fixed learning rate
             dir_coeff = -self.config.wh_learning_rate * direction
 
-        else: # Relative error
-
+        else:  # Relative error
             # Compute the norm of the whitening and update (via exponential moving average) for scaling
             M_wh = direction @ self.decomp.whitening
             M_wh_norm = torch.linalg.norm(M_wh)
             self.decomp.ema_dirnorm_wh = (
-                M_wh_norm.detach() if self.decomp.ema_dirnorm_wh is None
-                else (self.config.ema_alpha * self.decomp.ema_dirnorm_wh + (1 - self.config.ema_alpha) * M_wh_norm).detach()
+                M_wh_norm.detach()
+                if self.decomp.ema_dirnorm_wh is None
+                else (
+                    self.config.ema_alpha * self.decomp.ema_dirnorm_wh
+                    + (1 - self.config.ema_alpha) * M_wh_norm
+                ).detach()
             )
             wh_norm = torch.linalg.norm(self.decomp.whitening)
 
             # Compute the direction of the whitening update using the relative error and the scaling
             dir_coeff = (
-                -self.config.wh_learning_rate * wh_norm * e_wh
-                / (self.decomp.ema_dirnorm_wh + self.config.eps) * direction
+                -self.config.wh_learning_rate
+                * wh_norm
+                * e_wh
+                / (self.decomp.ema_dirnorm_wh + self.config.eps)
+                * direction
             )
 
         # Clip whitening update within tolerance region
         delta_wh_target = dir_coeff @ self.decomp.whitening
         eff_max_rel_delta_wh = self.config.safety_clip_multiplier_wh * self.config.wh_learning_rate
-        delta_wh = clip_global_delta(delta_wh_target, self.decomp.whitening, eff_max_rel_delta_wh, self.config.eps)
+        delta_wh = clip_global_delta(
+            delta_wh_target, self.decomp.whitening, eff_max_rel_delta_wh, self.config.eps
+        )
 
         # Update whitening
         self.decomp.whitening = self.decomp.whitening + delta_wh
@@ -907,9 +936,7 @@ class AdaptDecomp:
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _detect_spikes(
-        self, sources: torch.Tensor, N: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _detect_spikes(self, sources: torch.Tensor, N: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Detect spikes via vectorised NMS on the source FIFO plus the current batch.
 
         Prepending the source FIFO gives spikes at the left edge of the
@@ -941,8 +968,10 @@ class AdaptDecomp:
 
         # Get spikes form all soures
         spike_mask_full = classify_peaks_from_adaptive_centroids(
-            sources_det_full, peak_mask_full,
-            self.decomp.spikes_centr, self.decomp.base_centr,
+            sources_det_full,
+            peak_mask_full,
+            self.decomp.spikes_centr,
+            self.decomp.base_centr,
         )
 
         # Keep only the current batch data
@@ -952,7 +981,9 @@ class AdaptDecomp:
         # Update source FIFO (keep at most source_fifo_batches * N rows)
         max_fifo = self.config.source_fifo_batches * N
         if self.decomp.source_fifo is not None:
-            self.decomp.source_fifo = torch.cat([self.decomp.source_fifo, sources], dim=0)[-max_fifo:]
+            self.decomp.source_fifo = torch.cat([self.decomp.source_fifo, sources], dim=0)[
+                -max_fifo:
+            ]
         else:
             self.decomp.source_fifo = sources[-max_fifo:]
 
@@ -987,40 +1018,41 @@ class AdaptDecomp:
         """
         # Update centroids using the trusted spikes only
         if self.config.adapt_sd:
-            self.decomp.spikes_centr, self.decomp.base_centr = (
-                update_centroids_from_peaks(
-                    sources, peak_mask, trusted_spike_mask,
-                    self.decomp.spikes_centr, self.decomp.base_centr,
-                    peak_power=self.config.spike_det_exp,
-                    centroid_momentum=self.config.centroid_momentum,
-                    min_spikes_for_centroid=1,
-                    min_base_peaks_for_centroid=1,
-                    use_abs_for_detection=True,
-                    eps=self.config.eps,
-                )
+            self.decomp.spikes_centr, self.decomp.base_centr = update_centroids_from_peaks(
+                sources,
+                peak_mask,
+                trusted_spike_mask,
+                self.decomp.spikes_centr,
+                self.decomp.base_centr,
+                peak_power=self.config.spike_det_exp,
+                centroid_momentum=self.config.centroid_momentum,
+                min_spikes_for_centroid=1,
+                min_base_peaks_for_centroid=1,
+                use_abs_for_detection=True,
+                eps=self.config.eps,
             )
 
         # Diagnostics
         if self.config.debug:
             idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
             d = self.diagnostics.setdefault(idx, {})
-            sep_t   = self.decomp.spikes_centr - self.decomp.base_centr
+            sep_t = self.decomp.spikes_centr - self.decomp.base_centr
             sep_cal = self.decomp.spikes_centr_cal - self.decomp.base_centr_cal
-            d.update({
-                "base_centroids": self.decomp.base_centr.clone(),
-                "spike_centroids": self.decomp.spikes_centr.clone(),
-                "base_centroids_cal": self.decomp.base_centr_cal.clone(),
-                "spike_centroids_cal": self.decomp.spikes_centr_cal.clone(),
-                "centroid_drift": (
-                    self.decomp.spikes_centr - self.decomp.spikes_centr_cal
-                ).abs().mean(),
-                "centroid_separation": (
-                    sep_t / sep_cal.clamp_min(self.config.eps) - 1.0
-                ) ** 2,
-                "peak_counts_before": peak_mask.sum(dim=0),
-                "peak_counts_after": spike_mask.sum(dim=0),
-                "outlier_spike_counts": (spike_mask & ~trusted_spike_mask).sum(dim=0),
-            })
+            d.update(
+                {
+                    "base_centroids": self.decomp.base_centr.clone(),
+                    "spike_centroids": self.decomp.spikes_centr.clone(),
+                    "base_centroids_cal": self.decomp.base_centr_cal.clone(),
+                    "spike_centroids_cal": self.decomp.spikes_centr_cal.clone(),
+                    "centroid_drift": (self.decomp.spikes_centr - self.decomp.spikes_centr_cal)
+                    .abs()
+                    .mean(),
+                    "centroid_separation": (sep_t / sep_cal.clamp_min(self.config.eps) - 1.0) ** 2,
+                    "peak_counts_before": peak_mask.sum(dim=0),
+                    "peak_counts_after": spike_mask.sum(dim=0),
+                    "outlier_spike_counts": (spike_mask & ~trusted_spike_mask).sum(dim=0),
+                }
+            )
 
     # ------------------------------------------------------------------
     # Separation vectors
@@ -1028,7 +1060,10 @@ class AdaptDecomp:
 
     @torch.no_grad()
     def _update_sep_vectors(
-        self, Z: torch.Tensor, sources: torch.Tensor, spike_mask: torch.Tensor,
+        self,
+        Z: torch.Tensor,
+        sources: torch.Tensor,
+        spike_mask: torch.Tensor,
         batch_idx: Union[int, torch.Tensor],
     ) -> None:
         """Per-batch separation-vector step: update decomp.sep_vectors and log diagnostics.
@@ -1062,8 +1097,10 @@ class AdaptDecomp:
             sources_curr = sources
             first_sv_diag = None
             # Define clipping region and norm
-            eff_max_rel_delta_sv = self.config.safety_clip_multiplier_sv * self.config.sv_learning_rate
-            ema_gradnorm_sv_batch = self.decomp.ema_gradnorm_sv   # carried over from last batch
+            eff_max_rel_delta_sv = (
+                self.config.safety_clip_multiplier_sv * self.config.sv_learning_rate
+            )
+            ema_gradnorm_sv_batch = self.decomp.ema_gradnorm_sv  # carried over from last batch
 
             # Apply update for requested epochs
             for it in range(self.config.sv_epochs):
@@ -1094,9 +1131,8 @@ class AdaptDecomp:
                 sources_curr = Z @ sv_curr.T
 
                 # Check for convergence
-                delta_rel = (
-                    torch.linalg.norm(sv_new - sv_curr)
-                    / (torch.linalg.norm(sv_curr) + self.config.eps)
+                delta_rel = torch.linalg.norm(sv_new - sv_curr) / (
+                    torch.linalg.norm(sv_curr) + self.config.eps
                 )
                 if delta_rel < self.config.sv_tol:
                     break
@@ -1109,26 +1145,26 @@ class AdaptDecomp:
         # --- Store losses ---
         if self.config.compute_loss:
             sv_err = sv_diag["contrast_error"]
-            self.sv_loss.append(sv_err ** 2)
+            self.sv_loss.append(sv_err**2)
 
         # --- Debug diagnostics ---
         if self.config.debug:
             idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
             d = self.diagnostics.setdefault(idx, {})
-            d.update({
-                **sv_diag,
-                "kappa_cal": self.decomp.contrast_calib_mean.clone(),
-            })
+            d.update(
+                {
+                    **sv_diag,
+                    "kappa_cal": self.decomp.contrast_calib_mean.clone(),
+                }
+            )
             if "delta_sv_raw_norm" in first_sv_diag:
                 # Override the last-iteration values **sv_diag contributed above;
                 # see the "First sub-iteration only" comment above for why.
-                d["delta_sv_norm"]     = first_sv_diag["delta_sv_norm"]
+                d["delta_sv_norm"] = first_sv_diag["delta_sv_norm"]
                 d["delta_sv_raw_norm"] = first_sv_diag["delta_sv_raw_norm"]
 
     @torch.no_grad()
-    def _compute_sv_diag(
-        self, sources: torch.Tensor, spike_mask: torch.Tensor
-    ) -> dict:
+    def _compute_sv_diag(self, sources: torch.Tensor, spike_mask: torch.Tensor) -> dict:
         """Compute contrast error for loss tracking when adapt_sv is False.
 
         Args:
@@ -1139,7 +1175,9 @@ class AdaptDecomp:
             dict: kappa, contrast_error, spike_counts, active; all shape (M,).
         """
         kappa, e_sv, active, spike_counts = compute_contrast_error(
-            sources, spike_mask, self.decomp.contrast_calib_mean,
+            sources,
+            spike_mask,
+            self.decomp.contrast_calib_mean,
             self.config.contrast_scope,
             getattr(self.decomp, "contrast_calib_std", None),
             self.config.eps,
@@ -1147,10 +1185,10 @@ class AdaptDecomp:
         _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
         _fallback = torch.full_like(e_sv, -3.0)
         return {
-            "kappa":          torch.where(active, kappa,  _nan),
-            "contrast_error": torch.where(active, e_sv,   _fallback),
-            "spike_counts":   spike_counts,
-            "active":         active,
+            "kappa": torch.where(active, kappa, _nan),
+            "contrast_error": torch.where(active, e_sv, _fallback),
+            "spike_counts": spike_counts,
+            "active": active,
         }
 
     # ------------------------------------------------------------------
@@ -1207,7 +1245,9 @@ class AdaptDecomp:
         self.spikes = self._cat_list(self._spikes_accum, (0, self.units), dtype=torch.int32)
         self.sources = self._cat_list(self._sources_accum, (0, self.units), dtype=torch.float32)
         if self.config.compute_loss:
-            self.wh_loss = torch.tensor(self.wh_loss, dtype=torch.float32, device=self.config.device)
+            self.wh_loss = torch.tensor(
+                self.wh_loss, dtype=torch.float32, device=self.config.device
+            )
             self.sv_loss = self._stack_list(self.sv_loss, (0, self.units))
             self.wh_trace = self._stack_list(self.wh_trace, (0,))
         self.time_wh_ms = torch.tensor(self.time_wh_ms, dtype=torch.float32)
@@ -1327,6 +1367,7 @@ class AdaptDecomp:
             result.gt_matched_indices = self.gt_matched_indices
         return result
 
+
 # ---------------------------------------------------------------------------
 # Config reconciliation
 # ---------------------------------------------------------------------------
@@ -1335,11 +1376,21 @@ class AdaptDecomp:
 # agree for a calibration to be tracked correctly online; see
 # from_calibration()/reconcile_with_calib_config() below.
 _SHARED_CBSS_ADAPT_FIELDS = (
-    "ext_fact", "ext_mode", "spike_det_exp",
-    "fs", "lowcut", "highcut", "filter_order",
-    "powerline", "powerline_freq",
-    "notch_width_hz", "notch_n_harmonics", "notch_order",
-    "ch_mask", "ch_map", "replace_bad_channels",
+    "ext_fact",
+    "ext_mode",
+    "spike_det_exp",
+    "fs",
+    "lowcut",
+    "highcut",
+    "filter_order",
+    "powerline",
+    "powerline_freq",
+    "notch_width_hz",
+    "notch_n_harmonics",
+    "notch_order",
+    "ch_mask",
+    "ch_map",
+    "replace_bad_channels",
 )
 
 
@@ -1351,6 +1402,7 @@ class SharedCalibFields:
     _SHARED_CBSS_ADAPT_FIELDS. Lets reconcile_with_calib_config() work from
     any calibration source, not just a CBSSConfig.
     """
+
     ext_fact: int
     ext_mode: Literal["block", "toeplitz"]
     spike_det_exp: float
@@ -1401,7 +1453,9 @@ def _fields_differ(adapt_val: Any, cbss_val: Any) -> bool:
     return adapt_val != cbss_val
 
 
-def reconcile_with_calib_config(adapt_config: AdaptConfig, shared: SharedCalibFields) -> AdaptConfig:
+def reconcile_with_calib_config(
+    adapt_config: AdaptConfig, shared: SharedCalibFields
+) -> AdaptConfig:
     """Copy adapt_config, overwriting any of _SHARED_CBSS_ADAPT_FIELDS that
     disagree with shared: the calibration's own values, treated as ground truth.
 
@@ -1431,7 +1485,8 @@ def reconcile_with_calib_config(adapt_config: AdaptConfig, shared: SharedCalibFi
             f"adapt_config disagreed with cbss_config on {len(changed)} shared field(s); "
             f"cbss_config is treated as ground truth and these were overwritten:\n{lines}\n"
             "Update how you construct AdaptConfig to match self.config to silence this.",
-            UserWarning, stacklevel=3,
+            UserWarning,
+            stacklevel=3,
         )
     return adapt_config
 
@@ -1439,6 +1494,7 @@ def reconcile_with_calib_config(adapt_config: AdaptConfig, shared: SharedCalibFi
 # ---------------------------------------------------------------------------
 # Module-level utilities
 # ---------------------------------------------------------------------------
+
 
 def _to_numpy(x: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
     """Convert a torch.Tensor or array-like to a CPU numpy array.

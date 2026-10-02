@@ -14,22 +14,22 @@ import optuna
 import torch
 from loguru import logger
 
-from adapt_decomp.adaptation.core import AdaptDecomp
 from adapt_decomp.adaptation.config import AdaptConfig
+from adapt_decomp.adaptation.core import AdaptDecomp
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
 from adapt_decomp.spikes.comparison import rate_of_agreement_paired
 from adapt_decomp.utils import validate_literals
-from adapt_decomp.utils.loaders import PooledDatasetMemory, PooledDatasetDisk
+from adapt_decomp.utils.loaders import PooledDatasetDisk, PooledDatasetMemory
 
 # ------------------------------------------------------------------
 # Param space
 # ------------------------------------------------------------------
 
 DEFAULT_PARAM_SPACE: dict = {
-    "wh_learning_rate":   ("log_float", 1e-4, 5e-2),
-    "sv_learning_rate":   ("log_float", 1e-4, 1e-1),
+    "wh_learning_rate": ("log_float", 1e-4, 5e-2),
+    "sv_learning_rate": ("log_float", 1e-4, 1e-1),
 }
 
 
@@ -81,6 +81,7 @@ def _roa_loss(roa_mean: float, diverged: bool) -> float:
 # ------------------------------------------------------------------
 # Trial building blocks
 # ------------------------------------------------------------------
+
 
 def _suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
     """Suggest one value per param_space entry for this trial.
@@ -150,6 +151,7 @@ def _build_trial_config(run_config: AdaptConfig, overrides: dict) -> AdaptConfig
 # Best-result persistence
 # ------------------------------------------------------------------
 
+
 def _save_best_trial(
     best_dir: Path,
     outputs: Union[AdaptationResult, Dict[str, AdaptationResult]],
@@ -198,7 +200,10 @@ def _finalize_best_result(best_dir: Path, study: optuna.Study) -> None:
 
 
 def _promote_temp_to_best(
-    temp_dir: Path, best_dir: Path, dataset_names: Iterable[str], trial_config: AdaptConfig,
+    temp_dir: Path,
+    best_dir: Path,
+    dataset_names: Iterable[str],
+    trial_config: AdaptConfig,
     trial_number: int,
 ) -> None:
     """Copy this trial's already-saved per-dataset results from temp_dir to best_dir.
@@ -229,6 +234,7 @@ def _promote_temp_to_best(
 # ------------------------------------------------------------------
 # Shared pooled-trial body
 # ------------------------------------------------------------------
+
 
 def _run_one_dataset(
     trial: optuna.trial.Trial,
@@ -287,7 +293,9 @@ def _run_one_dataset(
     trial_config = _build_trial_config(run_config, overrides)
 
     adapter = AdaptDecomp.from_calibration(
-        calibration=calibration, cbss_config=cbss_config, adapt_config=trial_config,
+        calibration=calibration,
+        cbss_config=cbss_config,
+        adapt_config=trial_config,
     )
     outputs = adapter.process_data(emg, preprocess=preprocess)
 
@@ -320,6 +328,7 @@ def _run_one_dataset(
 # ------------------------------------------------------------------
 # Search entry points
 # ------------------------------------------------------------------
+
 
 def optimize_adapt_decomp_pooled_memory(
     *,
@@ -426,9 +435,7 @@ def optimize_adapt_decomp_pooled_memory(
     validate_literals(run_config)
 
     if objective not in _VALID_OBJECTIVES:
-        raise ValueError(
-            f"Unknown objective: {objective!r}; expected one of {_VALID_OBJECTIVES}"
-        )
+        raise ValueError(f"Unknown objective: {objective!r}; expected one of {_VALID_OBJECTIVES}")
 
     # objective="roa" needs RoA computed every trial to have anything to score on.
     if objective == "roa":
@@ -460,8 +467,8 @@ def optimize_adapt_decomp_pooled_memory(
 
         # Pool-based value tracking
         pooled_losses = {"sv_loss": 0.0, "wh_loss": 0.0, "total_loss": 0.0}
-        pooled_roa_loss = 0.0   # sum of per-dataset _roa_loss(), matching pooled_losses' sum
-        roa_means = []          # per-dataset roa_mean, for the separate mean diagnostic below
+        pooled_roa_loss = 0.0  # sum of per-dataset _roa_loss(), matching pooled_losses' sum
+        roa_means = []  # per-dataset roa_mean, for the separate mean diagnostic below
         trial_outputs: Dict[str, AdaptationResult] = {}
         per_dataset: Dict[str, Dict[str, Any]] = {}
         reference_config: Optional[AdaptConfig] = None
@@ -469,8 +476,18 @@ def optimize_adapt_decomp_pooled_memory(
         for name, dataset in pool.items():
             emg, calibration, cbss_config, preprocess, gt_paired_bin = dataset.resolve()
             outputs, losses, trial_config = _run_one_dataset(
-                trial, name, emg, calibration, cbss_config, preprocess, gt_paired_bin,
-                run_config, overrides, objective, compute_roa, roa_kwargs,
+                trial,
+                name,
+                emg,
+                calibration,
+                cbss_config,
+                preprocess,
+                gt_paired_bin,
+                run_config,
+                overrides,
+                objective,
+                compute_roa,
+                roa_kwargs,
             )
             if reference_config is None:
                 reference_config = trial_config  # first dataset's, may differ from others' if their cbss_configs disagreed
@@ -523,8 +540,11 @@ def optimize_adapt_decomp_pooled_memory(
     # Build the Optuna study and run the optimization
     study = optuna.create_study(
         direction="minimize",
-        sampler=sampler if sampler is not None else optuna.samplers.TPESampler(
-            n_startup_trials=15, seed=random_seed,
+        sampler=sampler
+        if sampler is not None
+        else optuna.samplers.TPESampler(
+            n_startup_trials=15,
+            seed=random_seed,
         ),
     )
     study.optimize(_trial_objective, n_trials=n_trials, n_jobs=n_jobs)
@@ -622,9 +642,7 @@ def optimize_adapt_decomp_pooled_disk(
     validate_literals(run_config)
 
     if objective not in _VALID_OBJECTIVES:
-        raise ValueError(
-            f"Unknown objective: {objective!r}; expected one of {_VALID_OBJECTIVES}"
-        )
+        raise ValueError(f"Unknown objective: {objective!r}; expected one of {_VALID_OBJECTIVES}")
 
     # objective="roa" needs RoA computed every trial to have anything to score on.
     if objective == "roa":
@@ -657,16 +675,26 @@ def optimize_adapt_decomp_pooled_disk(
 
         # Pool-based value tracking
         pooled_losses = {"sv_loss": 0.0, "wh_loss": 0.0, "total_loss": 0.0}
-        pooled_roa_loss = 0.0   # sum of per-dataset _roa_loss(), matching pooled_losses' sum
-        roa_means = []          # per-dataset roa_mean, for the separate mean diagnostic below
+        pooled_roa_loss = 0.0  # sum of per-dataset _roa_loss(), matching pooled_losses' sum
+        roa_means = []  # per-dataset roa_mean, for the separate mean diagnostic below
         per_dataset: Dict[str, Dict[str, Any]] = {}
         reference_config: Optional[AdaptConfig] = None
 
         for name, spec in pool.items():
             emg, calibration, cbss_config, preprocess, gt_paired_bin = spec.resolve()
             outputs, losses, trial_config = _run_one_dataset(
-                trial, name, emg, calibration, cbss_config, preprocess, gt_paired_bin,
-                run_config, overrides, objective, compute_roa, roa_kwargs,
+                trial,
+                name,
+                emg,
+                calibration,
+                cbss_config,
+                preprocess,
+                gt_paired_bin,
+                run_config,
+                overrides,
+                objective,
+                compute_roa,
+                roa_kwargs,
             )
             if reference_config is None:
                 reference_config = trial_config  # value-identical across datasets
@@ -715,7 +743,9 @@ def optimize_adapt_decomp_pooled_disk(
         # trials would otherwise race on the read-then-write of best_loss.
         with best_lock:
             if temp_dir is not None and pooled_loss < best_loss:
-                _promote_temp_to_best(temp_dir, best_dir, pool.keys(), reference_config, trial.number)
+                _promote_temp_to_best(
+                    temp_dir, best_dir, pool.keys(), reference_config, trial.number
+                )
                 best_loss = pooled_loss
 
         # This trial's own scratch files are no longer needed either way --
@@ -732,8 +762,11 @@ def optimize_adapt_decomp_pooled_disk(
     # Build the Optuna study and run the optimization
     study = optuna.create_study(
         direction="minimize",
-        sampler=sampler if sampler is not None else optuna.samplers.TPESampler(
-            n_startup_trials=15, seed=random_seed,
+        sampler=sampler
+        if sampler is not None
+        else optuna.samplers.TPESampler(
+            n_startup_trials=15,
+            seed=random_seed,
         ),
     )
     study.optimize(_trial_objective, n_trials=n_trials, n_jobs=n_jobs)
@@ -776,7 +809,9 @@ def _dominates(a: Tuple[float, ...], b: Tuple[float, ...]) -> bool:
 
 
 def _update_front(
-    front: Dict[int, Tuple[float, ...]], trial_number: int, values: Tuple[float, ...],
+    front: Dict[int, Tuple[float, ...]],
+    trial_number: int,
+    values: Tuple[float, ...],
 ) -> Tuple[bool, List[int]]:
     """Join trial_number onto the resident Pareto front, evicting anything it now dominates.
 
@@ -811,9 +846,7 @@ def _select_min_sv_loss(pareto_front: List[optuna.trial.FrozenTrial]) -> optuna.
     trial.values, so this works even when "sv_loss" isn't itself one of
     objectives. Always Pareto-optimal by construction and needs no ground
     truth, though not necessarily the oracle-best point on the front when
-    RoA ground truth happens to be available -- see
-    notebooks/muniverse_simulations/fdsi_33_loss_roa_correlation_silent_window_confound.ipynb
-    for why this default was chosen over alternatives.
+    RoA ground truth happens to be available.
 
     Args:
         pareto_front (List[optuna.trial.FrozenTrial]): study.best_trials
@@ -922,7 +955,10 @@ def _finalize_pareto_result(best_dir: Path) -> None:
 
 
 def _save_front_member(
-    best_dir: Path, trial_number: int, outputs: Dict[str, AdaptationResult], trial_config: AdaptConfig,
+    best_dir: Path,
+    trial_number: int,
+    outputs: Dict[str, AdaptationResult],
+    trial_config: AdaptConfig,
 ) -> None:
     """Write one Pareto-front member's per-dataset AdaptationResult(s) + config to disk.
 
@@ -953,7 +989,11 @@ def _save_front_member(
 
 
 def _promote_temp_to_front(
-    temp_dir: Path, best_dir: Path, trial_number: int, dataset_names: Iterable[str], trial_config: AdaptConfig,
+    temp_dir: Path,
+    best_dir: Path,
+    trial_number: int,
+    dataset_names: Iterable[str],
+    trial_config: AdaptConfig,
 ) -> None:
     """Copy one trial's already-saved scratch files into its front subdirectory.
 
@@ -1013,16 +1053,17 @@ def optimize_adapt_decomp_pooled_memory_pareto(
     random_seed: Optional[int] = 1909,
     best_result_path: Optional[str] = None,
     on_trial: Optional[Callable[[Dict[str, Any]], None]] = None,
-    selection_rule: Optional[Callable[[List[optuna.trial.FrozenTrial]], optuna.trial.FrozenTrial]] = None,
+    selection_rule: Optional[
+        Callable[[List[optuna.trial.FrozenTrial]], optuna.trial.FrozenTrial]
+    ] = None,
 ) -> Tuple[AdaptConfig, List[optuna.trial.FrozenTrial], optuna.Study]:
     """Pareto/multi-objective counterpart to optimize_adapt_decomp_pooled_memory.
 
     Scores every trial on objectives jointly (each pooled the same SUM-across-
     the-pool way as the single-objective search) via
     optuna.create_study(directions=[...]), instead of summing them into one
-    scalar -- see notebooks/muniverse_simulations/
-    fdsi_33_loss_roa_correlation_silent_window_confound.ipynb for why: no
-    rescaling of wh_loss/sv_loss into a single total_loss beat sv_loss alone,
+    scalar, because no rescaling of wh_loss/sv_loss into a single total_loss
+    beat sv_loss alone,
     and a retrospective Pareto front over already-run single-objective
     studies' trials contained meaningfully better-RoA trials than the
     single-scalar search settled on.
@@ -1157,8 +1198,18 @@ def optimize_adapt_decomp_pooled_memory_pareto(
         for name, dataset in pool.items():
             emg, calibration, cbss_config, preprocess, gt_paired_bin = dataset.resolve()
             outputs, losses, trial_config = _run_one_dataset(
-                trial, name, emg, calibration, cbss_config, preprocess, gt_paired_bin,
-                run_config, overrides, None, compute_roa, roa_kwargs,
+                trial,
+                name,
+                emg,
+                calibration,
+                cbss_config,
+                preprocess,
+                gt_paired_bin,
+                run_config,
+                overrides,
+                None,
+                compute_roa,
+                roa_kwargs,
             )
             if reference_config is None:
                 reference_config = trial_config
@@ -1217,8 +1268,11 @@ def optimize_adapt_decomp_pooled_memory_pareto(
     # Build the Optuna study and run the optimisation.
     study = optuna.create_study(
         directions=["minimize"] * len(objectives),
-        sampler=sampler if sampler is not None else optuna.samplers.TPESampler(
-            n_startup_trials=15, seed=random_seed,
+        sampler=sampler
+        if sampler is not None
+        else optuna.samplers.TPESampler(
+            n_startup_trials=15,
+            seed=random_seed,
         ),
     )
     study.set_metric_names(list(objectives))
@@ -1228,7 +1282,8 @@ def optimize_adapt_decomp_pooled_memory_pareto(
     # once per completed trial.
     callbacks = (
         [lambda study, trial: _save_study_snapshot(best_dir, study, save_lock)]
-        if best_dir is not None else None
+        if best_dir is not None
+        else None
     )
     study.optimize(_trial_objective, n_trials=n_trials, n_jobs=n_jobs, callbacks=callbacks)
 
@@ -1257,7 +1312,9 @@ def optimize_adapt_decomp_pooled_disk_pareto(
     random_seed: Optional[int] = 1909,
     best_result_path: Optional[str] = None,
     on_trial: Optional[Callable[[Dict[str, Any]], None]] = None,
-    selection_rule: Optional[Callable[[List[optuna.trial.FrozenTrial]], optuna.trial.FrozenTrial]] = None,
+    selection_rule: Optional[
+        Callable[[List[optuna.trial.FrozenTrial]], optuna.trial.FrozenTrial]
+    ] = None,
 ) -> Tuple[AdaptConfig, List[optuna.trial.FrozenTrial], optuna.Study]:
     """Memory-lean counterpart to optimize_adapt_decomp_pooled_memory_pareto.
 
@@ -1337,8 +1394,18 @@ def optimize_adapt_decomp_pooled_disk_pareto(
         for name, spec in pool.items():
             emg, calibration, cbss_config, preprocess, gt_paired_bin = spec.resolve()
             outputs, losses, trial_config = _run_one_dataset(
-                trial, name, emg, calibration, cbss_config, preprocess, gt_paired_bin,
-                run_config, overrides, None, compute_roa, roa_kwargs,
+                trial,
+                name,
+                emg,
+                calibration,
+                cbss_config,
+                preprocess,
+                gt_paired_bin,
+                run_config,
+                overrides,
+                None,
+                compute_roa,
+                roa_kwargs,
             )
             if reference_config is None:
                 reference_config = trial_config
@@ -1383,7 +1450,11 @@ def optimize_adapt_decomp_pooled_disk_pareto(
                 joined, evicted = _update_front(front, trial.number, pooled_values)
                 if joined:
                     _promote_temp_to_front(
-                        temp_dir, best_dir, trial.number, pool.keys(), reference_config,
+                        temp_dir,
+                        best_dir,
+                        trial.number,
+                        pool.keys(),
+                        reference_config,
                     )
                     for n in evicted:
                         _evict_front_member(best_dir, n)
@@ -1402,15 +1473,19 @@ def optimize_adapt_decomp_pooled_disk_pareto(
 
     study = optuna.create_study(
         directions=["minimize"] * len(objectives),
-        sampler=sampler if sampler is not None else optuna.samplers.TPESampler(
-            n_startup_trials=15, seed=random_seed,
+        sampler=sampler
+        if sampler is not None
+        else optuna.samplers.TPESampler(
+            n_startup_trials=15,
+            seed=random_seed,
         ),
     )
     study.set_metric_names(list(objectives))
 
     callbacks = (
         [lambda study, trial: _save_study_snapshot(best_dir, study, save_lock)]
-        if best_dir is not None else None
+        if best_dir is not None
+        else None
     )
     study.optimize(_trial_objective, n_trials=n_trials, n_jobs=n_jobs, callbacks=callbacks)
 

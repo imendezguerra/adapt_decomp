@@ -15,26 +15,28 @@ import torch
 class CBSSResult:
     """Output of CBSS.decompose() and CBSS.apply(). All array fields are CPU numpy arrays."""
 
-    sources: np.ndarray                    # [T, n_mu]
-    spikes: np.ndarray                     # [T, n_mu]  int32
+    sources: np.ndarray  # [T, n_mu]
+    spikes: np.ndarray  # [T, n_mu]  int32
     spikes_dict: Dict[int, np.ndarray]
-    sep_vectors: np.ndarray                # [dim, n_mu]
-    whitening: np.ndarray                  # [dim, dim]
-    extension_mean: np.ndarray             # [1, C*ext_fact]
-    spikes_centr: np.ndarray               # [n_mu]
-    base_centr: np.ndarray                 # [n_mu]
-    sil: np.ndarray                        # [n_mu]
-    cov_isi: np.ndarray                    # [n_mu] coefficient of variation of inter-spike intervals
-    ext_fact: int                          # extension factor used to build sep_vectors/whitening
-    pca_components: Optional[np.ndarray] = None   # [n_comp, C*ext_fact] or None
-    pca_mean: Optional[np.ndarray] = None          # [C*ext_fact] or None
+    sep_vectors: np.ndarray  # [dim, n_mu]
+    whitening: np.ndarray  # [dim, dim]
+    extension_mean: np.ndarray  # [1, C*ext_fact]
+    spikes_centr: np.ndarray  # [n_mu]
+    base_centr: np.ndarray  # [n_mu]
+    sil: np.ndarray  # [n_mu]
+    cov_isi: np.ndarray  # [n_mu] coefficient of variation of inter-spike intervals
+    ext_fact: int  # extension factor used to build sep_vectors/whitening
+    pca_components: Optional[np.ndarray] = None  # [n_comp, C*ext_fact] or None
+    pca_mean: Optional[np.ndarray] = None  # [C*ext_fact] or None
     pnr: Optional[np.ndarray] = None
     dr: Optional[np.ndarray] = None
     muaps: Optional[np.ndarray] = None
     emg: Optional[np.ndarray] = None
     timestamps: Optional[np.ndarray] = None
-    gt_matched_indices: Optional[np.ndarray] = None  # [n_mu] index into GT units after supervised selection
-    roa: Optional[np.ndarray] = None                 # [n_mu] RoA vs gt_matched_indices, set by select_supervised
+    gt_matched_indices: Optional[np.ndarray] = (
+        None  # [n_mu] index into GT units after supervised selection
+    )
+    roa: Optional[np.ndarray] = None  # [n_mu] RoA vs gt_matched_indices, set by select_supervised
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to a plain dict, omitting fields that are still None.
@@ -63,8 +65,15 @@ class CBSSResult:
             "ext_fact": self.ext_fact,
         }
         for key in (
-            "pca_components", "pca_mean", "pnr", "dr", "muaps",
-            "emg", "timestamps", "gt_matched_indices", "roa",
+            "pca_components",
+            "pca_mean",
+            "pnr",
+            "dr",
+            "muaps",
+            "emg",
+            "timestamps",
+            "gt_matched_indices",
+            "roa",
         ):
             value = getattr(self, key)
             if value is not None:
@@ -145,9 +154,7 @@ class CBSSResult:
         with open(path, "rb") as f:
             obj = pickle.load(f)
         if not isinstance(obj, cls):
-            raise ValueError(
-                f"{path} does not contain a CBSSResult (got {type(obj).__name__})."
-            )
+            raise ValueError(f"{path} does not contain a CBSSResult (got {type(obj).__name__}).")
         return obj
 
     # ------------------------------------------------------------------
@@ -164,9 +171,7 @@ class CBSSResult:
         if self.timestamps is not None and len(self.timestamps) > 1:
             diffs = np.diff(self.timestamps)
             return float(1.0 / np.median(diffs))
-        raise ValueError(
-            "Cannot determine sampling frequency: result.timestamps is not set."
-        )
+        raise ValueError("Cannot determine sampling frequency: result.timestamps is not set.")
 
     # ------------------------------------------------------------------
     # Unit subsetting / selection
@@ -326,6 +331,7 @@ class CBSSResult:
         fs_val = float(fs) if fs is not None else self.fs
 
         from adapt_decomp.spikes import rate_of_agreement
+
         roa_vals, pairs, _ = rate_of_agreement(
             gt_spikes.astype(np.float32),
             self.spikes.astype(np.float32),

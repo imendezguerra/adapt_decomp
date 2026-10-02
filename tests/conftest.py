@@ -32,6 +32,7 @@ def make_adapt_config():
         device="cpu" is set first, then overrides, then __post_init__ is
         re-run so derived fields (spike_min_dist, batch_size) stay in sync.
     """
+
     def _make(**overrides) -> AdaptConfig:
         cfg = AdaptConfig()
         cfg.device = "cpu"
@@ -39,6 +40,7 @@ def make_adapt_config():
             setattr(cfg, key, value)
         cfg.__post_init__()
         return cfg
+
     return _make
 
 
@@ -58,6 +60,7 @@ def make_decomposition(make_adapt_config):
         the config is needed by make_adapter, since several of Decomposition's
         derived fields depend on it.
     """
+
     def _make(
         M: int,
         ext_fact: int,
@@ -69,13 +72,16 @@ def make_decomposition(make_adapt_config):
         config: Optional[AdaptConfig] = None,
         **cfg_overrides,
     ):
-        cfg = config if config is not None else make_adapt_config(ext_fact=ext_fact, **cfg_overrides)
+        cfg = (
+            config if config is not None else make_adapt_config(ext_fact=ext_fact, **cfg_overrides)
+        )
         D = raw_chs * ext_fact
 
         wh = whitening if whitening is not None else torch.eye(D)
         sv = torch.randn(M, D)
         sv = (
-            orthonormalize_rows_qr(sv) if orthonormal_sv
+            orthonormalize_rows_qr(sv)
+            if orthonormal_sv
             else sv / torch.linalg.norm(sv, dim=1, keepdim=True)
         )
         spike_cal = torch.rand(M) + 2.0
@@ -86,10 +92,17 @@ def make_decomposition(make_adapt_config):
         spikes_cal[::spike_stride] = 1
 
         decomp = Decomposition(
-            wh, sv, base_cal, spike_cal, emg_cal, spikes_cal, cfg,
+            wh,
+            sv,
+            base_cal,
+            spike_cal,
+            emg_cal,
+            spikes_cal,
+            cfg,
             sources_calib=sources_cal,
         )
         return decomp, cfg
+
     return _make
 
 
@@ -109,6 +122,7 @@ def make_adapter():
         core.py's growable-accumulator convention); for tests exercising
         _compute_losses() directly, overwrite them with tensors first.
     """
+
     def _make(decomp: Decomposition, config: AdaptConfig):
         from adapt_decomp.adaptation import AdaptDecomp
 
@@ -121,6 +135,7 @@ def make_adapter():
         adapter.sv_loss = []
         adapter.wh_trace = []
         return adapter
+
     return _make
 
 
@@ -139,6 +154,7 @@ def make_optimize_kwargs():
         optimize_adapt_decomp_pooled_memory's own base_config parameter);
         M is the number of motor units.
     """
+
     def _make():
         torch.manual_seed(42)
         raw_chs, ext_fact, M = 3, 2, 2
@@ -179,7 +195,11 @@ def make_optimize_kwargs():
         cbss_config = CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True)
 
         return dict(
-            emg=emg_online, calibration=calibration, cbss_config=cbss_config,
-            preprocess=False, base_config=cfg,
+            emg=emg_online,
+            calibration=calibration,
+            cbss_config=cbss_config,
+            preprocess=False,
+            base_config=cfg,
         ), M
+
     return _make

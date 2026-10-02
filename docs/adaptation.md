@@ -43,12 +43,12 @@ from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.adaptation.config import AdaptConfig
 
 outputs, calibration = AdaptDecomp.calibrate_and_process(
-    emg=emg,                                        # (samples, channels) — full recording
-    timestamps=timestamps,                          # (samples,) seconds
-    calib_indices=slice(0, 10240),                  # or an index/boolean array
-    cbss_config=CBSSConfig(fs=2048, ext_fact=10),   # selection/selection_kwargs filter units here
-    adapt_config=AdaptConfig(),                     # for shared params, adapt_config is overwritten with cbss_config vals if mismatch
-    processing_mode="offline",                      # or "online"
+    emg=emg,  # (samples, channels) — full recording
+    timestamps=timestamps,  # (samples,) seconds
+    calib_indices=slice(0, 10240),  # or an index/boolean array
+    cbss_config=CBSSConfig(fs=2048, ext_fact=10),  # selection/selection_kwargs filter units here
+    adapt_config=AdaptConfig(),  # for shared params, adapt_config is overwritten with cbss_config vals if mismatch
+    processing_mode="offline",  # or "online"
 )
 ```
 
@@ -69,14 +69,14 @@ yourself once the recording is available:
 from adapt_decomp import AdaptDecomp, CBSSResult
 from adapt_decomp.cbss.config import CBSSConfig
 
-calibration = CBSSResult.load("calibration/sub-01_cbss.pkl")           # calibration.emg must be set
+calibration = CBSSResult.load("calibration/sub-01_cbss.pkl")  # calibration.emg must be set
 cbss_config = CBSSConfig.from_yaml("calibration/sub-01_cbss_config.yaml")  # the sibling config
 adapter = AdaptDecomp.from_calibration(
     calibration=calibration,
-    cbss_config=cbss_config,       # required — see "Config essentials" below
-    adapt_config=AdaptConfig(),    # omit to auto-build an AdaptConfig from cbss_config's shared fields
+    cbss_config=cbss_config,  # required — see "Config essentials" below
+    adapt_config=AdaptConfig(),  # omit to auto-build an AdaptConfig from cbss_config's shared fields
 )
-outputs = adapter.process_data(full_recording_emg)   # (samples, channels)
+outputs = adapter.process_data(full_recording_emg)  # (samples, channels)
 ```
 
 `from_calibration` is the CBSS-specific factory: it's hard-typed to
@@ -92,16 +92,16 @@ can produce the same raw tensors:
 
 ```python
 adapter = AdaptDecomp(
-    whitening=whitening,        # (n, n)
-    sep_vectors=sep_vectors,    # (n, M)
-    base_centr=base_centr,      # (M,)
+    whitening=whitening,  # (n, n)
+    sep_vectors=sep_vectors,  # (n, M)
+    base_centr=base_centr,  # (M,)
     spikes_centr=spikes_centr,  # (M,)
-    emg_calib=emg_calib,        # (N_cal, channels) — raw, unextended
+    emg_calib=emg_calib,  # (N_cal, channels) — raw, unextended
     sources_calib=sources_calib,  # (N_cal, M)
     spikes_calib=spikes_calib,  # (N_cal, M) binary
     adapt_config=AdaptConfig(),
 )
-outputs = adapter.process_data(emg, preprocess=True)   # emg: (samples, channels)
+outputs = adapter.process_data(emg, preprocess=True)  # emg: (samples, channels)
 ```
 
 `process_data(emg, preprocess, processing_mode)` always calls
@@ -145,9 +145,9 @@ passing `emg` to `__init__` still works — it's stored, not consumed, until
 `.run()` reads it and calls `process_data(emg, processing_mode="offline")`:
 
 ```python
-adapter = AdaptDecomp(..., emg=emg)   # raises FutureWarning
-outputs = adapter.run()               # raises FutureWarning; equivalent to
-                                       # adapter.process_data(emg, processing_mode="offline")
+adapter = AdaptDecomp(..., emg=emg)  # raises FutureWarning
+outputs = adapter.run()  # raises FutureWarning; equivalent to
+# adapter.process_data(emg, processing_mode="offline")
 ```
 
 Both calls raise `FutureWarning`; `.run()` raises `ValueError` if called on
@@ -251,15 +251,15 @@ if you need a run to reproduce exactly.
 length, `batches` the number of batches processed:
 
 ```python
-outputs = adapter.process_data(emg)   # AdaptationResult
+outputs = adapter.process_data(emg)  # AdaptationResult
 
-outputs.spikes        # (samples, M) int32 binary spike train
-outputs.sources        # (samples, M) float32 source signal (pre-sv-update)
-outputs.wh_loss         # (batches,) — only if compute_loss=True
+outputs.spikes  # (samples, M) int32 binary spike train
+outputs.sources  # (samples, M) float32 source signal (pre-sv-update)
+outputs.wh_loss  # (batches,) — only if compute_loss=True
 outputs.preprocess_time_ms  # (batches,) per-batch preprocessing time; zero unless processing_mode="online"
-outputs.total_time_ms   # (batches,) per-batch wall time
+outputs.total_time_ms  # (batches,) per-batch wall time
 
-outputs["spikes"]       # dict-style access also works
+outputs["spikes"]  # dict-style access also works
 ```
 
 Save/load an `AdaptationResult` with `save()`/`load()`:
@@ -268,6 +268,7 @@ Save/load an `AdaptationResult` with `save()`/`load()`:
 outputs.save("run_result.pkl")
 
 from adapt_decomp import AdaptationResult
+
 outputs = AdaptationResult.load("run_result.pkl")
 ```
 
@@ -317,7 +318,8 @@ just the final state), set `save_params=True` on the config and pass
 
 ```python
 adapter = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config,
+    calibration=calibration,
+    cbss_config=cbss_config,
     adapt_config=AdaptConfig(save_params=True),
     save_path="run_params.h5",
 )

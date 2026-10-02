@@ -14,29 +14,27 @@ existing convention (see pyproject.toml's marker registration).
 from unittest.mock import patch
 
 import numpy as np
-import optuna
 import pytest
 
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize import (
     DEFAULT_PARAM_SPACE,
-    optimize_adapt_decomp_pooled_memory_pareto,
-    optimize_adapt_decomp_pooled_disk_pareto,
     _dominates,
-    _update_front,
     _save_study_snapshot,
+    _update_front,
+    optimize_adapt_decomp_pooled_disk_pareto,
+    optimize_adapt_decomp_pooled_memory_pareto,
 )
 from adapt_decomp.utils.loaders import PooledDatasetMemory
-
 from tests.adaptation.test_optimize import (
-    _make_pooled_disk_dataset,
     _make_pooled_disk_base_config,
+    _make_pooled_disk_dataset,
 )
-
 
 # ------------------------------------------------------------------
 # Unit layer: _dominates / _update_front -- pure logic, no Optuna/torch/IO
 # ------------------------------------------------------------------
+
 
 def test_dominates_strict():
     assert _dominates((1, 1), (2, 2)) is True
@@ -102,6 +100,7 @@ def test_update_front_mutually_non_dominated_members_both_survive():
 # Integration layer: optimize_adapt_decomp_pooled_memory_pareto
 # ------------------------------------------------------------------
 
+
 @pytest.mark.slow
 class TestOptimizeAdaptDecompPooledMemoryPareto:
     def test_best_result_path_optional(self, tmp_path, make_optimize_kwargs):
@@ -112,28 +111,37 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         AdaptationResult dict, and at least one trial_<n>/ subdirectory plus
         study.pkl exist on disk."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
 
         result_no_path = optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=3,
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=3,
             base_config=common["base_config"],
         )
         assert len(result_no_path) == 3
-        best_config, pareto_front, study = result_no_path
+        _best_config, pareto_front, study = result_no_path
         assert len(pareto_front) >= 1
         with pytest.raises(RuntimeError):
             study.best_value
 
         best_dir = tmp_path / "pareto_front"
         result_with_path = optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=3,
-            base_config=common["base_config"], best_result_path=str(best_dir),
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=3,
+            base_config=common["base_config"],
+            best_result_path=str(best_dir),
         )
         assert len(result_with_path) == 4
-        best_outputs, best_config2, pareto_front2, study2 = result_with_path
+        best_outputs, _best_config2, _pareto_front2, _study2 = result_with_path
         assert set(best_outputs.keys()) == {"dataset_a"}
         assert isinstance(best_outputs["dataset_a"], AdaptationResult)
         assert (best_dir / "study.pkl").exists()
@@ -147,20 +155,28 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         broken eviction would leave stale extra directories (a superset),
         broken joining would leave missing ones (a subset)."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
         best_dir = tmp_path / "pareto_front"
 
         _, _, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=8,
-            base_config=common["base_config"], best_result_path=str(best_dir),
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=8,
+            base_config=common["base_config"],
+            best_result_path=str(best_dir),
         )
 
         on_disk = {
             int(p.name.removeprefix("trial_"))
-            for p in best_dir.iterdir() if p.name.startswith("trial_")
+            for p in best_dir.iterdir()
+            if p.name.startswith("trial_")
         }
         assert on_disk == {t.number for t in study.best_trials}
         assert on_disk == {t.number for t in pareto_front}
@@ -176,10 +192,14 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         completed trials (so a crash mid-search wouldn't just leave an
         empty/stale file)."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
         best_dir = tmp_path / "pareto_front"
         trial_counts_seen = []
 
@@ -188,11 +208,15 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
             return _save_study_snapshot(best_dir_arg, study_arg, lock_arg)
 
         with patch(
-            "adapt_decomp.adaptation.optimize._save_study_snapshot", side_effect=_wrapped,
+            "adapt_decomp.adaptation.optimize._save_study_snapshot",
+            side_effect=_wrapped,
         ) as mock_save:
             optimize_adapt_decomp_pooled_memory_pareto(
-                pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=3,
-                base_config=common["base_config"], best_result_path=str(best_dir),
+                pool=pool,
+                param_space=DEFAULT_PARAM_SPACE,
+                n_trials=3,
+                base_config=common["base_config"],
+                best_result_path=str(best_dir),
             )
 
         assert mock_save.call_count == 3
@@ -204,15 +228,22 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         usual pooled sv_loss/wh_loss/total_loss/params/per_dataset -- and
         no "loss" key, since there is no single scalar here."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
         seen = []
 
         optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=2,
-            base_config=common["base_config"], on_trial=seen.append,
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=2,
+            base_config=common["base_config"],
+            on_trial=seen.append,
         )
 
         assert len(seen) == 2
@@ -220,22 +251,39 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
             assert "loss" not in v
             assert v["objectives"] == ("wh_loss", "sv_loss")
             assert len(v["values"]) == 2
-            assert set(v) >= {"trial_number", "objectives", "values", "sv_loss", "wh_loss",
-                               "total_loss", "params", "per_dataset"}
+            assert set(v) >= {
+                "trial_number",
+                "objectives",
+                "values",
+                "sv_loss",
+                "wh_loss",
+                "total_loss",
+                "params",
+                "per_dataset",
+            }
             assert "on_front" not in v  # best_result_path not set here
             assert "loss" not in v["per_dataset"]["dataset_a"]
 
-    def test_on_trial_log_vars_carry_on_front_when_best_result_path_set(self, tmp_path, make_optimize_kwargs):
+    def test_on_trial_log_vars_carry_on_front_when_best_result_path_set(
+        self, tmp_path, make_optimize_kwargs
+    ):
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
         seen = []
 
         optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=2,
-            base_config=common["base_config"], on_trial=seen.append,
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=2,
+            base_config=common["base_config"],
+            on_trial=seen.append,
             best_result_path=str(tmp_path / "pareto_front"),
         )
 
@@ -243,39 +291,56 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         for v in seen:
             assert isinstance(v["on_front"], bool)
 
-    @pytest.mark.parametrize("objectives", [
-        ("wh_loss",),                    # too few
-        ("wh_loss", "wh_loss"),          # duplicate
-        ("wh_loss", "bogus"),            # unknown
-    ])
+    @pytest.mark.parametrize(
+        "objectives",
+        [
+            ("wh_loss",),  # too few
+            ("wh_loss", "wh_loss"),  # duplicate
+            ("wh_loss", "bogus"),  # unknown
+        ],
+    )
     def test_invalid_objectives_raises(self, objectives, make_optimize_kwargs):
         """Bad objectives raises ValueError up front, before any trial runs."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
         with pytest.raises(ValueError):
             optimize_adapt_decomp_pooled_memory_pareto(
-                pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=1,
-                base_config=common["base_config"], objectives=objectives,
+                pool=pool,
+                param_space=DEFAULT_PARAM_SPACE,
+                n_trials=1,
+                base_config=common["base_config"],
+                objectives=objectives,
             )
 
     def test_selection_rule_pluggable(self, make_optimize_kwargs):
         """A custom selection_rule is actually used to build best_config,
         not silently overridden by the default _select_min_sv_loss."""
         common, _ = make_optimize_kwargs()
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+            )
+        }
 
         def _select_highest_trial_number(pareto_front):
             return max(pareto_front, key=lambda t: t.number)
 
-        best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=5,
-            base_config=common["base_config"], selection_rule=_select_highest_trial_number,
+        best_config, pareto_front, _study = optimize_adapt_decomp_pooled_memory_pareto(
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=5,
+            base_config=common["base_config"],
+            selection_rule=_select_highest_trial_number,
         )
 
         chosen = _select_highest_trial_number(pareto_front)
@@ -283,24 +348,32 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         assert best_config.sv_learning_rate == pytest.approx(chosen.params["sv_learning_rate"])
 
     def test_compute_roa_via_objectives(self, make_optimize_kwargs):
-        """"roa" in objectives implies compute_roa=True, mirroring
+        """ "roa" in objectives implies compute_roa=True, mirroring
         objective="roa" for the single-objective search, and roa_mean_pooled
         travels through on_trial the same way."""
         common, M = make_optimize_kwargs()
         n_samples = common["emg"].shape[0]
         gt_full_bin = np.zeros((n_samples, M), dtype=np.float32)
         gt_full_bin[::30] = 1
-        pool = {"dataset_a": PooledDatasetMemory(
-            emg=common["emg"], calibration=common["calibration"],
-            cbss_config=common["cbss_config"], preprocess=common["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        )}
+        pool = {
+            "dataset_a": PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=common["calibration"],
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+                gt_paired_bin=gt_full_bin,
+            )
+        }
         seen = []
 
         optimize_adapt_decomp_pooled_memory_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=2,
-            objectives=("wh_loss", "roa"), roa_kwargs={"tol_spike_ms": 25},
-            base_config=common["base_config"], on_trial=seen.append,
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=2,
+            objectives=("wh_loss", "roa"),
+            roa_kwargs={"tol_spike_ms": 25},
+            base_config=common["base_config"],
+            on_trial=seen.append,
         )
 
         assert len(seen) == 2
@@ -311,6 +384,7 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
 # ------------------------------------------------------------------
 # Integration layer: optimize_adapt_decomp_pooled_disk_pareto
 # ------------------------------------------------------------------
+
 
 @pytest.mark.slow
 class TestOptimizeAdaptDecompPooledDiskPareto:
@@ -325,18 +399,24 @@ class TestOptimizeAdaptDecompPooledDiskPareto:
         }
 
         result_no_path = optimize_adapt_decomp_pooled_disk_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=3, base_config=base_config,
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=3,
+            base_config=base_config,
         )
         assert len(result_no_path) == 3
-        best_config, pareto_front, study = result_no_path
+        _best_config, pareto_front, study = result_no_path
         assert len(pareto_front) >= 1
         with pytest.raises(RuntimeError):
             study.best_value
 
         best_dir = tmp_path / "pareto_front"
         result_with_path = optimize_adapt_decomp_pooled_disk_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=3,
-            base_config=base_config, best_result_path=str(best_dir),
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=3,
+            base_config=base_config,
+            best_result_path=str(best_dir),
         )
         assert len(result_with_path) == 3  # never a 4-tuple, unlike the memory variant
 
@@ -359,29 +439,39 @@ class TestOptimizeAdaptDecompPooledDiskPareto:
         best_dir = tmp_path / "pareto_front"
 
         _, pareto_front, study = optimize_adapt_decomp_pooled_disk_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=8,
-            base_config=base_config, best_result_path=str(best_dir),
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=8,
+            base_config=base_config,
+            best_result_path=str(best_dir),
         )
 
         on_disk = {
             int(p.name.removeprefix("trial_"))
-            for p in best_dir.iterdir() if p.name.startswith("trial_")
+            for p in best_dir.iterdir()
+            if p.name.startswith("trial_")
         }
         assert on_disk == {t.number for t in study.best_trials}
         assert on_disk == {t.number for t in pareto_front}
 
-    @pytest.mark.parametrize("objectives", [
-        ("wh_loss",),
-        ("wh_loss", "wh_loss"),
-        ("wh_loss", "bogus"),
-    ])
+    @pytest.mark.parametrize(
+        "objectives",
+        [
+            ("wh_loss",),
+            ("wh_loss", "wh_loss"),
+            ("wh_loss", "bogus"),
+        ],
+    )
     def test_invalid_objectives_raises(self, objectives, tmp_path):
         base_config = _make_pooled_disk_base_config()
         pool = {"dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a")}
         with pytest.raises(ValueError):
             optimize_adapt_decomp_pooled_disk_pareto(
-                pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=1,
-                base_config=base_config, objectives=objectives,
+                pool=pool,
+                param_space=DEFAULT_PARAM_SPACE,
+                n_trials=1,
+                base_config=base_config,
+                objectives=objectives,
             )
 
     def test_n_jobs_promotes_correct_files_without_scratch_collisions(self, tmp_path):
@@ -397,9 +487,13 @@ class TestOptimizeAdaptDecompPooledDiskPareto:
         }
         best_dir = tmp_path / "pareto_front"
 
-        _, pareto_front, study = optimize_adapt_decomp_pooled_disk_pareto(
-            pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=8, n_jobs=4,
-            base_config=base_config, best_result_path=str(best_dir),
+        _, _pareto_front, study = optimize_adapt_decomp_pooled_disk_pareto(
+            pool=pool,
+            param_space=DEFAULT_PARAM_SPACE,
+            n_trials=8,
+            n_jobs=4,
+            base_config=base_config,
+            best_result_path=str(best_dir),
         )
 
         assert len(study.trials) == 8

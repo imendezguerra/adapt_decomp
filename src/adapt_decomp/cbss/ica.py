@@ -13,6 +13,7 @@ import torch.nn.functional as F
 @dataclass
 class FastICAResult:
     """Result of one fixed-point ICA solve."""
+
     w: torch.Tensor
     converged: bool
     n_iter: int
@@ -23,6 +24,7 @@ class FastICAResult:
 # ---------------------------------------------------------------------------
 # Contrast function -- shared math primitive.
 # ---------------------------------------------------------------------------
+
 
 def log_cosh(x: torch.Tensor) -> torch.Tensor:
     """Stable log(cosh(x)) = x + softplus(-2x) - log(2).
@@ -63,17 +65,17 @@ def contrast_fn(
     """
     if fn == "logcosh":
         tanh_u = torch.tanh(u)
-        return tanh_u, 1.0 - tanh_u ** 2
+        return tanh_u, 1.0 - tanh_u**2
     if fn == "square":
-        return u ** 2, 2.0 * u
+        return u**2, 2.0 * u
     if fn == "smooth_abs":
         eps = 1e-3
         a = contrast_exp
-        g_u  = (eps + u ** 2) ** ((a - 3) / 2) * (a * u ** 2 + eps)
-        dg_u = (a - 1) * u * (eps + u ** 2) ** ((a - 5) / 2) * (a * u ** 2 + 3 * eps)
+        g_u = (eps + u**2) ** ((a - 3) / 2) * (a * u**2 + eps)
+        dg_u = (a - 1) * u * (eps + u**2) ** ((a - 5) / 2) * (a * u**2 + 3 * eps)
         return g_u, dg_u
     # cube
-    return u ** 3, 3.0 * u ** 2
+    return u**3, 3.0 * u**2
 
 
 def _normalize(w: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
@@ -81,9 +83,7 @@ def _normalize(w: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     return w / norm if norm > eps else w
 
 
-def _gram_schmidt_deflate(
-    w: torch.Tensor, basis: torch.Tensor, eps: float = 1e-12
-) -> torch.Tensor:
+def _gram_schmidt_deflate(w: torch.Tensor, basis: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     """Orthonormalize single vector w against columns of basis."""
     if basis.numel() > 0:
         w = w - basis @ (basis.T @ w)

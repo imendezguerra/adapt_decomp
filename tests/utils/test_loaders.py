@@ -32,7 +32,9 @@ from adapt_decomp.utils.loaders import (
 )
 
 
-def _make_cbss_result(n_mu: int = 2, T: int = 20, D: int = 4, C: int = 2, ext_fact: int = 2) -> CBSSResult:
+def _make_cbss_result(
+    n_mu: int = 2, T: int = 20, D: int = 4, C: int = 2, ext_fact: int = 2
+) -> CBSSResult:
     """Small, valid CBSSResult for load_pooled_cbss_memory's integration test -- mirrors
     tests/cbss/test_data_structure.py's construction, with emg/timestamps set
     (to_adapt_tensors requires emg; timestamps enables .fs)."""
@@ -52,8 +54,8 @@ def _make_cbss_result(n_mu: int = 2, T: int = 20, D: int = 4, C: int = 2, ext_fa
         ext_fact=ext_fact,
         emg=np.random.randn(T, C).astype(np.float32),
         timestamps=np.arange(T, dtype=np.float64) / 2048.0,  # fs=2048, so rate_of_agreement's
-                                                              # tol_spike (round(tol_ms/1000*fs))
-                                                              # doesn't round down to an empty kernel
+        # tol_spike (round(tol_ms/1000*fs))
+        # doesn't round down to an empty kernel
     )
 
 
@@ -218,7 +220,9 @@ class TestLoadPooledCbssMemory:
         np.savez(emg_path, emg=emg_full)
 
         gt_dense = np.zeros((n_full, n_mu), dtype=np.float32)
-        gt_dense[::5] = 1  # matches _make_cbss_result's own spike stride, so select_supervised matches
+        gt_dense[::5] = (
+            1  # matches _make_cbss_result's own spike stride, so select_supervised matches
+        )
         gt_path = tmp_path / "dataset_a_spikes.npz"
         np.savez(gt_path, spikes=gt_dense)
 
@@ -247,7 +251,10 @@ class TestLoadPooledCbssMemory:
         assert set(pool.keys()) == {"dataset_a", "dataset_b_no_gt"}
         dataset_a = pool["dataset_a"]
         assert dataset_a.emg.shape == (n_full, C)
-        assert dataset_a.calibration.sep_vectors.shape == (D, n_mu)  # CBSSResult's own [dim, n_mu] storage
+        assert dataset_a.calibration.sep_vectors.shape == (
+            D,
+            n_mu,
+        )  # CBSSResult's own [dim, n_mu] storage
         assert dataset_a.cbss_config.ext_fact == result.ext_fact
         assert dataset_a.preprocess is True  # default preprocess: true propagated
         assert dataset_a.gt_paired_bin is not None
@@ -281,13 +288,15 @@ class TestLoadPooledCbssMemory:
         data_config = {
             "root": str(tmp_path),
             "loader": "load_pooled_cbss_memory",
-            "datasets": [{
-                "name": "dataset_a",
-                "path_emg": emg_path.name,
-                "path_calib": calib_path.name,
-                "path_calib_config": cbss_config_path.name,
-                "path_gt": gt_path.name,
-            }],
+            "datasets": [
+                {
+                    "name": "dataset_a",
+                    "path_emg": emg_path.name,
+                    "path_calib": calib_path.name,
+                    "path_calib_config": cbss_config_path.name,
+                    "path_gt": gt_path.name,
+                }
+            ],
         }
 
         pool = load_data(data_config)
@@ -308,10 +317,14 @@ class TestLoadPooledCbssMemory:
         data_config = {
             "root": str(tmp_path),
             "loader": "load_pooled_cbss_memory",
-            "datasets": [{
-                "name": "only", "path_emg": emg_path.name,
-                "path_calib": calib_path.name, "path_calib_config": cbss_config_path.name,
-            }],
+            "datasets": [
+                {
+                    "name": "only",
+                    "path_emg": emg_path.name,
+                    "path_calib": calib_path.name,
+                    "path_calib_config": cbss_config_path.name,
+                }
+            ],
         }
 
         direct = load_pooled_cbss_memory(data_config)
@@ -335,15 +348,19 @@ class TestLoadPooledCbssMemory:
 
         emg_h5 = np.random.randn(n_full, C).astype(np.float32)
         spikes_h5 = np.zeros((n_full, n_mu), dtype=np.float32)
-        emg_h5_path = _make_neuromotion_h5(tmp_path, "dataset_neuromotion", emg_h5, spikes_h5, fs=2048.0)
+        emg_h5_path = _make_neuromotion_h5(
+            tmp_path, "dataset_neuromotion", emg_h5, spikes_h5, fs=2048.0
+        )
 
         data_config = {
             "root": str(tmp_path),
             "loader": "load_pooled_cbss_memory",
             "datasets": [
                 {
-                    "name": "dataset_npz", "path_emg": emg_npz_path.name,
-                    "path_calib": calib_path.name, "path_calib_config": cbss_config_path.name,
+                    "name": "dataset_npz",
+                    "path_emg": emg_npz_path.name,
+                    "path_calib": calib_path.name,
+                    "path_calib_config": cbss_config_path.name,
                 },
                 {
                     "name": "dataset_neuromotion",
@@ -419,10 +436,14 @@ class TestLoadPooledCbssDisk:
         data_config = {
             "root": str(tmp_path),
             "loader": "load_pooled_cbss_disk",
-            "datasets": [{
-                "name": "only", "path_emg": emg_path.name,
-                "path_calib": calib_path.name, "path_calib_config": cbss_config_path.name,
-            }],
+            "datasets": [
+                {
+                    "name": "only",
+                    "path_emg": emg_path.name,
+                    "path_calib": calib_path.name,
+                    "path_calib_config": cbss_config_path.name,
+                }
+            ],
         }
 
         direct = load_pooled_cbss_disk(data_config)
@@ -441,13 +462,15 @@ class TestLoadPooledCbssDisk:
         data_config = {
             "root": str(tmp_path),
             "loader": "load_pooled_cbss_disk",
-            "datasets": [{
-                "name": "only",
-                "path_emg": "does_not_exist.h5",  # never opened -- no path_gt
-                "path_calib": calib_path.name,
-                "path_calib_config": cbss_config_path.name,
-                "emg_loader": "neuromotion",
-            }],
+            "datasets": [
+                {
+                    "name": "only",
+                    "path_emg": "does_not_exist.h5",  # never opened -- no path_gt
+                    "path_calib": calib_path.name,
+                    "path_calib_config": cbss_config_path.name,
+                    "emg_loader": "neuromotion",
+                }
+            ],
         }
 
         pool = load_pooled_cbss_disk(data_config)
@@ -462,8 +485,11 @@ class TestPooledDatasetMemoryResolve:
         emg = np.random.randn(10, 2).astype(np.float32)
         gt_paired_bin = np.zeros((10, 2), dtype=np.float32)
         dataset = PooledDatasetMemory(
-            emg=emg, calibration=result, cbss_config=cbss_config,
-            preprocess=False, gt_paired_bin=gt_paired_bin,
+            emg=emg,
+            calibration=result,
+            cbss_config=cbss_config,
+            preprocess=False,
+            gt_paired_bin=gt_paired_bin,
         )
 
         out_emg, out_calibration, out_cbss_config, out_preprocess, out_gt = dataset.resolve()
@@ -486,17 +512,23 @@ class TestPooledDatasetDiskResolve:
         np.savez(emg_path, emg=np.random.randn(60, C).astype(np.float32))
 
         dataset = {
-            "name": "only", "path_emg": emg_path.name,
-            "path_calib": calib_path.name, "path_calib_config": cbss_config_path.name,
+            "name": "only",
+            "path_emg": emg_path.name,
+            "path_calib": calib_path.name,
+            "path_calib_config": cbss_config_path.name,
         }
         if path_gt is not None:
             dataset["path_gt"] = path_gt
         if fs is not None:
             dataset["fs"] = fs
 
-        pool = load_pooled_cbss_disk({
-            "root": str(tmp_path), "loader": "load_pooled_cbss_disk", "datasets": [dataset],
-        })
+        pool = load_pooled_cbss_disk(
+            {
+                "root": str(tmp_path),
+                "loader": "load_pooled_cbss_disk",
+                "datasets": [dataset],
+            }
+        )
         return pool["only"], result
 
     def test_resolve_loads_emg_calib_and_config_with_no_gt(self, tmp_path):
@@ -513,13 +545,15 @@ class TestPooledDatasetDiskResolve:
     def test_resolve_matches_ground_truth_when_path_gt_is_set(self, tmp_path):
         n_mu, C = 2, 2
         gt_dense = np.zeros((60, n_mu), dtype=np.float32)
-        gt_dense[::5] = 1  # matches _make_cbss_result's own spike stride, so select_supervised matches
+        gt_dense[::5] = (
+            1  # matches _make_cbss_result's own spike stride, so select_supervised matches
+        )
         gt_path = tmp_path / "spikes.npz"
         np.savez(gt_path, spikes=gt_dense)
 
         entry, _ = self._build_entry(tmp_path, n_mu=n_mu, C=C, path_gt=gt_path.name)
 
-        emg, calibration, cbss_config, preprocess, gt_paired_bin = entry.resolve()
+        _emg, calibration, _cbss_config, _preprocess, gt_paired_bin = entry.resolve()
 
         assert gt_paired_bin is not None
         assert gt_paired_bin.shape[0] == 60
@@ -545,16 +579,23 @@ class TestPooledDatasetDiskResolve:
         gt_path = tmp_path / "spikes.npz"
         np.savez(gt_path, spikes=gt_dense)
 
-        pool = load_pooled_cbss_disk({
-            "root": str(tmp_path), "loader": "load_pooled_cbss_disk",
-            "datasets": [{
-                "name": "only", "path_emg": emg_path.name,
-                "path_calib": calib_path.name, "path_calib_config": cbss_config_path.name,
-                "path_gt": gt_path.name,
-            }],
-        })
+        pool = load_pooled_cbss_disk(
+            {
+                "root": str(tmp_path),
+                "loader": "load_pooled_cbss_disk",
+                "datasets": [
+                    {
+                        "name": "only",
+                        "path_emg": emg_path.name,
+                        "path_calib": calib_path.name,
+                        "path_calib_config": cbss_config_path.name,
+                        "path_gt": gt_path.name,
+                    }
+                ],
+            }
+        )
 
-        emg, calibration, cbss_config, preprocess, gt_paired_bin = pool["only"].resolve()
+        _emg, calibration, _cbss_config, _preprocess, gt_paired_bin = pool["only"].resolve()
 
         assert calibration.spikes.shape[1] == 1  # unit 1 dropped
         assert gt_paired_bin.shape[1] == 1

@@ -92,9 +92,7 @@ def get_inst_discharge_rate(
 
     for unit in range(units):
         # Convolve the hanning window and the binary spikes
-        inst_dr[:, unit] = np.convolve(
-            spike_train[:, unit], hann_win, mode="same"
-        ) * 2
+        inst_dr[:, unit] = np.convolve(spike_train[:, unit], hann_win, mode="same") * 2
 
     return inst_dr
 
@@ -160,7 +158,7 @@ def get_pulse_to_noise_ratio(
     min_peak_dist: int = 0,
 ) -> torch.Tensor:
     """Pulse-to-noise ratio in dB using resolved spike-train labels."""
-    sources_sq = sources ** 2
+    sources_sq = sources**2
     n_mu = spike_trains.shape[1]
     pnr = torch.full((n_mu,), float("nan"), dtype=sources.dtype, device=sources.device)
     min_dist = max(1, int(min_peak_dist))
@@ -263,7 +261,9 @@ def get_sil(
         spike_idx = spike_trains[:, unit].nonzero(as_tuple=True)[0]
         spike_vals = source_p[spike_idx]
 
-        peak_mask, peak_values = find_peaks_multisource(source.unsqueeze(1), min_dist, peak_power, use_abs)
+        peak_mask, peak_values = find_peaks_multisource(
+            source.unsqueeze(1), min_dist, peak_power, use_abs
+        )
         peaks = peak_mask[:, 0].nonzero(as_tuple=True)[0]
         is_spike = torch.isin(peaks, spike_idx)
         base_vals = peak_values[peaks[~is_spike], 0]
@@ -280,5 +280,3 @@ def get_sil(
         denom = max(within, between)
         sil[unit] = (between - within) / denom if denom > 0 else 0.0
     return sil
-
-

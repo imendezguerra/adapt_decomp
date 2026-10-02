@@ -7,7 +7,7 @@ utilities. This page covers the repo layout, *why* it's split this way, and
 ## Why two subsystems
 
 - **`cbss/`** — one-off **calibration**: convolutive blind source separation
-  run once on a calibration window to find motor units. 
+  run once on a calibration window to find motor units.
 - **`adaptation/`** — per-batch **online adaptation**: takes a calibration and
   tracks it forward over a full recording, batch by batch.
 
