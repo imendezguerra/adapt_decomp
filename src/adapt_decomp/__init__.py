@@ -1,9 +1,11 @@
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
 from adapt_decomp.adaptation import (
     AdaptDecomp,
     AdaptationResult,
+    OptimisationResult,
+    optimize_adapt_decomp,
     optimize_adapt_decomp_pooled_memory,
     optimize_adapt_decomp_pooled_disk,
 )
@@ -26,6 +28,8 @@ __all__ = [
     # Online adaptation
     "AdaptDecomp",
     "AdaptationResult",
+    "OptimisationResult",
+    "optimize_adapt_decomp",
     "optimize_adapt_decomp_pooled_memory",
     "optimize_adapt_decomp_pooled_disk",
     # Plots

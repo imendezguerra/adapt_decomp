@@ -112,7 +112,8 @@ def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> C
         spikes_centr=np.asarray(decomp["SIG_CENT"], dtype=np.float32),
         base_centr=np.asarray(decomp["N_CENT"], dtype=np.float32),
         sil=np.asarray(decomp["SIL"], dtype=np.float32),
-        cov_isi=np.asarray(decomp["CoV"], dtype=np.float32),
+        cov_isi=np.asarray(decomp["CoV"], dtype=np.float32)
+        / 100,  # stored in %, CBSS uses a fraction
         ext_fact=ext_fact,
         dr=np.asarray(decomp["DR"], dtype=np.float32),
         pnr=np.asarray(decomp["PNR"], dtype=np.float32),
@@ -340,7 +341,7 @@ def _resolve_pool_loaders(
 @dataclass
 class PooledDatasetMemory:
     """One dataset's calibration and optional ground truth for a hyperparameter search --
-    whether the pool has one dataset or many (optimize_adapt_decomp_pooled_memory).
+    whether the pool has one dataset or many (optimize_adapt_decomp).
 
     Attributes:
         emg (torch.Tensor): Online EMG to decompose, with shape
@@ -355,7 +356,7 @@ class PooledDatasetMemory:
             train for the full recording, matched and reordered to
             calibration's units (see CBSSResult.select_supervised), with
             shape (samples, M). Required when
-            optimize_adapt_decomp_pooled_memory(compute_roa=True) is used;
+            optimize_adapt_decomp(compute_roa=True) is used;
             ignored otherwise. Defaults to None.
     """
 
@@ -384,7 +385,7 @@ class PooledDatasetMemory:
 @dataclass
 class PooledDatasetDisk:
     """One dataset's on-disk calibration paths -- the lazy counterpart to
-    PooledDatasetMemory, for optimize_adapt_decomp_pooled_disk().
+    PooledDatasetMemory, for optimize_adapt_decomp().
 
     Attributes:
         path_calib (Path): Calibration result (e.g. a CBSSResult pickle
@@ -406,8 +407,8 @@ class PooledDatasetDisk:
             extension. Defaults to True.
         path_gt (Optional[Path]): Ground-truth spikes for the full
             recording, matched to calibration's units fresh every trial --
-            see optimize_adapt_decomp_pooled_disk. Required when
-            optimize_adapt_decomp_pooled_disk(compute_roa=True) is used;
+            see optimize_adapt_decomp. Required when
+            optimize_adapt_decomp(compute_roa=True) is used;
             ignored otherwise. Defaults to None.
         fs (Optional[int]): Sampling frequency override for matching
             path_gt. Defaults to None, which uses the loaded calibration's
@@ -458,7 +459,7 @@ class PooledDatasetDisk:
 
 
 def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
-    """Load a pooled data_config into optimize_adapt_decomp_pooled_memory()'s pool= input.
+    """Load a pooled data_config into optimize_adapt_decomp()'s pool= input.
 
     data_config format::
 
@@ -492,7 +493,7 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: Dataset name -> PooledDatasetMemory, ready to
-        pass directly as optimize_adapt_decomp_pooled_memory(pool=...).
+        pass directly as optimize_adapt_decomp(pool=...).
     """
     root = Path(data_config.get("root", "."))
     default_preprocess = data_config.get("preprocess", True)
@@ -533,12 +534,12 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
 
 
 def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
-    """Load a pooled data_config into optimize_adapt_decomp_pooled_disk()'s pool= input.
+    """Load a pooled data_config into optimize_adapt_decomp()'s pool= input.
 
     The lazy counterpart to load_pooled_cbss_memory: builds a
     Dict[str, PooledDatasetDisk] of on-disk paths and loader names,
     touching no files at all -- every path is resolved and loaded fresh per
-    trial by optimize_adapt_decomp_pooled_disk().
+    trial by optimize_adapt_decomp().
 
     data_config format:: (same shape as load_pooled_cbss_memory's)
 
@@ -567,7 +568,7 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
 
     Returns:
         Dict[str, Any]: Dataset name -> PooledDatasetDisk, ready to
-        pass directly as optimize_adapt_decomp_pooled_disk(pool=...).
+        pass directly as optimize_adapt_decomp(pool=...).
     """
     root = Path(data_config.get("root", "."))
     default_preprocess = data_config.get("preprocess", True)

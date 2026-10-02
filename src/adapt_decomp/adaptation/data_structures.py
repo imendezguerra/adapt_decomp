@@ -6,7 +6,7 @@ import pickle
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import Any, ClassVar, Dict, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -269,6 +269,7 @@ class Decomposition:
         self.contrast_scope = config.contrast_scope
         self.fifo_length_cfg = config.fifo_length
         self.source_fifo_batches = config.source_fifo_batches
+        self.source_fifo_from_calib = config.source_fifo_from_calib
         self.wh_mode = config.wh_mode
         self.max_sigma_batches = config.max_sigma_batches
         self.eps = config.eps
@@ -515,6 +516,33 @@ class Decomposition:
         """
         self.fifo_cov = torch.cat([self.fifo_cov, emg_batch], dim=0)[-self.fifo_samples :]
 
+    def seed_fifos(
+        self, emg_ext: Optional[torch.Tensor] = None, sources: Optional[torch.Tensor] = None
+    ) -> None:
+        """Seed the extended-EMG and/or source FIFOs with rows preceding the next batch.
+
+        Rows must be in processing order, oldest first, e.g. reversed for a
+        reverse pass. emg_ext is pushed batch by batch exactly like live
+        batches (centred per batch, PCA-projected), so it should hold at
+        least fifo_samples rows to replace the whole FIFO.
+
+        Args:
+            emg_ext (Optional[torch.Tensor], optional): Extended EMG with
+                shape (samples, D). Defaults to None (whitening FIFO kept).
+            sources (Optional[torch.Tensor], optional): Sources with shape
+                (samples, M); its last source_fifo_batches * batch_size rows
+                become the source FIFO. Defaults to None (source FIFO kept).
+
+        Returns:
+            None
+        """
+        if emg_ext is not None:
+            for batch in emg_ext.to(self.device).split(self.batch_size):
+                self._update_fifo_cov(self._apply_pca(batch - batch.mean(0, keepdim=True)))
+        if sources is not None:
+            n_rows = self.source_fifo_batches * self.batch_size
+            self.source_fifo = sources[-n_rows:].to(self.device).clone()
+
     def _compute_Rz_from_fifo(self) -> torch.Tensor:
         """Apply current wh to the FIFO and return the regularised whitened covariance.
 
@@ -640,12 +668,18 @@ class Decomposition:
         """Initialise adaptive centroids from calibration references, reset source FIFO,
         and compute IQR-gate statistics (Q75_cal, IQR_cal) in detection domain.
 
+        The source FIFO starts empty, or with the calibration's tail when
+        source_fifo_from_calib is set (online EMG starting where calibration
+        ends, like the whitening FIFO).
+
         Returns:
             None
         """
         self.spikes_centr = self.spikes_centr_cal.clone()
         self.base_centr = self.base_centr_cal.clone()
         self.source_fifo: Optional[torch.Tensor] = None
+        if self.source_fifo_from_calib:
+            self.seed_fifos(sources=self.sources_calib)
 
         sources = self.sources_calib.to(self.device)  # [N_cal, M]
         spikes = self.spikes_calib.to(self.device)  # [N_cal, M] int32
@@ -716,8 +750,8 @@ class AdaptationResult:
             for the whole run -- see AdaptDecomp._compute_losses(). Set only
             when config.compute_loss is True.
         sv_loss_total (Optional[torch.Tensor]): Guarded scalar
-            median(sv_loss.nansum(dim=1)) (per-batch sum across units, then
-            medianed across batches) for the whole run -- see
+            median of sv_loss reduced across units per batch (sum or mean,
+            per config.sv_loss_reduction) for the whole run -- see
             AdaptDecomp._compute_losses(). Set only when config.compute_loss
             is True.
         total_loss (Optional[torch.Tensor]): Guarded scalar score for the
@@ -736,7 +770,7 @@ class AdaptationResult:
             (per-unit, not built here) -- callers set it after computing
             their own comparison (e.g.
             adapt_decomp.spikes.comparison.rate_of_agreement_paired), such
-            as adaptation/optimize.py's optimize_adapt_decomp_pooled_memory(compute_roa=True).
+            as adaptation/optimize.py's optimize_adapt_decomp(compute_roa=True).
         sil (Optional[np.ndarray]): Per-unit silhouette score with shape
             (M,), from the already-detected spike population against a
             freshly found base-peak population over the full recording.
@@ -751,6 +785,18 @@ class AdaptationResult:
             as a construction-time keyword only. Defaults to None. Raises
             FutureWarning when given.
     """
+
+    # Fields with one entry per processed batch, in processing order.
+    PER_BATCH_FIELDS: ClassVar[Tuple[str, ...]] = (
+        "preprocess_time_ms",
+        "wh_time_ms",
+        "sv_time_ms",
+        "sd_time_ms",
+        "total_time_ms",
+        "wh_loss",
+        "sv_loss",
+        "wh_trace",
+    )
 
     spikes: torch.Tensor
     preprocess_time_ms: torch.Tensor

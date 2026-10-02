@@ -25,27 +25,18 @@ flowchart LR
     end
 
     subgraph OPT["Optimisation — adaptation/optimize.py"]
-        O1["optimize_adapt_decomp_pooled_memory\n(preloaded CBSSResults)"]
-        O2["optimize_adapt_decomp_pooled_disk\n(on-disk CBSSResults, loaded per trial)"]
-        BEST["best AdaptConfig"]
-        O1 --> BEST
-        O2 --> BEST
-
-        P1["optimize_adapt_decomp_pooled_memory_pareto\n(preloaded CBSSResults)"]
-        P2["optimize_adapt_decomp_pooled_disk_pareto\n(on-disk CBSSResults, loaded per trial)"]
+        O["optimize_adapt_decomp\n(in-memory or on-disk pool,\none objective or several)"]
         FRONT["Pareto front\n(study.best_trials)"]
-        P1 --> FRONT
-        P2 --> FRONT
-        FRONT -->|"selection_rule(front)"| BEST
+        BEST["best AdaptConfig"]
+        O -->|"one objective"| BEST
+        O -->|"several objectives"| FRONT
+        FRONT -->|"selection (min_sv_loss, knee, ...)"| BEST
     end
 
     EMG --> CBSSC
     EMG -->|".calibrate_and_process()"| OUT
     RES -->|".from_calibration()"| AD
-    RES -->|".to_adapt_tensors()"| O1
-    RES -->|".to_adapt_tensors()"| O2
-    RES -->|".to_adapt_tensors()"| P1
-    RES -->|".to_adapt_tensors()"| P2
+    RES -->|"pool of CBSSResults"| O
 ```
 
 ## Table of Contents

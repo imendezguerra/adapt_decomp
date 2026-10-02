@@ -3,13 +3,14 @@ from dataclasses import asdict
 from typing import Optional
 
 import numpy as np
+import optuna
 import torch
 import typer
 import wandb
 
 from adapt_decomp.adaptation import AdaptDecomp
 from adapt_decomp.adaptation.config import load_config, load_yaml
-from adapt_decomp.adaptation.optimize import ObjectiveName, optimize_adapt_decomp_pooled_memory
+from adapt_decomp.adaptation.optimize import ObjectiveName, optimize_adapt_decomp
 from adapt_decomp.spikes import rate_of_agreement_paired
 from adapt_decomp.utils import load_data
 from adapt_decomp.utils.loaders import PooledDatasetMemory
@@ -46,7 +47,7 @@ def _log_pooled_outputs(outputs_by_dataset, pool, config):
 
     Args:
         outputs_by_dataset: Dataset name -> AdaptationResult, from _run_pooled()
-            or optimize_adapt_decomp_pooled_memory(best_result_path=...).
+            or optimize_adapt_decomp(best_result_path=...).outputs.
         pool: The same pool passed in (needs .calibration/.gt_paired_bin per dataset).
         config: The resolved AdaptConfig for this run.
 
@@ -115,18 +116,24 @@ def _log_trial_to_wandb(log_vars):
     """on_trial hook: log one completed trial's loss/params/mean RoA to the active wandb run.
 
     Args:
-        log_vars: Per-trial dict from optimize_adapt_decomp_pooled_memory()
-            (trial_number/loss/objective/sv_loss/wh_loss/total_loss/params, plus roa
+        log_vars: Per-trial dict from optimize_adapt_decomp()
+            (trial_number/sv_loss/wh_loss/total_loss/params, plus loss/objective for a
+            single-objective search or objectives/values for a Pareto one, plus roa
             (guarded, inverted-for-minimisation) /roa_mean/roa_per_unit when compute_roa=True,
-            i.e. whenever ground truth is available or objective="roa").
+            i.e. whenever ground truth is available or "roa" is an objective).
 
     Returns:
         None
     """
+    if "loss" in log_vars:
+        scored = {"optuna/loss": log_vars["loss"], "optuna/objective": log_vars["objective"]}
+    else:
+        scored = {
+            f"optuna/value_{o}": v for o, v in zip(log_vars["objectives"], log_vars["values"])
+        }
     log_dict = {
         "optuna/trial_number": log_vars["trial_number"],
-        "optuna/loss": log_vars["loss"],
-        "optuna/objective": log_vars["objective"],
+        **scored,
         "optuna/sv_loss": log_vars["sv_loss"],
         "optuna/wh_loss": log_vars["wh_loss"],
         "optuna/total_loss": log_vars["total_loss"],
@@ -235,8 +242,8 @@ def _run_optuna(
         data_config: Path to data config YAML.
         wandb_project_name: WandB project name, used only if no wandb run is active yet.
         optim_config: Path to Optuna search-settings YAML.
-        objective: Overrides optim_config's own objective. None -> optim_config's value,
-            else "sv_loss".
+        objective: Overrides optim_config's own objective(s). None -> optim_config's
+            "objectives" (or legacy "objective"), else "sv_loss".
         n_trials: Overrides optim_config's own n_trials. None -> optim_config's value,
             else 100.
         best_result_path: Directory to save the winning trial's AdaptationResult/config/
@@ -244,7 +251,7 @@ def _run_optuna(
         compute_roa: Forces RoA scoring on/off. None -> auto: True iff every dataset in
             the pool has ground truth.
         roa_kwargs: Extra keyword arguments forwarded to rate_of_agreement_paired()
-            (e.g. tol_spike_ms). None -> optimize_adapt_decomp_pooled_memory's own default.
+            (e.g. tol_spike_ms). None -> optimize_adapt_decomp's own default.
 
     Returns:
         None
@@ -252,40 +259,47 @@ def _run_optuna(
     pool, config = _setup(adapt_config, data_config, wandb_project_name)
 
     optim_settings = load_yaml(optim_config)
-    param_space = {k: tuple(v) for k, v in optim_settings.get("param_space", {}).items()}
-    resolved_objective = (
-        objective if objective is not None else optim_settings.get("objective", "sv_loss")
-    )
-    resolved_n_trials = n_trials if n_trials is not None else optim_settings.get("n_trials", 100)
-    resolved_n_jobs = optim_settings.get("n_jobs", 1)
-    resolved_random_seed = optim_settings.get("random_seed", 1909)
+    param_space = optim_settings.get("param_space")
+    if param_space is not None:
+        param_space = {k: tuple(v) for k, v in param_space.items()}
+    objectives = objective or optim_settings.get("objectives", optim_settings.get("objective"))
+    sampler_kwargs = optim_settings.get("sampler")
+    random_seed = optim_settings.get("random_seed", 1909)
     if compute_roa is None:
         compute_roa = all(dataset.gt_paired_bin is not None for dataset in pool.values())
 
-    result = optimize_adapt_decomp_pooled_memory(
+    result = optimize_adapt_decomp(
         pool=pool,
+        objectives=objectives or "sv_loss",
         param_space=param_space,
-        objective=resolved_objective,
-        n_trials=resolved_n_trials,
-        n_jobs=resolved_n_jobs,
-        random_seed=resolved_random_seed,
         base_config=config,
-        on_trial=_log_trial_to_wandb,
         compute_roa=compute_roa,
         roa_kwargs=roa_kwargs,
+        unit_selection=optim_settings.get("unit_selection", "unsupervised"),
+        unit_selection_kwargs=optim_settings.get("unit_selection_kwargs"),
+        selection=optim_settings.get("selection", "min_sv_loss"),
+        n_trials=n_trials if n_trials is not None else optim_settings.get("n_trials", 100),
+        n_jobs=optim_settings.get("n_jobs", 1),
+        n_workers=optim_settings.get("n_workers", 1),
+        sampler=optuna.samplers.TPESampler(seed=random_seed, **sampler_kwargs)
+        if sampler_kwargs
+        else None,
+        random_seed=random_seed,
         best_result_path=best_result_path,
+        on_trial=_log_trial_to_wandb,
     )
+    best_config, study = result.best_config, result.study
 
-    # best_result_path set -> also got the winning trial's AdaptationResult(s);
+    # best_result_path set -> also got the chosen trial's AdaptationResult(s);
     # otherwise just log study-level summaries.
-    if best_result_path is not None:
-        outputs, best_config, study = result
-        _log_pooled_outputs(outputs, pool, config)
-    else:
-        best_config, study = result
+    if result.outputs is not None:
+        _log_pooled_outputs(result.outputs, pool, config)
+    elif result.pareto_front is None:
         wandb.summary["best_loss"] = study.best_value
         if compute_roa:
             wandb.summary["best_roa_mean"] = study.best_trial.user_attrs.get("roa_mean_pooled")
+    else:
+        wandb.summary["pareto_front_size"] = len(result.pareto_front)
     wandb.log({"best_config": best_config.to_dict()})
     wandb.finish()
 
@@ -297,8 +311,9 @@ def run_optuna(
     optim_config: str = typer.Option(
         ...,
         "--optim_config",
-        help="Path to Optuna search-settings YAML -- param_space/objective/n_trials/n_jobs/"
-        "random_seed. See configs/sweep_configs/sweep_optuna.yaml.",
+        help="Path to Optuna search-settings YAML -- param_space/objectives/selection/"
+        "unit_selection/sampler/n_trials/n_jobs/n_workers/random_seed. See "
+        "configs/sweep_configs/sweep_optuna.yaml.",
     ),
     wandb_project_name: str = typer.Option(
         "adaptive_emg_decomp_dyn",

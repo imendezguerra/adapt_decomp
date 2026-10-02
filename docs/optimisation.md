@@ -1,63 +1,54 @@
 # Optimisation (`adaptation/optimize.py`)
 
-Optuna-based hyperparameter search for `AdaptConfig` fields (typically
-`wh_learning_rate`/`sv_learning_rate`). Two search modes share the same
-pooled-dataset machinery — **a single dataset is just a one-entry pool**
-either way:
+Optuna-based hyperparameter search for `AdaptConfig` fields (by default
+`wh_learning_rate`, `sv_learning_rate` and `centroid_momentum`). One entry
+point, `optimize_adapt_decomp`, covers every mode — **a single dataset is
+just a one-entry pool**:
 
-- **Single-objective** — `optimize_adapt_decomp_pooled_memory` (plus its
-  lazy, on-disk counterpart `optimize_adapt_decomp_pooled_disk`) scores
-  every trial on one scalar, `objective`. Covered first, below.
-- **Pareto / multi-objective** — `optimize_adapt_decomp_pooled_memory_pareto`/
-  `optimize_adapt_decomp_pooled_disk_pareto` score every trial jointly on two
-  or more scalars and return a front of trials instead of one winner. See
-  [Pareto / multi-objective search](#pareto--multi-objective-search) below.
+- **Single-objective vs Pareto** — chosen by `objectives`: one name scores
+  every trial on that scalar; two or more score it jointly and return a front
+  of trials, from which `selection` picks one. See
+  [Pareto / multi-objective search](#pareto--multi-objective-search).
+- **In memory vs on disk** — chosen by the pool's entries:
+  `PooledDatasetMemory` (preloaded) or `PooledDatasetDisk` (loaded fresh per
+  trial). See [Pooled datasets](#pooled-datasets).
 
-All four build a **fresh** `AdaptDecomp` per trial per dataset via
-`_run_one_dataset`, the shared per-dataset runner.
+Every trial builds a **fresh** `AdaptDecomp` per dataset, with one shared
+parameter suggestion.
 
 Three guarded per-run scalars are computed once, at the end of
 `AdaptDecomp.process_data()`, by `AdaptDecomp._compute_losses()`: `wh_loss_total`
-(`median(wh_loss)` across batches), `sv_loss_total` (`sv_loss` summed across
-units within a batch, then medianed across batches), and `total_loss` (their
-sum) — all NaN- and trace-ratio-guarded against divergence (`1e10` sentinel).
-Every trial logs all three per dataset and
-pooled (summed across the pool), and `objective`
-(`"sv_loss"`/`"wh_loss"`/`"total_loss"`/`"roa"`, default `"sv_loss"`)
-picks which one the study is actually scored on. `study.optimize` always runs
-under `direction="minimize"`, so the fourth value, `"roa"`, is expressed on
-the same lower-is-better scale as the other three: `100 - roa_mean` (0 =
-perfect agreement, 100 = none), guarded to `1e10` the same way whenever the
-run itself diverged or `roa_mean` came out NaN. `objective="roa"` scores a
-trial directly against ground truth rather than against either training
-loss, which makes it useful for investigating the upper limit of achievable
-performance (how good a config could be, if you could see ground truth) —
-it implies `compute_roa=True` (no need to pass both) and, like
-`compute_roa=True` on its own, requires every dataset in the pool to carry
-ground truth (`gt_paired_bin`). `roa_mean`/`roa_per_unit` (the raw 0–100
-diagnostic values) stay unguarded regardless of which `objective` is
-selected; only the objective-scale `"roa"` key gets the divergence override.
-For a pool, the objective is the **sum** of per-dataset losses (a config
-that diverges on even one dataset should dominate and be rejected) —
-`"roa_mean"` at the top level is a separate diagnostic, the *mean* of
-per-dataset `roa_mean` values, not the same thing as the pooled `"roa"` sum;
-the two won't numerically correspond.
+(`median(wh_loss)` across batches), `sv_loss_total` (`sv_loss` reduced across
+units within a batch, then medianed across batches; see
+[Pooling losses across datasets](#pooling-losses-across-datasets)), and
+`total_loss` (their sum) — all NaN- and trace-ratio-guarded against
+divergence (`1e10` sentinel). Every trial logs all three per dataset and
+pooled (summed across the pool); `objectives`
+(`"sv_loss"`/`"wh_loss"`/`"total_loss"`/`"roa"`, default `"sv_loss"`) picks
+which the study is actually scored on. Studies always minimise, so `"roa"` is
+expressed on the same lower-is-better scale: `100 - roa_mean` (0 = perfect
+agreement), guarded to `1e10` whenever the run diverged or `roa_mean` came out
+NaN. Scoring on `"roa"` scores a trial directly against ground truth, which
+makes it useful to investigate the upper limit of achievable performance; it
+implies `compute_roa=True` and, like `compute_roa=True` on its own, requires
+every dataset in the pool to carry ground truth. `roa_mean`/`roa_per_unit`
+(the raw 0–100 diagnostics) stay unguarded. The top-level `"roa_mean"` is the
+*mean* of per-dataset `roa_mean` values, a separate diagnostic from the pooled
+`"roa"` sum.
 
-`"sv_loss"` is the recommended default for single-objective search: summed
-into `"total_loss"`, `wh_loss` empirically overpowers `sv_loss` (see
-[Pareto / multi-objective search](#pareto--multi-objective-search) below),
-so scoring on `total_loss` mostly ends up scoring on `wh_loss` alone.
+`"sv_loss"` is the recommended single objective: summed into `"total_loss"`,
+`wh_loss` empirically overpowers `sv_loss`, so scoring on `total_loss` mostly
+ends up scoring on `wh_loss` alone.
 
 ```mermaid
 flowchart LR
-    subgraph one["One dataset -- a one-entry pool"]
-        D1["PooledDatasetMemory\n(or PooledDatasetDisk)"] --> O1["optimize_adapt_decomp_pooled_memory\n(or _disk)"]
-        O1 --> R1["best AdaptConfig\n+ optuna.Study"]
-    end
-    subgraph many["Many datasets -- pool of N"]
-        D2["Dict[str, PooledDatasetMemory]\n(or PooledDatasetDisk)"] --> O2["optimize_adapt_decomp_pooled_memory\n(or _disk)"]
-        O2 --> R2["one shared best AdaptConfig\n+ optuna.Study"]
-    end
+    D["Dict[str, PooledDatasetMemory]\n(or PooledDatasetDisk) -- one entry or many"] --> S["unit_selection\n(CoV-ISI <= 0.3 by default)"]
+    S --> O["optimize_adapt_decomp"]
+    O -->|"one objective"| R1["best trial"]
+    O -->|"several objectives"| F["Pareto front"]
+    F -->|"selection"| R2["one front member"]
+    R1 --> B["OptimisationResult\n(best_config, study, pareto_front, outputs)"]
+    R2 --> B
 ```
 
 ## Programmatic usage
@@ -65,15 +56,11 @@ flowchart LR
 ### One dataset
 
 Build a single `PooledDatasetMemory` around an existing calibration (see
-[calibration.md](calibration.md) for producing `calibration`/`cbss_config` in
-the first place) and pass a one-entry `pool`:
+[calibration.md](calibration.md) for producing `calibration`/`cbss_config`)
+and pass a one-entry `pool`:
 
 ```python
-from adapt_decomp.adaptation.config import AdaptConfig
-from adapt_decomp.adaptation.optimize import (
-    optimize_adapt_decomp_pooled_memory,
-    DEFAULT_PARAM_SPACE,
-)
+from adapt_decomp.adaptation import AdaptConfig, optimize_adapt_decomp
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 
 pool = {
@@ -82,82 +69,62 @@ pool = {
         calibration=calibration,
         cbss_config=cbss_config,
         preprocess=True,
-        gt_paired_bin=gt_paired_bin,  # gt_paired_bin optional
+        gt_paired_bin=gt_paired_bin,  # optional
     ),
 }
-best_config, study = optimize_adapt_decomp_pooled_memory(
+result = optimize_adapt_decomp(
     pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,  # {"wh_learning_rate": ("log_float", 1e-4, 5e-2), ...}
     n_trials=50,
     base_config=AdaptConfig(ext_fact=cbss_config.ext_fact),
-    compute_roa=True,  # requires every dataset's gt_paired_bin
+    compute_roa=True,  # requires every dataset's ground truth
 )
-print(best_config.wh_learning_rate, study.best_value)
+print(result.best_config.wh_learning_rate, result.study.best_value)
 ```
+
+`result` is an `OptimisationResult`: `best_config` (the base config with the
+chosen trial's parameters), `study`, `pareto_front` (Pareto search only) and
+`outputs` (see [Persisting the chosen trial](#persisting-the-chosen-trial)).
 
 To score trials on RoA against ground truth instead (only meaningful in
-simulation, where ground truth exists at all), pass `objective="roa"`. Since
-this scores directly against ground truth rather than against a training
-loss `sv_loss`/`wh_loss` only approximates, it is mainly useful to
-investigate the upper limit of performance a config could reach, not as an
-everyday objective (ground truth isn't available outside simulation):
+simulation, where ground truth exists), pass `objectives="roa"`:
 
 ```python
-best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,
-    objective="roa",  # compute_roa=True implied
-)
-print(100 - study.best_value, "% RoA")  # study.best_value is the inverted loss, not raw RoA
+result = optimize_adapt_decomp(pool=pool, objectives="roa")  # compute_roa=True implied
+print(100 - result.study.best_value, "% RoA")  # best_value is the inverted loss
 ```
 
-Or run the runnable version of the snippet above via
-`scripts/run_example.sh`/`scripts/sweep_optuna_example.sh` (see
-[Command-line usage](#command-line-usage) below).
-
-To extend the search space beyond the defaults:
+`param_space` defaults to `DEFAULT_PARAM_SPACE`:
 
 ```python
-param_space = {**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}
+{
+    "wh_learning_rate": ("log_float", 1e-4, 5e-2),
+    "sv_learning_rate": ("log_float", 1e-4, 1e-1),
+    "centroid_momentum": ("float", 0.0, 0.95),
+}
 ```
 
+To extend it: `param_space={**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}`.
 Kinds: `"log_float"`/`"float"`/`"int"` take `(kind, low, high)`;
-`"categorical"` takes `(kind, choices)`.
+`"categorical"` takes `(kind, choices)`. Ordered values such as
+`centroid_momentum` are better searched as `"float"` than as a categorical
+grid, since TPE can then model their order.
 
 ### Pooled datasets
 
-Identical call, more pool entries — nothing else changes:
+Identical call, more pool entries:
 
 ```python
 pool = {
-    "triangular-ramp40s": PooledDatasetMemory(
-        emg=emg_1,
-        calibration=calib_1,
-        cbss_config=cbss_config_1,
-        gt_paired_bin=gt_1,
-    ),
-    "triangular-ramp10s": PooledDatasetMemory(
-        emg=emg_2,
-        calibration=calib_2,
-        cbss_config=cbss_config_2,
-        gt_paired_bin=gt_2,
-    ),
+    "triangular-ramp40s": PooledDatasetMemory(emg=emg_1, calibration=calib_1, cbss_config=cfg_1),
+    "triangular-ramp10s": PooledDatasetMemory(emg=emg_2, calibration=calib_2, cbss_config=cfg_2),
 }
-best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,
-    n_trials=50,
-    base_config=AdaptConfig(ext_fact=cbss_config_1.ext_fact),
-    compute_roa=True,
-)
+result = optimize_adapt_decomp(pool=pool, n_trials=50)
 ```
 
 Each dataset's own `cbss_config` wins over `base_config`'s shared fields
 (`ext_fact`, `ext_mode`, `spike_det_exp`, preprocessing/filter fields) on
 disagreement, reconciled fresh every trial inside `from_calibration()` — see
 [architecture.md](architecture.md).
-
-### Loading a pool from a data_config YAML
 
 `load_data`/`load_pooled_cbss_memory` build `pool` directly from a
 `datasets:` list, one entry or several — see
@@ -173,10 +140,6 @@ datasets:
     path_calib: 'outputs/calibration/sub-01/..._cbss.pkl'
     path_calib_config: 'outputs/calibration/sub-01/..._cbss_config.yaml'
     path_gt: 'data/sub-01/clean/..._spikes.npz'   # optional -- omit for no RoA
-  - name: triangular-ramp10s
-    path_emg: '...'
-    path_calib: '...'
-    path_calib_config: '...'
 ```
 
 ```python
@@ -184,280 +147,215 @@ from adapt_decomp.adaptation.config import load_yaml
 from adapt_decomp.utils import load_data
 
 pool = load_data(load_yaml("configs/data_configs/fdsi_pool_memory_example.yaml"))
-best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50
-)
+result = optimize_adapt_decomp(pool=pool, n_trials=50)
 ```
 
 Ground truth, when `path_gt` is set, is matched to each dataset's calibration
-via `CBSSResult.select_supervised()` — the calibration (and therefore the
-resulting `PooledDatasetMemory`) is narrowed to only the matched units.
+via `CBSSResult.select_supervised()` — the calibration is narrowed to only the
+matched units.
 
-`load_pooled_cbss_memory` preloads and holds every dataset's calibration
-resident in memory for the whole search. For a pool too large to hold in
-memory at once (many datasets × long recordings), use
-`optimize_adapt_decomp_pooled_disk` with `load_pooled_cbss_disk` instead — it
-takes the identical `datasets:` YAML shape (`loader: load_pooled_cbss_disk`)
-but returns `Dict[str, PooledDatasetDisk]` (paths and loader names, not
-loaded data), loading and discarding each dataset fresh, per trial:
+`load_pooled_cbss_memory` holds every dataset resident in memory for the
+whole search. For a pool too large for that, use `load_pooled_cbss_disk`
+(`loader: load_pooled_cbss_disk`, same `datasets:` shape): it returns
+`PooledDatasetDisk` entries (paths, not data), which `optimize_adapt_decomp`
+loads and discards per dataset per trial — a slower per-trial I/O cost for a
+flat, small memory footprint. The call is unchanged.
+
+### Unit selection
+
+`unit_selection` sets which calibration units a search adapts and scores,
+applied once per dataset before the first trial:
+
+- **`"unsupervised"`** (default) — keeps the units passing
+  `CBSSResult.unsupervised_mask(**unit_selection_kwargs)`, by default
+  `{"cov_th": 0.3}`: regular firers, whose contrast is a reliable tracking
+  signal. Dropped units are removed from the calibration, so they are not
+  adapted either, and ground truth columns are dropped with them. A dataset
+  left with no unit is left out of the pool with a warning.
+- **`"supervised"`** — the ground-truth-matched units. Requires every
+  dataset's ground truth; its loader already narrowed the calibration.
+- **`None`** — every unit (ablation).
+
+The final run (e.g. `scripts/run.py run`) adapts every calibration unit; the
+search only chooses parameters on the selected ones.
+
+### Pooling losses across datasets
+
+Each objective is the **sum** of its per-dataset values over the pool (a
+config that diverges on even one dataset should dominate and be rejected).
+Per dataset, `sv_loss` is reduced across units by
+`AdaptConfig.sv_loss_reduction` (on the base config):
+
+- **`"mean"`** (default) — per-unit mean, i.e. `sv_loss_total / M`. Every
+  dataset then weighs the same in the pooled sum, whatever its unit count.
+- **`"sum"`** — the 1.0.0 behaviour. A dataset's weight then grows with its
+  number of units, biasing the search towards high-yield recordings.
+
+Why this is enough: the per-unit errors (and `wh_loss`) are already z-scored
+against each unit's/dataset's own calibration statistics, so per-unit-mean
+`sv_loss` is dimensionless and comparable across datasets — no further
+per-dataset normalisation is needed, and summing or averaging over the pool
+gives the same optimum and the same Pareto front. Avoid rank-normalising
+losses across trials: it makes the objective change as trials accumulate,
+which corrupts TPE's history. If a few strongly drifting datasets still
+dominate, summing log losses (a geometric mean) is the scale-invariant
+fallback. Note that a unit with no spikes in a batch scores e² = 9 (the
+−3 contrast-error fallback).
+
+### Faster searches: worker processes vs concurrent trials
+
+- **`n_workers`** (default `1`) spreads each trial's datasets over worker
+  processes, longest datasets first; each worker holds its shard of the pool
+  for the whole search and runs one torch thread. Trials themselves stay
+  sequential, so TPE sees every earlier result, results are reproducible for
+  any `n_workers`, and memory stays at about one pool. This is the
+  recommended way to speed up a pooled search (≈6–8× with 8 workers on a
+  30-recording pool).
+- **`n_jobs`** (default `1`) is passed straight to Optuna's
+  `study.optimize()` — concurrent trials as threads. The adaptation loop is
+  mostly Python, so threads give at most ≈2×, each suggestion is made without
+  the still-running trials' results, and exact reproducibility from
+  `random_seed` only holds at `n_jobs=1`. The default sampler adds
+  `constant_liar` when `n_jobs > 1` so concurrent trials aren't sent to the
+  same region.
+
+A search over the forward pass only (see
+[adaptation.md](adaptation.md#adapting-from-the-end-of-the-calibration-window))
+also halves the work per trial; apply the backward pass to the chosen config
+only.
+
+### Persisting the chosen trial
+
+Pass `best_result_path` to write results to disk as they're found:
 
 ```python
-from adapt_decomp.adaptation.optimize import optimize_adapt_decomp_pooled_disk
-
-pool = load_data(load_yaml("configs/data_configs/fdsi_pool_disk_example.yaml"))
-best_config, study = optimize_adapt_decomp_pooled_disk(
-    pool=pool, param_space=DEFAULT_PARAM_SPACE, n_trials=50
-)
+result = optimize_adapt_decomp(pool=pool, best_result_path="runs/best")
+result.outputs["triangular-ramp40s"]  # AdaptationResult of the chosen trial
 ```
 
-Both functions share the identical `param_space`/`objective`/`n_trials`/
-`n_jobs`/`random_seed`/`compute_roa`/`roa_kwargs`/`best_result_path`/
-`on_trial` keyword arguments — `_disk` trades a slower per-trial I/O cost for
-a flat, small memory footprint regardless of pool size.
+- Each trial's per-dataset `AdaptationResult`s are staged in
+  `<best_result_path>_temp` (deleted when the search finishes).
+- Single-objective: an improving trial is promoted to `<dataset>.pkl` plus
+  `config.yaml` in `best_result_path` itself.
+- Pareto: each trial joining the front is promoted to
+  `<best_result_path>/trial_<n>/`, deleted when a later trial dominates it.
+- `study.pkl` is rewritten after **every** trial, so an interrupted search's
+  on-disk state reflects every completed trial.
 
-### Running trials concurrently
-
-`n_jobs` (default `1`) is passed straight to Optuna's own `study.optimize()`
-— set it above 1 to run multiple trials concurrently (thread-based). Exact
-reproducibility from `random_seed` only holds at `n_jobs=1`; above that,
-`TPESampler`'s suggestions depend on which other trials have already
-reported, which is timing-dependent.
-
-### Persisting the winning trial
-
-Pass `best_result_path` to write the improving trial's result(s), resolved
-config, and the completed study to disk as they're found:
-
-```python
-outputs, best_config, study = optimize_adapt_decomp_pooled_memory(
-    pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,
-    best_result_path="runs/best",
-)
-```
-
-- One `<dataset>.pkl` (an `AdaptationResult`) per pool entry — one dataset or
-  many alike.
-- `config.yaml` (`AdaptConfig.to_yaml()`) and `study.pkl`.
-
-Without `best_result_path`, both functions return just `(best_config, study)`.
-Each `<dataset>.pkl` is a plain saved `AdaptationResult` — see
-[adaptation.md](adaptation.md#running-and-reading-the-output) for how to
-reload one.
+`result.outputs` holds the chosen trial's results for an in-memory pool; for
+an on-disk pool it is `None` — reload with
+`AdaptationResult.load(Path(best_result_path) / f"{name}.pkl")` (or
+`.../trial_<n>/...`). See
+[adaptation.md](adaptation.md#running-and-reading-the-output) for reading one.
 
 ### Watching trials as they run
 
-`on_trial` is called once per completed trial with a canonical log dict:
+`on_trial` is called once per completed trial with a log dict:
 
 ```python
 {
     "trial_number": int,
+    "params": dict,
     "loss": float,
-    "objective": str,
+    "objective": str,  # single-objective
+    "objectives": tuple,
+    "values": tuple,  # Pareto
     "sv_loss": float,
     "wh_loss": float,
     "total_loss": float,  # pooled sums
-    "params": dict,
-    "per_dataset": {
-        name: {
-            "loss": float,
-            "sv_loss": float,
-            "wh_loss": float,
-            "total_loss": float,
-            "roa": float,
-            "roa_mean": float,  # if compute_roa
-            "roa_per_unit": list[float],
-        }
-    },  # if compute_roa
-    "roa": float,
-    "roa_mean": float,  # pooled sum / mean-of-means, if compute_roa
-}
-```
-
-`loss` is whichever of `sv_loss`/`wh_loss`/`total_loss`/`roa` `objective`
-selects; `sv_loss`/`wh_loss`/`total_loss` are always present; `roa`/`roa_mean`
-are present whenever `compute_roa` ends up `True`. `per_dataset` holds each
-dataset's own values, one entry even for a one-entry pool. Use it to stream
-to wandb/mlflow/print without this module depending on a specific tracker:
-
-```python
-optimize_adapt_decomp_pooled_memory(
-    ...,
-    on_trial=lambda log: print(log["trial_number"], log["loss"]),
-)
-```
-
-## Pareto / multi-objective search
-
-`optimize_adapt_decomp_pooled_memory_pareto` and its on-disk counterpart
-`optimize_adapt_decomp_pooled_disk_pareto` score every trial jointly on two
-or more scalars instead of collapsing them into one `objective`. The point
-is to optimise `wh_loss` and `sv_loss` *concurrently but separately* — each
-its own axis of the front — rather than pre-summing them into one
-`total_loss` scalar. That summed rescaling is exactly what the
-single-objective search above avoids by defaulting to `objective="sv_loss"`:
-empirically, `wh_loss` overpowers `sv_loss` inside `total_loss`, so a
-`total_loss`-scored search mostly just optimises `wh_loss`. Scoring on
-`sv_loss` alone sidesteps that, but at the cost of ignoring `wh_loss`
-entirely. The Pareto front recovers that: it optimises `sv_loss` without
-letting `wh_loss` dominate, but still keeps `wh_loss` in view as its own
-objective, so a trial that improves `sv_loss` at a large `wh_loss` cost
-is only preferred over one that doesn't when it actually dominates on both.
-Reach for it instead of the single-objective search above when no fixed
-rescaling of `wh_loss`/`sv_loss` into `total_loss` tracks what you actually
-care about — empirically, no such rescaling beat `sv_loss` alone, and a
-retrospective Pareto front over already-run single-objective studies' trials
-contained meaningfully better-RoA trials than the single-scalar search had
-settled on (see the comparison of the three searches in
-[`05_comparison_sv_loss_pareto_roa.ipynb`](../notebooks/fdsi_benchmark/05_comparison_sv_loss_pareto_roa.ipynb)).
-
-```mermaid
-flowchart LR
-    D["Dict[str, PooledDatasetMemory]\n(or PooledDatasetDisk) -- one entry or many"] --> O["optimize_adapt_decomp_pooled_memory_pareto\n(or _disk_pareto)"]
-    O --> F["Pareto front\n(study.best_trials)"]
-    F -->|"selection_rule(front)"| C["one chosen AdaptConfig"]
-```
-
-Same pool/`param_space`/`base_config`/`compute_roa`/`roa_kwargs`/`n_trials`/
-`n_jobs`/`sampler`/`random_seed`/`best_result_path`/`on_trial` arguments as
-`optimize_adapt_decomp_pooled_memory`, plus two differences:
-
-```python
-from adapt_decomp.adaptation.optimize import (
-    optimize_adapt_decomp_pooled_memory_pareto,
-    DEFAULT_OBJECTIVES,
-    _select_min_sv_loss,
-    _select_max_roa_mean,
-)
-
-best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
-    pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,
-    objectives=DEFAULT_OBJECTIVES,  # ("wh_loss", "sv_loss"); any 2+ ObjectiveNames, no duplicates
-    n_trials=100,
-    compute_roa=True,  # optional; "roa" need not be in objectives to log it
-)
-```
-
-- **`objectives`** (instead of `objective`) — a tuple of two or more
-  `"sv_loss"`/`"wh_loss"`/`"total_loss"`/`"roa"` names, no duplicates.
-  Defaults to `DEFAULT_OBJECTIVES = ("wh_loss", "sv_loss")`. Each is pooled
-  the same **sum**-across-the-pool way as the single-objective search's
-  `objective`; `"roa"` in `objectives` implies `compute_roa=True`, same as
-  `objective="roa"` does above.
-- The study runs under `optuna.create_study(directions=[...])`
-  (one `"minimize"` per entry in `objectives`) instead of a single scalar
-  `direction`. `study.best_value`/`study.best_params` raise `RuntimeError`
-  on a multi-objective study — read back via `study.best_trials` (the Pareto
-  front, a `List[optuna.trial.FrozenTrial]`) instead, returned directly as
-  `pareto_front`.
-
-`selection_rule` picks one trial off the front to build `best_config` from
-(the front itself has no single "winner"):
-
-- **`_select_min_sv_loss`** (the default) — the front's own minimum pooled
-  `sv_loss` member. Always Pareto-optimal by construction and needs no
-  ground truth.
-- **`_select_max_roa_mean`** — the front's own highest mean-RoA member.
-  Needs `compute_roa=True` (or `"roa"` in `objectives`) for the search that
-  produced `pareto_front`; otherwise every member's RoA is absent and it
-  falls back to picking arbitrarily.
-- Pass your own `Callable[[List[FrozenTrial]], FrozenTrial]` for any other
-  rule (e.g. picking off `study.best_trials` by hand and reading each
-  trial's `user_attrs`).
-
-```python
-best_config, pareto_front, study = optimize_adapt_decomp_pooled_memory_pareto(
-    pool=pool,
-    param_space=DEFAULT_PARAM_SPACE,
-    objectives=("sv_loss", "roa"),
-    compute_roa=True,
-    selection_rule=_select_max_roa_mean,
-)
-```
-
-**`best_result_path`**, when set, writes every current front member to its
-own subdirectory — `<best_result_path>/trial_<trial_number>/` (one
-`<dataset>.pkl` per pool entry plus `config.yaml`) — evicted (subdirectory
-deleted) the moment a later trial dominates it, and snapshots `study.pkl`
-after **every** trial, not only once the search finishes, so an interrupted
-run's on-disk state always reflects every trial completed so far. With it
-set, the return becomes `(best_outputs, best_config, pareto_front, study)`,
-`best_outputs` mapping dataset name to `selection_rule`'s chosen trial's
-`AdaptationResult`. `optimize_adapt_decomp_pooled_disk_pareto` mirrors
-`optimize_adapt_decomp_pooled_disk`'s memory-lean trade-off the same way —
-scratch files staged through `<best_result_path>_temp` per trial, promoted
-into a front member's subdirectory only when it joins the front, and never
-returning `AdaptationResult`s in memory (reload from
-`best_result_path` instead).
-
-`on_trial`'s log dict differs from the single-objective form — there is no
-single `"loss"` key, since no single scalar was scored:
-
-```python
-{
-    "trial_number": int,
-    "objectives": tuple[str, ...],
-    "values": tuple[float, ...],
-    "sv_loss": float,
-    "wh_loss": float,
-    "total_loss": float,  # pooled sums, always present
-    "params": dict,
     "per_dataset": {
         name: {
             "sv_loss": float,
             "wh_loss": float,
             "total_loss": float,
+            "loss": float,  # single-objective
             "roa": float,
-            "roa_mean": float,  # if compute_roa
+            "roa_mean": float,
             "roa_per_unit": list[float],  # if compute_roa
         }
     },
-    "on_front": bool,  # only when best_result_path is set
     "roa": float,
     "roa_mean": float,  # pooled sum / mean-of-means, if compute_roa
+    "on_front": bool,  # if best_result_path is set
 }
 ```
 
-**No CLI support yet** — `scripts/run.py`'s `run_optuna` only drives the
-single-objective search. Use Pareto search programmatically, importing
-directly from `adapt_decomp.adaptation.optimize` (it isn't re-exported from
-`adapt_decomp.adaptation`/top-level `adapt_decomp` alongside the
-single-objective functions):
+Use it to stream to wandb/mlflow/print without this module depending on a
+specific tracker: `on_trial=lambda log: print(log["trial_number"], log["sv_loss"])`.
+
+## Pareto / multi-objective search
+
+Pass two or more `objectives` to score every trial jointly instead of
+collapsing them into one scalar:
 
 ```python
-from adapt_decomp.adaptation.optimize import optimize_adapt_decomp_pooled_memory_pareto
+from adapt_decomp.adaptation.optimize import DEFAULT_OBJECTIVES  # ("wh_loss", "sv_loss")
+
+result = optimize_adapt_decomp(pool=pool, objectives=DEFAULT_OBJECTIVES, selection="knee")
+result.pareto_front  # study.best_trials
+result.best_config  # built from the selected front member
 ```
 
-## Reproducibility
+The point is to optimise `wh_loss` and `sv_loss` *concurrently but
+separately* — each its own axis of the front — rather than pre-summing them
+into `total_loss`, where `wh_loss` dominates. Scoring on `sv_loss` alone
+sidesteps that but ignores `wh_loss` entirely; the front keeps both in view,
+so a trial that improves `sv_loss` at a large `wh_loss` cost is only preferred
+when it dominates on both. Empirically, no rescaling of `wh_loss`/`sv_loss`
+into `total_loss` beat `sv_loss` alone, and a retrospective front over
+single-objective studies' trials contained meaningfully better-RoA trials
+than the single-scalar search settled on (see
+[`05_comparison_sv_loss_pareto_roa.ipynb`](../notebooks/fdsi_benchmark/05_comparison_sv_loss_pareto_roa.ipynb)).
 
-`random_seed` (default `1909`) seeds only the default
-`TPESampler(n_startup_trials=15, seed=random_seed)` — the order Optuna
-proposes hyperparameters in. It has no effect if you pass your own
-`sampler=`; seed that sampler yourself if you need its proposals to
-reproduce too. `pool` entries are already-built `CBSSResult`s, never
-re-decomposed here, so `random_seed` never has to account for calibration's
-own ICA randomness — that's calibration's own concern, see
-[calibration.md#reproducibility](calibration.md#reproducibility) — and each
+The study runs under `directions=[...]`, one `"minimize"` per objective;
+`study.best_value`/`study.best_params` raise `RuntimeError` on it — read
+`result.pareto_front` instead. `selection` picks the front member that builds
+`best_config`:
+
+- **`"min_sv_loss"`** (default) — the front's minimum pooled `sv_loss`
+  member. Always Pareto-optimal and needs no ground truth, but it sits at the
+  front's extreme: it accepts large `wh_loss` costs for tiny `sv_loss` gains.
+- **`"knee"`** — the knee of a two-objective front: both objectives are
+  min-max normalised over the front, and the member farthest from the line
+  through its two extremes is chosen — where improving one objective starts
+  costing the most of the other. Needs no ground truth; requires exactly two
+  objectives (falls back to `"min_sv_loss"` on fronts of one or two members).
+- **`"max_roa_mean"`** — the front's highest mean-RoA member. Needs
+  `compute_roa=True` (or `"roa"` in `objectives`).
+- Any `Callable[[List[FrozenTrial]], FrozenTrial]` for another rule.
+
+## Sampler and reproducibility
+
+The default sampler is a **multivariate** `TPESampler(n_startup_trials=15,
+seed=random_seed)`: it models the parameters jointly, which matters because
+they interact (the learning rates and `centroid_momentum` all set how fast
+units are tracked). Pass `sampler=` to use another; `random_seed` (default
+`1909`) only seeds the default one.
+
+`pool` entries are already-built `CBSSResult`s, never re-decomposed here, so
+`random_seed` never has to account for calibration's own ICA randomness (see
+[calibration.md#reproducibility](calibration.md#reproducibility)), and each
 trial's `AdaptDecomp` run is otherwise deterministic per
-[adaptation.md#reproducibility](adaptation.md#reproducibility).
+[adaptation.md#reproducibility](adaptation.md#reproducibility). Exact
+reproducibility holds for any `n_workers`, but only at `n_jobs=1`.
+`n_workers > 1` runs each dataset with one torch thread, which can change
+floating-point rounding relative to an in-process run.
 
-As already noted in
-[Running trials concurrently](#running-trials-concurrently), exact
-reproducibility from `random_seed` only holds at `n_jobs=1` — above that,
-`TPESampler`'s next suggestion depends on which other trials have already
-reported, which is timing-dependent, so trial order (and therefore
-`study.best_trials`/`study.best_value`) can differ between two runs of the
-same `n_trials`/`random_seed` even with everything else fixed.
+`best_result_path`'s `config.yaml`/`study.pkl` capture the chosen config and
+the study, but not the search settings that produced them. Keep the
+`--optim_config` file (or the call-site arguments) alongside its output, the
+same way a calibration's `CBSSConfig` is saved alongside its `CBSSResult`.
 
-`best_result_path`'s `config.yaml`/`study.pkl` capture the winning config
-and the completed study, but not the `random_seed`/`param_space`/
-`objective`/`objectives` that produced them. Keep whatever produced a search
-(the `--optim_config` file, or the call-site arguments) alongside its
-`best_result_path` output if you need to rerun it later — the same way a
-calibration's `CBSSConfig` needs to be saved alongside it, not just the
-`CBSSResult` itself (see
-[calibration.md#reproducibility](calibration.md#reproducibility)).
+## Deprecated entry points
+
+`optimize_adapt_decomp_pooled_memory`, `optimize_adapt_decomp_pooled_disk`,
+`optimize_adapt_decomp_pooled_memory_pareto` and
+`optimize_adapt_decomp_pooled_disk_pareto` still work, with their 1.0.0
+signatures and tuple return shapes, but warn with `FutureWarning`. They run
+`optimize_adapt_decomp` with `unit_selection=None` (they never selected
+units). Migrate by calling `optimize_adapt_decomp` with `objectives=` (the old
+`objective`/`objectives`) and `selection=` (the old `selection_rule`), and
+reading the returned `OptimisationResult`'s fields.
 
 ## Command-line usage
 
@@ -478,39 +376,38 @@ python scripts/run.py run_optuna \
   --objective sv_loss
 ```
 (runnable as-is via `scripts/sweep_optuna_example.sh`). `--data_config` can
-point at either a `load_pooled_cbss_memory` data_config (one dataset or many,
-per [Loading a pool from a data_config YAML](#loading-a-pool-from-a-data_config-yaml)
-above) or the legacy `load_example` format — both are wrapped into a pool
-internally, so `run_optuna` never needs to know which.
+point at either a `load_pooled_cbss_memory` data_config (one dataset or many)
+or the legacy `load_example` format — both are wrapped into a pool
+internally.
 
-`--optim_config` points at a YAML holding `param_space` plus the rest of
-`optimize_adapt_decomp_pooled_memory`'s *search-strategy* arguments —
-reusable across datasets/runs, unlike `best_result_path`/`compute_roa`/
-`roa_kwargs`, which are run-specific and only reachable by calling
-`optimize_adapt_decomp_pooled_memory`/`_run_optuna()` directly (no CLI flag
-for those two) — see
+`--optim_config` points at a YAML holding `optimize_adapt_decomp`'s
+*search-strategy* arguments — reusable across datasets/runs, unlike
+`best_result_path`/`compute_roa`/`roa_kwargs`, which are run-specific — see
 [configs/sweep_configs/sweep_optuna.yaml](../configs/sweep_configs/sweep_optuna.yaml):
 
 ```yaml
-param_space:
+param_space:                       # omit to use DEFAULT_PARAM_SPACE
   wh_learning_rate: ["log_float", 1.0e-4, 5.0e-2]
   sv_learning_rate: ["log_float", 1.0e-4, 1.0e-1]
-objective: "sv_loss"   # "sv_loss" | "wh_loss" | "total_loss" | "roa"
+  centroid_momentum: ["float", 0.0, 0.95]
+objectives: ["sv_loss"]            # one = single-objective; two or more = Pareto front
+selection: "min_sv_loss"           # Pareto only: "min_sv_loss" | "knee" | "max_roa_mean"
+unit_selection: "unsupervised"     # "unsupervised" | "supervised" | null
+unit_selection_kwargs: {cov_th: 0.3}
 n_trials: 100
 n_jobs: 1
+n_workers: 1
 random_seed: 1909
+# sampler: {n_startup_trials: 30, multivariate: true}   # TPESampler kwargs
 ```
 
 `--objective`/`--n_trials`/`--best_result_path` on the command line override
-the file's own values for that one invocation; omitted, they fall back to
-the file's value, then to `optimize_adapt_decomp_pooled_memory`'s own
-defaults (`"sv_loss"`/`100`/`None`).
-
-Every trial is logged live to the active wandb run under an `optuna/`-
-prefixed key (`optuna/loss`, `optuna/param_*`, `optuna/roa_mean` when ground
+the file's own values for that one invocation. Every trial is logged live to
+the active wandb run under an `optuna/`-prefixed key (`optuna/loss` or
+`optuna/value_<objective>`, `optuna/param_*`, `optuna/roa_mean` when ground
 truth is available), alongside a `best_config` summary once the search
-finishes. Pass `--best_result_path <dir>` to also persist the winning
-trial's results (see [Persisting the winning trial](#persisting-the-winning-trial)).
+finishes. Pass `--best_result_path <dir>` to also persist and log the chosen
+trial's results.
 
 ### `run_wandb` — wandb-managed sweep
 
@@ -546,24 +443,19 @@ reflect that rather than being unified:
   different key depending on which path produced it.
 - **x-axis meaning.** `run_wandb` logs a full per-batch time series for
   every iteration (one point per adaptation batch). `run_optuna` logs one
-  point per completed *trial* — a non-winning trial's own per-batch
-  trajectory is never logged at all, only its final scalar loss.
+  point per completed *trial* — a non-chosen trial's own per-batch
+  trajectory is never logged at all, only its final scalar losses.
 - **Per-dataset/RoA summaries.** `run_wandb` always logs them (via
-  `_log_pooled_outputs`). `run_optuna` only does, for the single winning
-  trial, when `--best_result_path` is set.
+  `_log_pooled_outputs`). `run_optuna` only does, for the chosen trial, when
+  `--best_result_path` is set.
 
 ## Which one should I use?
 
 | | `run_optuna` | `run_wandb` |
 |---|---|---|
-| Search algorithm | Optuna (TPE by default) | wandb (random/grid/Bayesian) |
+| Search algorithm | Optuna (multivariate TPE by default) | wandb (random/grid/Bayesian) |
+| Objectives | One, or a Pareto front of several | One wandb metric |
 | wandb account needed | No (logging is optional) | Yes |
 | wandb runs produced | 1 (whole study) | 1 per sweep iteration |
-| Per-batch traces logged | Winning trial only, if `--best_result_path` set | Every iteration |
+| Per-batch traces logged | Chosen trial only, if `--best_result_path` set | Every iteration |
 | Nested search | N/A | Never (each iteration is a plain run) |
-
-Neither CLI path scores more than one objective at a time. If a single
-rescaled `total_loss` (or `sv_loss`/`wh_loss`/`roa` alone) doesn't capture
-the trade-off you care about, use the
-[Pareto / multi-objective search](#pareto--multi-objective-search) above
-instead — programmatic only, no CLI support yet.

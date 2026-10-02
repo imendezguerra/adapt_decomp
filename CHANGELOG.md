@@ -16,6 +16,28 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Cross-platform reproducibility test (`tests/reproducibility/`): the tutorial's adaptation is
   checked against a stored reference on every OS.
 - `Makefile` with common tasks.
+- `AdaptDecomp.process_from_calib_end(emg, calib_indices, backward=False)`: keeps the
+  calibration's own output over its window and adapts forwards from its last sample, and
+  optionally backwards from its first sample (offline). `emg` is filtered once for both passes;
+  each pass starts with FIFOs seeded from the samples next to it
+  (`AdaptConfig.backward_fifo_seed`: `"forward_head"` or `"calib_tail"`).
+- `process_data(..., reverse=True)`: offline backward pass, adapting from the last batch to
+  the first; spikes/sources are returned in sample order.
+- `AdaptConfig.source_fifo_from_calib`: seed the source FIFO with the calibration's tail, for
+  online EMG that starts where calibration ends. `Decomposition.seed_fifos()` seeds either
+  FIFO from given rows.
+- `AdaptConfig.sv_loss_reduction` (`"mean"` | `"sum"`): how `sv_loss_total` reduces across
+  units per batch.
+- `optimize_adapt_decomp`: one search entry point for in-memory or on-disk pools and one or
+  several objectives, returning an `OptimisationResult`. New options:
+  - `unit_selection` (`"unsupervised"` with `{"cov_th": 0.3}` by default, `"supervised"`,
+    or `None`): which calibration units a search adapts and scores;
+  - `selection` (`"min_sv_loss"`, `"knee"`, `"max_roa_mean"`, or a callable): which Pareto
+    front member builds the best config;
+  - `n_workers`: spread each trial's datasets over worker processes (reproducible).
+- `CBSSResult.unsupervised_mask()`: the quality-threshold mask behind `select_unsupervised()`.
+- `scripts/run.py run_optuna` reads `objectives` (Pareto search from the CLI), `selection`,
+  `unit_selection`/`unit_selection_kwargs`, `sampler` and `n_workers` from `--optim_config`.
 
 ### Changed
 
@@ -25,6 +47,29 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `dev` extra. Minimum Python is 3.10 (the code already required it) and minimum torch is 2.7
   (earlier versions lack `slogdet` on Apple's MPS backend).
 - Codebase formatted and linted with ruff.
+- `calibrate_and_process` adapts from the end of the calibration window by default
+  (`adapt_from="calib_end"`), returning CBSS's output over the window;
+  `adapt_from="emg_start"` keeps the 1.0.0 behaviour.
+- `sv_loss_total` is the per-unit mean by default (`sv_loss_reduction="mean"`), so pooled
+  searches no longer favour recordings with more units. Not comparable with 1.0.0 values;
+  set `"sum"` to reproduce them.
+- The default Optuna sampler is a multivariate `TPESampler` (with `constant_liar` when
+  `n_jobs > 1`), and `DEFAULT_PARAM_SPACE` includes `centroid_momentum` (0–0.95).
+- Search results are staged through `<best_result_path>_temp`, and `study.pkl` is
+  snapshotted after every trial in single-objective searches too.
+
+### Deprecated
+
+- `optimize_adapt_decomp_pooled_memory`, `optimize_adapt_decomp_pooled_disk` and their
+  `_pareto` variants: thin wrappers over `optimize_adapt_decomp` (with `unit_selection=None`)
+  keeping their 1.0.0 signatures and return shapes; they emit a `FutureWarning`.
+
+### Fixed
+
+- The separation-vector convergence check compared each update with itself, so
+  `sv_epochs > 1` always stopped after the first epoch.
+- `load_example`'s legacy MATLAB calibrations stored `cov_isi` in percent; it is now a fraction,
+  like CBSS's, so `cov_th` filters apply to them correctly.
 
 ## [1.0.0] - 2026-09-22
 

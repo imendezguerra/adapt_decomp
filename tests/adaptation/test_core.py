@@ -7,6 +7,7 @@ which exercise a single _whiten() call via the make_adapter fixture.
 """
 
 import warnings
+from copy import copy
 
 import pytest
 import torch
@@ -244,11 +245,18 @@ def test_multibatch_stability_and_rare_safety_clip():
 # ---------------------------------------------------------------------------
 
 
-def test_compute_losses_medians_wh_and_sv_losses(make_decomposition, make_adapter):
+@pytest.mark.parametrize(
+    "reduction, reduce_units", [("sum", torch.nansum), ("mean", torch.nanmean)]
+)
+def test_compute_losses_medians_wh_and_sv_losses(
+    make_decomposition, make_adapter, reduction, reduce_units
+):
     """Normal (non-diverged) case: total_loss == wh_loss_total + sv_loss_total,
     wh_loss_total the median of the per-batch wh_loss tensor and sv_loss_total
-    the median, across batches, of sv_loss summed across units per batch."""
+    the median, across batches, of sv_loss reduced across units per batch
+    (sum, or mean so it doesn't scale with the unit count)."""
     decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3)
+    cfg.sv_loss_reduction = reduction
     adapter = make_adapter(decomp, cfg)
 
     adapter.wh_loss = torch.tensor([0.1, 0.3, 0.2])
@@ -258,7 +266,7 @@ def test_compute_losses_medians_wh_and_sv_losses(make_decomposition, make_adapte
     wh_loss_total, sv_loss_total, total_loss = adapter._compute_losses()
 
     assert_close(wh_loss_total, torch.tensor(0.2))
-    assert_close(sv_loss_total, adapter.sv_loss.nansum(dim=1).median())
+    assert_close(sv_loss_total, reduce_units(adapter.sv_loss, dim=1).median())
     assert_close(total_loss, wh_loss_total + sv_loss_total)
 
 
@@ -713,3 +721,274 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
     assert_close(eager.sources, out_eager.sources)
     assert_close(streaming.spikes, out_streaming.spikes)
     assert_close(streaming.sources, out_streaming.sources)
+
+
+# ---------------------------------------------------------------------------
+# Separation-vector epochs: convergence check
+# ---------------------------------------------------------------------------
+
+
+def test_sv_epochs_iterate_until_converged(make_decomposition, make_adapter, monkeypatch):
+    """With sv_epochs > 1 the fixed-point loop keeps iterating until the
+    relative sv change drops below sv_tol, instead of comparing sv_new with
+    itself and always stopping after the first epoch."""
+    import adapt_decomp.adaptation.core as core
+
+    torch.manual_seed(0)
+    decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3, sv_epochs=3, sv_tol=1e-12)
+    adapter = make_adapter(decomp, cfg)
+    calls = []
+    real_update = core.update_sv_spike_gated
+
+    def counting_update(**kwargs):
+        calls.append(1)
+        return real_update(**kwargs)
+
+    monkeypatch.setattr(core, "update_sv_spike_gated", counting_update)
+    Z = torch.randn(40, decomp.n)
+    sources = Z @ decomp.sep_vectors.T
+    spike_mask = torch.zeros_like(sources, dtype=torch.bool)
+    spike_mask[::5] = True
+    adapter._update_sep_vectors(Z, sources, spike_mask, 0)
+
+    assert len(calls) == 3
+
+
+# ---------------------------------------------------------------------------
+# reverse=True: backward pass in time
+# ---------------------------------------------------------------------------
+
+
+def test_reverse_rows_keeps_edge_rows_first_and_is_its_own_inverse():
+    """_reverse_rows keeps the leading ext_fact (zero-padded extension) rows
+    first, reverses the rest, and undoes itself -- which is what lets
+    process_data map a reverse pass's outputs back to emg's sample order."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    adapter = AdaptDecomp(**kwargs)
+    ext = adapter.config.ext_fact
+    x = torch.arange(12, dtype=torch.float32)[:, None]
+
+    reversed_x = adapter._reverse_rows(x)
+    assert_close(reversed_x[:ext], x[:ext])
+    assert_close(reversed_x[ext:], x[ext:].flip(0))
+    assert_close(adapter._reverse_rows(reversed_x), x)
+
+
+def test_process_data_reverse_adapts_from_the_last_batch_backwards():
+    """reverse=True processes emg last-to-first and returns outputs in emg's
+    sample order. Each batch's sources come from before that batch's
+    separation-vector update, so with whitening frozen the first batch
+    processed must match a run with adaptation off exactly: the start of emg
+    for a forward pass, its end for a reverse one."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    cfg = kwargs["adapt_config"]
+    cfg.adapt_wh = False  # whitening updates before the batch's own sources
+    B, ext = cfg.batch_size, cfg.ext_fact
+    fixed_cfg = copy(cfg)
+    fixed_cfg.adapt_sv = fixed_cfg.adapt_sd = False
+
+    def run(config, reverse):
+        torch.manual_seed(4)
+        adapter = AdaptDecomp(**{**kwargs, "adapt_config": config})
+        return adapter.process_data(emg_online, preprocess=False, reverse=reverse)
+
+    fwd, fwd_fixed = run(cfg, False), run(fixed_cfg, False)
+    bwd, bwd_fixed = run(cfg, True), run(fixed_cfg, True)
+
+    assert bwd.sources.shape == fwd.sources.shape
+    assert not torch.allclose(bwd.sources, bwd_fixed.sources)  # adaptation did act
+    assert torch.all(bwd.sources[:ext] == 0)  # edge rows are trimmed, as in a forward pass
+    # First batch processed: forward -> rows [ext, B); reverse -> the last B - ext rows
+    assert_close(fwd.sources[ext:B], fwd_fixed.sources[ext:B])
+    assert_close(bwd.sources[-(B - ext) :], bwd_fixed.sources[-(B - ext) :])
+
+
+def test_process_data_reverse_rejects_online_mode():
+    """Online mode filters and extends causally per batch, so it can't run backwards."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg_online = _make_construction_kwargs()
+    with pytest.raises(ValueError, match="reverse"):
+        AdaptDecomp(**kwargs).process_data(emg_online, processing_mode="online", reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# FIFO seeding
+# ---------------------------------------------------------------------------
+
+
+def test_seed_fifos_pushes_rows_like_live_batches(make_decomposition):
+    """seed_fifos pushes extended rows batch by batch, centred per batch like
+    process_batch does, and keeps the last source_fifo_batches batches of
+    sources."""
+    torch.manual_seed(1)
+    decomp, cfg = make_decomposition(M=2, ext_fact=2, raw_chs=3)
+    reference = decomp.fifo_cov.clone()
+    rows = torch.randn(decomp.fifo_samples + 7, decomp.n)
+    sources = torch.randn(5 * cfg.batch_size, 2)
+
+    decomp.seed_fifos(rows, sources)
+
+    for batch in rows.split(cfg.batch_size):
+        reference = torch.cat([reference, batch - batch.mean(0, keepdim=True)])
+    assert_close(decomp.fifo_cov, reference[-decomp.fifo_samples :])
+    assert_close(decomp.source_fifo, sources[-cfg.source_fifo_batches * cfg.batch_size :])
+
+
+def test_source_fifo_from_calib_seeds_the_calibration_tail():
+    """source_fifo_from_calib seeds the source FIFO with the calibration's last
+    source_fifo_batches batches of sources; by default it starts empty."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = _make_construction_kwargs()
+    assert AdaptDecomp(**kwargs).decomp.source_fifo is None
+
+    cfg = copy(kwargs["adapt_config"])
+    cfg.source_fifo_from_calib = True
+    adapter = AdaptDecomp(**{**kwargs, "adapt_config": cfg})
+    n = cfg.source_fifo_batches * cfg.batch_size
+    assert_close(adapter.decomp.source_fifo, kwargs["sources_calib"][-n:])
+
+
+# ---------------------------------------------------------------------------
+# process_from_calib_end: forward (and backward) passes around the calibration
+# ---------------------------------------------------------------------------
+
+
+def _calib_end_recording(n_before: int = 300, n_after: int = 400):
+    """AdaptDecomp kwargs plus a recording whose [a, b) window is the calibration EMG."""
+    kwargs, _ = _make_construction_kwargs()
+    raw_chs = kwargs["emg_calib"].shape[1]
+    emg = torch.cat(
+        [torch.randn(n_before, raw_chs), kwargs["emg_calib"], torch.randn(n_after, raw_chs)]
+    )
+    a, b = n_before, n_before + kwargs["emg_calib"].shape[0]
+    return kwargs, emg, a, b
+
+
+@pytest.mark.parametrize("backward", [False, True])
+def test_process_from_calib_end_joins_passes_around_the_calibration(backward):
+    """The result spans all of emg: the backward pass (or zeros) before the
+    calibration window, the calibration's own sources/spikes over it, and the
+    forward pass after it; per-batch arrays hold both passes' batches."""
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    torch.manual_seed(2)
+    kwargs, emg, a, b = _calib_end_recording()
+    adapter = AdaptDecomp(**kwargs)
+    B, ext = adapter.config.batch_size, adapter.config.ext_fact
+
+    out = adapter.process_from_calib_end(emg, slice(a, b), backward=backward, preprocess=False)
+
+    assert out.sources.shape == (emg.shape[0], kwargs["sources_calib"].shape[1])
+    assert_close(out.sources[a:b], kwargs["sources_calib"])
+    assert_close(out.spikes[a:b], kwargs["spikes_calib"])
+    assert out.sources[b + ext :].abs().sum() > 0
+    assert (out.sources[ext:a].abs().sum() > 0) == backward
+    n_forward = -(-(emg.shape[0] - b + ext) // B)
+    n_backward = -(-b // B) if backward else 0
+    assert out.wh_loss.shape[0] == n_forward + n_backward
+    assert out.total_time_ms.shape[0] == n_forward + n_backward
+    assert torch.isfinite(out.total_loss)
+
+
+@pytest.mark.parametrize("seed", ["forward_head", "calib_tail"])
+def test_process_from_calib_end_seeds_backward_fifos(seed, monkeypatch):
+    """The backward pass's FIFOs hold either the forward pass's first rows
+    after the calibration or the calibration's tail, reversed into its
+    processing order (farthest from where it starts first)."""
+    from adapt_decomp.adaptation import AdaptDecomp
+    from adapt_decomp.adaptation.data_structures import Data, Decomposition
+    from adapt_decomp.preprocessing import extend_data
+
+    torch.manual_seed(3)
+    kwargs, emg, a, b = _calib_end_recording()
+    kwargs["adapt_config"].backward_fifo_seed = seed
+    adapter = AdaptDecomp(**kwargs)
+    cfg, fifo = adapter.config, adapter.decomp.fifo_samples
+    n_src = cfg.source_fifo_batches * cfg.batch_size
+    seeds = []
+    real_seed = Decomposition.seed_fifos
+
+    def recording_seed(self, emg_ext=None, sources=None):
+        seeds.append((emg_ext, sources))
+        real_seed(self, emg_ext, sources)
+
+    monkeypatch.setattr(Decomposition, "seed_fifos", recording_seed)
+    out = adapter.process_from_calib_end(emg, slice(a, b), backward=True, preprocess=False)
+
+    emg_seed, sources_seed = seeds[-1]
+    if seed == "forward_head":
+        emg_ext = Data(emg, False, cfg).emg_ext
+        assert_close(emg_seed, emg_ext[b : b + fifo].flip(0))
+        assert_close(sources_seed, out.sources[b : b + n_src].flip(0))
+    else:
+        calib_ext = extend_data(kwargs["emg_calib"], cfg.ext_fact, ext_mode=cfg.ext_mode)
+        assert_close(emg_seed, calib_ext[-fifo:].flip(0))
+        assert_close(sources_seed, kwargs["sources_calib"][-n_src:].flip(0))
+
+
+def test_process_from_calib_end_rejects_invalid_windows_and_online_backward():
+    """The calibration window must be contiguous and as long as the
+    calibration; the backward pass is offline only."""
+    import numpy as np
+
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, emg, a, b = _calib_end_recording()
+    adapter = AdaptDecomp(**kwargs)
+    with pytest.raises(ValueError, match="contiguous"):
+        adapter.process_from_calib_end(emg, np.r_[a : b - 1, b + 5])
+    with pytest.raises(ValueError, match="calibration has"):
+        adapter.process_from_calib_end(emg, slice(a, b - 1))
+    with pytest.raises(ValueError, match="offline"):
+        adapter.process_from_calib_end(emg, slice(a, b), backward=True, processing_mode="online")
+
+
+def test_calibrate_and_process_adapts_from_the_calibration_end_by_default(
+    make_optimize_kwargs, monkeypatch
+):
+    """calibrate_and_process keeps CBSS's output over the calibration window
+    and adapts from its end by default; adapt_from="emg_start" adapts over
+    the entire recording from its first sample, as process_data does."""
+    import numpy as np
+
+    import adapt_decomp.adaptation.core as core
+    from adapt_decomp.adaptation import AdaptDecomp
+
+    kwargs, _ = make_optimize_kwargs()
+    calibration, cfg = kwargs["calibration"], kwargs["base_config"]
+
+    class FakeCBSS:
+        def __init__(self, config):
+            pass
+
+        def decompose(self, emg, timestamps):
+            return calibration
+
+    monkeypatch.setattr(core, "CBSS", FakeCBSS)
+    n_cal, a = calibration.sources.shape[0], 200
+    emg = np.concatenate([np.random.randn(a, 3), calibration.emg, np.random.randn(300, 3)])
+    run = dict(
+        timestamps=np.arange(len(emg)) / cfg.fs,
+        calib_indices=slice(a, a + n_cal),
+        cbss_config=kwargs["cbss_config"],
+        preprocess=False,
+    )
+
+    torch.manual_seed(5)
+    out, _ = AdaptDecomp.calibrate_and_process(emg, adapt_config=copy(cfg), **run)
+    assert out.sources.shape[0] == len(emg)
+    assert_close(out.sources[a : a + n_cal], torch.as_tensor(calibration.sources))
+
+    torch.manual_seed(5)
+    out_start, _ = AdaptDecomp.calibrate_and_process(
+        emg, adapt_config=copy(cfg), adapt_from="emg_start", **run
+    )
+    torch.manual_seed(5)
+    model = AdaptDecomp.from_calibration(calibration, kwargs["cbss_config"], copy(cfg))
+    assert_close(out_start.sources, model.process_data(emg, preprocess=False).sources)

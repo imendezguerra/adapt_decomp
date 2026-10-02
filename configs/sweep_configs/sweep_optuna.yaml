@@ -1,13 +1,21 @@
 # Optuna search settings for scripts/run.py's run_optuna command --
-# param_space plus the rest of optimize_adapt_decomp_pooled_memory's search-strategy
+# param_space plus the rest of optimize_adapt_decomp's search-strategy
 # arguments (reusable across datasets/runs). best_result_path/compute_roa/roa_kwargs
 # are run-specific instead, so they live as run_optuna's own inputs, not here.
 
-param_space:
+param_space:                       # omit to use adapt_decomp's DEFAULT_PARAM_SPACE
   wh_learning_rate: ["log_float", 1.0e-4, 5.0e-2]
   sv_learning_rate: ["log_float", 1.0e-4, 1.0e-1]
+  centroid_momentum: ["float", 0.0, 0.95]
 
-objective: "sv_loss"   # "sv_loss" | "wh_loss" | "total_loss" | "roa"
+objectives: ["sv_loss"]            # one = single-objective; two or more = Pareto front
+                                   # ("sv_loss" | "wh_loss" | "total_loss" | "roa")
+selection: "min_sv_loss"           # Pareto only: "min_sv_loss" | "knee" (2 objectives) | "max_roa_mean"
+unit_selection: "unsupervised"     # units adapted/scored: "unsupervised" | "supervised" (needs GT) | null
+unit_selection_kwargs: {cov_th: 0.3}
+
 n_trials: 100
-n_jobs: 3
+n_jobs: 1                          # concurrent trials (threads); reproducible only at 1
+n_workers: 1                       # processes each trial's datasets are spread over (reproducible)
 random_seed: 1909
+# sampler: {n_startup_trials: 30, multivariate: true}   # TPESampler kwargs; omit for the default

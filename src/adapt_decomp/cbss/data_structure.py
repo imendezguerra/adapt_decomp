@@ -233,7 +233,7 @@ class CBSSResult:
             roa=_sel1d(self.roa),
         )
 
-    def select_unsupervised(
+    def unsupervised_mask(
         self,
         *,
         sil_th: Optional[float] = None,
@@ -241,8 +241,8 @@ class CBSSResult:
         dr_min: Optional[float] = None,
         dr_max: Optional[float] = None,
         cov_th: Optional[float] = None,
-    ) -> CBSSResult:
-        """Keep units that pass ALL provided quality thresholds (None = skip criterion).
+    ) -> np.ndarray:
+        """Flag the units that pass ALL provided quality thresholds (None = skip criterion).
 
         Args:
             sil_th:  Minimum silhouette score (units with sil >= sil_th are kept).
@@ -252,10 +252,10 @@ class CBSSResult:
             cov_th:  Maximum coefficient of variation of inter-spike intervals.
 
         Returns:
-            New CBSSResult with only the selected units.
+            Boolean keep mask with shape (n_mu,), possibly all False.
 
         Raises:
-            ValueError: If no units survive the filters.
+            ValueError: If a threshold is given for a metric that is None.
         """
         n_mu = self.sources.shape[1]
         mask = np.ones(n_mu, dtype=bool)
@@ -285,8 +285,24 @@ class CBSSResult:
                 raise ValueError("self.cov_isi is None — cannot apply cov_th filter.")
             mask &= self.cov_isi <= cov_th
 
-        n_kept = int(mask.sum())
-        if n_kept == 0:
+        return mask
+
+    def select_unsupervised(self, **thresholds: Optional[float]) -> CBSSResult:
+        """Keep units that pass ALL provided quality thresholds (None = skip criterion).
+
+        Args:
+            **thresholds: sil_th, pnr_th, dr_min, dr_max and/or cov_th; see
+                unsupervised_mask.
+
+        Returns:
+            New CBSSResult with only the selected units.
+
+        Raises:
+            ValueError: If no units survive the filters, or see
+                unsupervised_mask.
+        """
+        mask = self.unsupervised_mask(**thresholds)
+        if not mask.any():
             raise ValueError(
                 "No units survived unsupervised quality filtering. "
                 "Loosen one or more thresholds or check CBSSConfig."

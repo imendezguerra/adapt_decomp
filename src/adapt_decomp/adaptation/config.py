@@ -66,6 +66,7 @@ class AdaptConfig(_LegacyConfig):
     adapt_sv: bool = True  # Adapt separation vectors
     adapt_sd: bool = True  # Adapt spike detection
     compute_loss: bool = True  # Log wh_loss and sv_loss
+    sv_loss_reduction: Literal["sum", "mean"] = "mean"  # Unit reduction of sv_loss_total
     save_params: bool = False  # Save newly adapted parameters per batch
 
     # Main adaptation hyperparameters to tune
@@ -114,6 +115,9 @@ class AdaptConfig(_LegacyConfig):
     # Fifo constants for calibration parameter estimation
     fifo_length: Optional[int] = None  # If None, defaults to 2x number of varaibles
     source_fifo_batches: int = 2  # Past batches of sources prepended for edge spike support
+    source_fifo_from_calib: bool = False  # Seed the source FIFO with the calibration's tail
+    # FIFO seed of process_from_calib_end's backward pass, reversed into its processing order
+    backward_fifo_seed: Literal["forward_head", "calib_tail"] = "forward_head"
     max_sigma_batches: int = (
         300  # Max number of calibration batches used to compute mean and std of signal properties
     )

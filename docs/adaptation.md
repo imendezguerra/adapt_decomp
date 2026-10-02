@@ -7,10 +7,7 @@ It never runs ICA itself — it only ever tracks a calibration it was given.
 
 ## Building the model, then supplying data
 
-Construction (`__init__`/`from_calibration`) never touches `emg` — it only
-ever builds the calibrated model. `process_data(emg, ...)` is the one place
-`emg` ever enters an `AdaptDecomp`, except a deprecated v1-compatible path
-(see the note at the end of this section).
+Construction (`__init__`/`from_calibration`) loads a calibrated CBSS decomposition model and initialises `AdaptDecomp` parameters. To apply adaptation to new `emg` call `process_data(emg, ...)`.
 
 ```mermaid
 flowchart TD
@@ -33,9 +30,13 @@ Three run modes, chosen via `process_data`'s/`init_data`'s
 ### 1. Calibration + adaptation in one call
 
 `calibrate_and_process` runs `CBSS` on `emg[calib_indices]`, builds the
-model, and — since it already has the full `emg` in hand — also runs
-`process_data()` over it, returning both results directly rather than the
-`AdaptDecomp` instance itself:
+model, and — since it already has the full `emg` in hand — also adapts over
+it, returning both results directly rather than the `AdaptDecomp` instance
+itself. By default (`adapt_from="calib_end"`) the output keeps CBSS's own
+sources/spikes over the calibration window and adapts forwards from its last
+sample (see [Adapting from the end of the calibration window](#adapting-from-the-end-of-the-calibration-window));
+`adapt_from="emg_start"` adapts over the whole recording from its first
+sample instead, calibration window included (the 1.0.0 behaviour):
 
 ```python
 from adapt_decomp import AdaptDecomp
@@ -49,6 +50,8 @@ outputs, calibration = AdaptDecomp.calibrate_and_process(
     cbss_config=CBSSConfig(fs=2048, ext_fact=10),  # selection/selection_kwargs filter units here
     adapt_config=AdaptConfig(),  # for shared params, adapt_config is overwritten with cbss_config vals if mismatch
     processing_mode="offline",  # or "online"
+    adapt_from="calib_end",  # or "emg_start"
+    backward=False,  # True also adapts backwards before the calibration window (offline only)
 )
 ```
 
@@ -110,6 +113,53 @@ calling it separately, just collapsed into one call. Call `init_data()`
 yourself first only when you want to inspect `adapter.data` (or time
 preprocessing separately) before running.
 
+### Adapting from the end of the calibration window
+
+Adapting from the first sample of a recording re-adapts over the calibration
+window itself, and starts from a model calibrated on later samples.
+`process_from_calib_end` instead starts where the calibration window
+`[a, b)` ends, the samples the model was just calibrated on:
+
+```python
+adapter = AdaptDecomp.from_calibration(calibration, cbss_config, adapt_config)
+outputs = adapter.process_from_calib_end(emg, calib_indices=slice(a, b), backward=True)
+```
+
+The result spans all of `emg`:
+
+| Samples | Spikes/sources from |
+|---|---|
+| `[0, a)` | A backward pass from `a` to the start of `emg` (`backward=True`, offline only), else zeros |
+| `[a, b)` | The calibration's own sources/spikes, unadapted |
+| `[b, end)` | A forward pass from `b` to the end of `emg` |
+
+- `emg` is filtered and extended once (one `Data`); both passes read its rows,
+  so neither restarts the filters at the window's edges.
+- The forward pass starts with its FIFOs holding the calibration's tail: the
+  whitening FIFO always does, and the source FIFO is seeded with the
+  calibration's last sources (edge-spike context for the first batch).
+- The backward pass runs on a copy of the model taken before the forward pass,
+  over the extended rows last to first (`process_data(..., reverse=True)`'s
+  mechanism). Its whitening and source FIFOs are seeded per
+  `AdaptConfig.backward_fifo_seed`, reversed into its processing order:
+  `"forward_head"` (default) uses the forward pass's first rows after `b`;
+  `"calib_tail"` uses the calibration's last rows. Centroids and calibration
+  statistics are untouched.
+- Per-batch arrays hold both passes' batches in time order (backward batches
+  reversed, then forward ones), with run-level losses over all of them.
+  `save_params` and `debug` diagnostics cover the forward pass only. The
+  instance ends in the forward pass's state, ready to continue online.
+
+`process_data` itself never splits a recording. To do it by hand, adapt
+`emg[b:]` forwards with `source_fifo_from_calib=True` (seeds the source FIFO
+with the calibration's tail, also useful for live streams that start right
+where calibration ends), and `emg[:a]` with `process_data(..., reverse=True)`
+for a backward pass (offline only: filtering and extension still run
+forwards; only the adaptation order is reversed; spikes/sources come back in
+sample order, per-batch arrays in processing order). Filtering each slice
+separately restarts the filters at its edges, which `process_from_calib_end`
+avoids.
+
 ### Online simulation and full online mode
 
 Passing `processing_mode="online"` to `process_data()`/`init_data()`
@@ -165,9 +215,11 @@ you'll touch most often:
 |-------|---------|
 | `adapt_wh` / `adapt_sv` / `adapt_sd` | Turn whitening / separation-vector / centroid adaptation on or off independently |
 | `batch_ms` | Batch duration (ms); drives `batch_size = batch_ms * fs / 1000` |
-| `wh_learning_rate` / `sv_learning_rate` | Step-size hyperparameters — see the main README's [Optimization](../README.md#optimization) section to tune them |
+| `wh_learning_rate` / `sv_learning_rate`/`centroid_momentum` | Step-size hyperparameters — see the main README's [Optimization](../README.md#optimization) section to tune them |
 | `wh_mode` / `lr_mode` / `contrast_scope` | Mode switches for the whitening/separation-vector update — see [Mode choices](#mode-choices-wh_mode-lr_mode-contrast_scope) below |
 | `compute_loss` | Populate `wh_loss`/`sv_loss`/`wh_trace`/`wh_loss_total`/`sv_loss_total`/`total_loss` on the output |
+| `sv_loss_reduction` | How `sv_loss_total` reduces across units per batch: `"mean"` (default, independent of the unit count) or `"sum"` (1.0.0) |
+| `source_fifo_from_calib` / `backward_fifo_seed` | FIFO seeding when adapting from the calibration's end — see [Adapting from the end of the calibration window](#adapting-from-the-end-of-the-calibration-window) |
 | `debug` | Store full per-batch diagnostics in `outputs.diagnostics` |
 
 ### Mode choices: `wh_mode`, `lr_mode`, `contrast_scope`
@@ -294,7 +346,7 @@ Set only when `AdaptConfig.compute_loss=True` (`None` otherwise):
 | `sv_loss` | `Optional[torch.Tensor]` | `(batches, M)` | Separation-vector contrast loss, per batch and per unit |
 | `wh_trace` | `Optional[torch.Tensor]` | `(batches,)` | Trace of that batch's whitened covariance |
 | `wh_loss_total` | `Optional[torch.Tensor]` | scalar | Guarded `median(wh_loss)` over the whole run — see `AdaptDecomp._compute_losses()` |
-| `sv_loss_total` | `Optional[torch.Tensor]` | scalar | Guarded `median(sv_loss.nansum(dim=1))` — per-batch sum across units, then medianed across batches |
+| `sv_loss_total` | `Optional[torch.Tensor]` | scalar | Guarded median across batches of `sv_loss` reduced across units (mean or sum, per `sv_loss_reduction`) |
 | `total_loss` | `Optional[torch.Tensor]` | scalar | `wh_loss_total + sv_loss_total`, the single score used for Optuna/wandb search |
 
 Set only under other specific conditions:
@@ -303,7 +355,7 @@ Set only under other specific conditions:
 |-------|------|-------|---------|
 | `diagnostics` | `Optional[Dict[Any, Any]]` | keyed by batch index | Full per-batch diagnostic tensors; populated only when `AdaptConfig.debug=True` |
 | `gt_matched_indices` | `Optional[np.ndarray]` | `(M,)` | Index into a ground-truth unit set, one entry per unit; only set when the instance was built via `from_calibration()` from a calibration that went through `select_supervised` |
-| `roa` | `Optional[np.ndarray]` | `(M,)` | Rate of agreement against a ground-truth spike train, per unit. Mirrors `CBSSResult.roa`'s convention but is never computed here — a caller sets it after running its own comparison (e.g. `spikes.comparison.rate_of_agreement_paired`), as `optimize.py`'s `optimize_adapt_decomp_pooled_memory(compute_roa=True)` does |
+| `roa` | `Optional[np.ndarray]` | `(M,)` | Rate of agreement against a ground-truth spike train, per unit. Mirrors `CBSSResult.roa`'s convention but is never computed here — a caller sets it after running its own comparison (e.g. `spikes.comparison.rate_of_agreement_paired`), as `optimize.py`'s `optimize_adapt_decomp(compute_roa=True)` does |
 
 `to_dict()` (and therefore `outputs["key"]`/`outputs.get("key")`/`key in
 outputs`) only ever includes fields that aren't `None` — so a run without

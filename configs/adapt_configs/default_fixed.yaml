@@ -22,11 +22,13 @@ adapt_wh: false                   # Do not adapt whitening matrix V
 adapt_sv: false                   # Do not adapt separation matrix B
 adapt_sd: false                   # Do not adapt spike / base centroids
 compute_loss: true                # Log wh_loss, sv_loss, wh_trace each batch
+sv_loss_reduction: mean           # sv_loss_total across units: "mean" (unit-count independent) or "sum" (v1.0)
 save_params: false                # Save newly adapted parameters per batch (HDF5)
 
-# Main adaptation hyperparameters (unused: adapt_wh/adapt_sv are false)
+# Main adaptation hyperparameters (unused: adapt_wh/adapt_sv/adapt_sd are false)
 wh_learning_rate: 0.0             # Whitening learning rate
 sv_learning_rate: 0.0             # Separation-vector learning rate
+centroid_momentum: 1.0            # EMA momentum for centroid updates ()
 
 # Adaptation behaviour
 lr_mode: fixed                    # Step-size formula: "fixed" (v1's raw gradient) or "rel_error" (natural-gradient direction, needs its own tuning)
@@ -43,7 +45,6 @@ sv_tol: 1.0e-4                    # Early-exit threshold: ||ΔB||_F / ||B||_F < 
 # Spike detection
 spike_min_dist_ms: 10             # Minimum inter-spike interval for NMS (ms)
 spike_det_exp: 2.0                # Power source amplitude is raised to before peak detection/IQR gating/centroid updates
-centroid_momentum: 0.0            # EMA momentum for centroid updates (0 = no memory)
 
 # Constants -- numerical stability
 shrinkage: 1.0e-3                 # Tikhonov/Ledoit-Wolf shrinkage on FIFO covariance
@@ -57,6 +58,8 @@ ema_alpha: 0.95                   # EMA momentum used for update scaling by grad
 # Constants -- FIFO covariance estimation
 fifo_length: null                 # FIFO samples for covariance (null = auto: 2×D)
 source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
+source_fifo_from_calib: false     # Seed the source FIFO with the calibration's tail (online EMG starting at its end)
+backward_fifo_seed: forward_head  # process_from_calib_end backward-pass FIFO seed: "forward_head" or "calib_tail"
 max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
 
 # Debug
