@@ -43,7 +43,7 @@ sv_tol: 1.0e-4                    # Early-exit threshold: ||ΔB||_F / ||B||_F < 
 # Spike detection
 spike_min_dist_ms: 10             # Minimum inter-spike interval for NMS (ms)
 spike_det_exp: 2.0                # Power source amplitude is raised to before peak detection/IQR gating/centroid updates
-centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
+centroid_momentum: 0.8            # EMA momentum for centroid updates (0 = no memory)
 
 # Constants -- numerical stability
 shrinkage: 1.0e-3                 # Tikhonov/Ledoit-Wolf shrinkage on FIFO covariance
