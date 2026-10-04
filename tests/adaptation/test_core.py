@@ -716,7 +716,7 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
     assert streaming.decomp.ext_fifo is not None
 
     # adapter.spikes/sources (read directly off the instance) must match
-    # outputs.spikes/sources exactly, since optimize.py's _run_one_dataset relies on this.
+    # outputs.spikes/sources exactly, since optimize/scoring.py's _run_one_dataset relies on this.
     assert_close(eager.spikes, out_eager.spikes)
     assert_close(eager.sources, out_eager.sources)
     assert_close(streaming.spikes, out_streaming.spikes)

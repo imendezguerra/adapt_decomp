@@ -1,9 +1,9 @@
-"""Tests for adaptation/optimize.py's Pareto/multi-objective search:
+"""Tests for adaptation/optimize/'s Pareto/multi-objective search:
 optimize_adapt_decomp_pooled_memory_pareto / _pooled_disk_pareto, and their
 private dominance/front-maintenance helpers.
 
 Kept in its own file, separate from test_optimize.py, so the whole Pareto
-feature (this file plus its counterpart in optimize.py) stays deletable as
+feature (this file plus its counterpart, optimize/pareto.py) stays deletable as
 a unit without touching the single-objective search's own tests.
 
 Unit tests for the pure dominance/front logic are fast and unmarked; the
@@ -14,17 +14,17 @@ existing convention (see pyproject.toml's marker registration).
 from unittest.mock import patch
 
 import numpy as np
+import optuna
 import pytest
 
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize import (
     DEFAULT_PARAM_SPACE,
-    _dominates,
-    _save_study_snapshot,
-    _update_front,
     optimize_adapt_decomp_pooled_disk_pareto,
     optimize_adapt_decomp_pooled_memory_pareto,
 )
+from adapt_decomp.adaptation.optimize.pareto import _dominates, update_front
+from adapt_decomp.adaptation.optimize.persistence import save_study_snapshot
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 from tests.adaptation.test_optimize import (
     _make_pooled_disk_base_config,
@@ -32,7 +32,7 @@ from tests.adaptation.test_optimize import (
 )
 
 # ------------------------------------------------------------------
-# Unit layer: _dominates / _update_front -- pure logic, no Optuna/torch/IO
+# Unit layer: _dominates / update_front -- pure logic, no Optuna/torch/IO
 # ------------------------------------------------------------------
 
 
@@ -53,7 +53,7 @@ def test_dominates_mixed_dimensions_neither_dominates():
 
 def test_update_front_join_evicts_dominated_member():
     front = {0: (5.0, 5.0)}
-    joined, evicted = _update_front(front, 1, (3.0, 3.0))
+    joined, evicted = update_front(front, 1, (3.0, 3.0))
     assert joined is True
     assert evicted == [0]
     assert front == {1: (3.0, 3.0)}
@@ -61,7 +61,7 @@ def test_update_front_join_evicts_dominated_member():
 
 def test_update_front_no_join_when_dominated():
     front = {0: (1.0, 1.0)}
-    joined, evicted = _update_front(front, 1, (2.0, 2.0))
+    joined, evicted = update_front(front, 1, (2.0, 2.0))
     assert joined is False
     assert evicted == []
     assert front == {0: (1.0, 1.0)}  # unchanged
@@ -69,7 +69,7 @@ def test_update_front_no_join_when_dominated():
 
 def test_update_front_tie_joins_without_evicting():
     front = {0: (1.0, 1.0)}
-    joined, evicted = _update_front(front, 1, (1.0, 1.0))
+    joined, evicted = update_front(front, 1, (1.0, 1.0))
     assert joined is True
     assert evicted == []
     assert front == {0: (1.0, 1.0), 1: (1.0, 1.0)}
@@ -80,7 +80,7 @@ def test_update_front_dominating_point_evicts_every_dominated_resident():
     strictly < in at least one, for each) dominates and evicts all of
     them -- not just the ones it "beats" in a single dimension."""
     front = {0: (5.0, 5.0), 1: (5.0, 1.0), 2: (1.0, 5.0)}
-    joined, evicted = _update_front(front, 3, (1.0, 1.0))
+    joined, evicted = update_front(front, 3, (1.0, 1.0))
     assert joined is True
     assert sorted(evicted) == [0, 1, 2]
     assert front == {3: (1.0, 1.0)}
@@ -90,7 +90,7 @@ def test_update_front_mutually_non_dominated_members_both_survive():
     """Two points that are each better in a different dimension neither
     dominate one another -- both stay resident."""
     front = {0: (1.0, 5.0)}
-    joined, evicted = _update_front(front, 1, (5.0, 1.0))
+    joined, evicted = update_front(front, 1, (5.0, 1.0))
     assert joined is True
     assert evicted == []
     assert front == {0: (1.0, 5.0), 1: (5.0, 1.0)}
@@ -204,11 +204,13 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
         trial_counts_seen = []
 
         def _wrapped(best_dir_arg, study_arg, lock_arg):
-            trial_counts_seen.append(len(study_arg.trials))
-            return _save_study_snapshot(best_dir_arg, study_arg, lock_arg)
+            trial_counts_seen.append(
+                sum(t.state == optuna.trial.TrialState.COMPLETE for t in study_arg.trials)
+            )
+            return save_study_snapshot(best_dir_arg, study_arg, lock_arg)
 
         with patch(
-            "adapt_decomp.adaptation.optimize._save_study_snapshot",
+            "adapt_decomp.adaptation.optimize.search.save_study_snapshot",
             side_effect=_wrapped,
         ) as mock_save:
             optimize_adapt_decomp_pooled_memory_pareto(
@@ -220,7 +222,8 @@ class TestOptimizeAdaptDecompPooledMemoryPareto:
             )
 
         assert mock_save.call_count == 3
-        assert trial_counts_seen == [1, 2, 3]  # strictly growing, not 3 calls all at the end
+        # One snapshot per completed trial, not 3 calls all at the end
+        assert trial_counts_seen == [1, 2, 3]
 
     def test_on_trial_log_vars(self, make_optimize_kwargs):
         """Log dict carries objectives/values (the Pareto-shaped

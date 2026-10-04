@@ -1538,7 +1538,7 @@ class AdaptDecomp:
     def _compute_losses(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Aggregate wh_loss/sv_loss into guarded per-run scalars.
 
-        The single canonical scores for a run; adaptation/optimize.py's
+        The single canonical scores for a run; adaptation/optimize/'s
         Optuna objectives and scripts/run.py's wandb logging both read
         these directly.
 

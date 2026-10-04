@@ -1,5 +1,6 @@
 """Data loaders"""
 
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
@@ -283,6 +284,37 @@ def load_emg(path_emg: Union[str, Path], emg_loader: EmgLoaderName = "npz") -> n
     raise ValueError(f"Unknown emg_loader: {emg_loader!r}. Expected 'npz' or 'neuromotion'.")
 
 
+def emg_shape(path_emg: Union[str, Path], emg_loader: EmgLoaderName = "npz") -> Tuple[int, int]:
+    """Read a recording's EMG shape from its file header, without loading the data.
+
+    Args:
+        path_emg (Union[str, Path]): Path to the EMG recording.
+        emg_loader (EmgLoaderName, optional): On-disk format of path_emg.
+            Defaults to "npz".
+
+    Returns:
+        Tuple[int, int]: (samples, channels).
+
+    Raises:
+        ValueError: If emg_loader is not "npz" or "neuromotion".
+    """
+    if emg_loader == "npz":
+        with zipfile.ZipFile(path_emg) as archive, archive.open("emg.npy") as f:
+            version = np.lib.format.read_magic(f)
+            read_header = (
+                np.lib.format.read_array_header_1_0
+                if version == (1, 0)
+                else np.lib.format.read_array_header_2_0
+            )
+            shape, _, _ = read_header(f)
+        return int(shape[0]), int(shape[1])
+    if emg_loader == "neuromotion":
+        with h5py.File(path_emg, "r") as h5:
+            shape = h5["emg"].shape
+        return int(shape[0]), int(shape[1])
+    raise ValueError(f"Unknown emg_loader: {emg_loader!r}. Expected 'npz' or 'neuromotion'.")
+
+
 def load_gt(
     path_gt: Union[str, Path],
     n_samples: int,
@@ -456,6 +488,10 @@ class PooledDatasetDisk:
             gt_paired_bin = spikes_gt_full[:, calibration.gt_matched_indices]
 
         return emg, calibration, cbss_config, self.preprocess, gt_paired_bin
+
+
+# One entry of an optimize_adapt_decomp pool, in memory or on disk
+PooledDataset = Union[PooledDatasetMemory, PooledDatasetDisk]
 
 
 def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:

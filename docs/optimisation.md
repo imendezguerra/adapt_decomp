@@ -1,4 +1,4 @@
-# Optimisation (`adaptation/optimize.py`)
+# Optimisation (`adaptation/optimize/`)
 
 Optuna-based hyperparameter search for `AdaptConfig` fields (by default
 `wh_learning_rate`, `sv_learning_rate` and `centroid_momentum`). One entry
@@ -42,7 +42,7 @@ ends up scoring on `wh_loss` alone.
 
 ```mermaid
 flowchart LR
-    D["Dict[str, PooledDatasetMemory]\n(or PooledDatasetDisk) -- one entry or many"] --> S["unit_selection\n(CoV-ISI <= 0.3 by default)"]
+    D["Dict[str, PooledDatasetMemory]\n(or PooledDatasetDisk) -- one entry or many"] --> S["optional unit_selection\n(e.g. CoV-ISI <= 0.3)"]
     S --> O["optimize_adapt_decomp"]
     O -->|"one objective"| R1["best trial"]
     O -->|"several objectives"| F["Pareto front"]
@@ -77,6 +77,8 @@ result = optimize_adapt_decomp(
     n_trials=50,
     base_config=AdaptConfig(ext_fact=cbss_config.ext_fact),
     compute_roa=True,  # requires every dataset's ground truth
+    # no ground truth: drop compute_roa and pass unit_selection="unsupervised"
+    # (see Unit selection below)
 )
 print(result.best_config.wh_learning_rate, result.study.best_value)
 ```
@@ -163,10 +165,11 @@ flat, small memory footprint. The call is unchanged.
 
 ### Unit selection
 
-`unit_selection` sets which calibration units a search adapts and scores,
-applied once per dataset before the first trial:
+`unit_selection` (optional) sets which calibration units a search adapts and
+scores, applied once per dataset before the first trial:
 
-- **`"unsupervised"`** (default) — keeps the units passing
+- **`None`** (default) — every unit.
+- **`"unsupervised"`** — keeps the units passing
   `CBSSResult.unsupervised_mask(**unit_selection_kwargs)`, by default
   `{"cov_th": 0.3}`: regular firers, whose contrast is a reliable tracking
   signal. Dropped units are removed from the calibration, so they are not
@@ -174,7 +177,18 @@ applied once per dataset before the first trial:
   left with no unit is left out of the pool with a warning.
 - **`"supervised"`** — the ground-truth-matched units. Requires every
   dataset's ground truth; its loader already narrowed the calibration.
-- **`None`** — every unit (ablation).
+
+`"unsupervised"` is recommended for recordings without ground truth, where
+the calibration's units can't be validated otherwise:
+
+```python
+# No ground truth: adapt and score only regularly firing units during the search
+result = optimize_adapt_decomp(pool=pool, n_trials=50, unit_selection="unsupervised")
+```
+
+When the calibrations are already narrowed to ground-truth-matched units (as
+in the FDSI benchmark, `CBSSResult.select_supervised(roa_th=0.9)`), leave it
+at `None`.
 
 The final run (e.g. `scripts/run.py run`) adapts every calibration unit; the
 search only chooses parameters on the selected ones.
@@ -202,22 +216,39 @@ dominate, summing log losses (a geometric mean) is the scale-invariant
 fallback. Note that a unit with no spikes in a batch scores e² = 9 (the
 −3 contrast-error fallback).
 
-### Faster searches: worker processes vs concurrent trials
+### Faster searches: `n_cores` and `n_jobs`
 
-- **`n_workers`** (default `1`) spreads each trial's datasets over worker
-  processes, longest datasets first; each worker holds its shard of the pool
-  for the whole search and runs one torch thread. Trials themselves stay
-  sequential, so TPE sees every earlier result, results are reproducible for
-  any `n_workers`, and memory stays at about one pool. This is the
-  recommended way to speed up a pooled search (≈6–8× with 8 workers on a
-  30-recording pool).
-- **`n_jobs`** (default `1`) is passed straight to Optuna's
-  `study.optimize()` — concurrent trials as threads. The adaptation loop is
-  mostly Python, so threads give at most ≈2×, each suggestion is made without
-  the still-running trials' results, and exact reproducibility from
-  `random_seed` only holds at `n_jobs=1`. The default sampler adds
-  `constant_liar` when `n_jobs > 1` so concurrent trials aren't sent to the
-  same region.
+Two settings, with separate roles:
+
+- **`n_jobs`** (default `1`) sets the search: how many trials the sampler
+  suggests together, before it sees their results. The default sampler's 15
+  random start-up trials are always suggested together, which changes
+  nothing (they don't depend on results). `1` is the one-at-a-time search;
+  above 1 is a batched search, and the default sampler adds `constant_liar` so
+  a batch isn't sent to one region. With `random_seed`, `n_jobs` fixes the
+  suggested parameters on any machine.
+- **`n_cores`** (default: all physical cores this process may use, honouring
+  CPU affinity, containers and SLURM) sets only the speed.
+  `plan_resources` fills the cores with dataset runs first: up to
+  `n_cores // len(pool)` trials at once, each over up to `len(pool)` worker
+  processes holding their share of the pool; leftover cores become torch
+  threads per run. A batch larger than the trials that fit runs in waves.
+
+| Pool | Trials at once | Plan on 24 cores (trials x workers, threads each) |
+|---|---|---|
+| 3 datasets | 1 (`n_jobs=1`) | 1 x 3, 8 threads |
+| 3 datasets | 15 (start-up) | 8 x 3, 1 thread |
+| 12 datasets | 1 | 1 x 12, 2 threads |
+| 50 datasets | any | 1 x 24, 1 thread (2-3 datasets per worker) |
+
+Before any worker starts, the search predicts its peak memory from every
+dataset's own shape (samples, channels, extension factor, units) and checks
+it against the machine's or the job's limit. Over the limit it raises,
+naming the largest `n_cores` that fits; over the memory currently free it
+warns. A disk pool (`PooledDatasetDisk`) keeps nothing resident between
+runs, which helps when the pool itself is large. `n_cores` above the cores
+available, or more trials per batch than fit at once, raise or warn with
+the same kind of guidance.
 
 A search over the forward pass only (see
 [adaptation.md](adaptation.md#adapting-from-the-end-of-the-calibration-window))
@@ -324,6 +355,15 @@ The study runs under `directions=[...]`, one `"minimize"` per objective;
   `compute_roa=True` (or `"roa"` in `objectives`).
 - Any `Callable[[List[FrozenTrial]], FrozenTrial]` for another rule.
 
+The named rules are also available as `SELECTION_RULES` (name → function), to
+read a finished front with another rule without searching again:
+
+```python
+from adapt_decomp.adaptation.optimize import SELECTION_RULES
+
+knee_trial = SELECTION_RULES["knee"](result.pareto_front)
+```
+
 ## Sampler and reproducibility
 
 The default sampler is a **multivariate** `TPESampler(n_startup_trials=15,
@@ -336,10 +376,10 @@ units are tracked). Pass `sampler=` to use another; `random_seed` (default
 `random_seed` never has to account for calibration's own ICA randomness (see
 [calibration.md#reproducibility](calibration.md#reproducibility)), and each
 trial's `AdaptDecomp` run is otherwise deterministic per
-[adaptation.md#reproducibility](adaptation.md#reproducibility). Exact
-reproducibility holds for any `n_workers`, but only at `n_jobs=1`.
-`n_workers > 1` runs each dataset with one torch thread, which can change
-floating-point rounding relative to an in-process run.
+[adaptation.md#reproducibility](adaptation.md#reproducibility). The
+suggested parameters depend only on `random_seed` and `n_jobs`, not on
+`n_cores`. `n_cores` sets the torch threads per run, which can change the
+last digits of the losses (and, rarely, which trial TPE ranks higher).
 
 `best_result_path`'s `config.yaml`/`study.pkl` capture the chosen config and
 the study, but not the search settings that produced them. Keep the
@@ -392,11 +432,11 @@ param_space:                       # omit to use DEFAULT_PARAM_SPACE
   centroid_momentum: ["float", 0.0, 0.95]
 objectives: ["sv_loss"]            # one = single-objective; two or more = Pareto front
 selection: "min_sv_loss"           # Pareto only: "min_sv_loss" | "knee" | "max_roa_mean"
-unit_selection: "unsupervised"     # "unsupervised" | "supervised" | null
-unit_selection_kwargs: {cov_th: 0.3}
+unit_selection: null               # null = every unit | "unsupervised" (recommended without GT) | "supervised"
+unit_selection_kwargs: {cov_th: 0.3}   # only used by "unsupervised"
 n_trials: 100
 n_jobs: 1
-n_workers: 1
+n_cores: null
 random_seed: 1909
 # sampler: {n_startup_trials: 30, multivariate: true}   # TPESampler kwargs
 ```

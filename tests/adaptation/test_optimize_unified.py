@@ -1,7 +1,8 @@
-"""Tests for adaptation/optimize.py's single entry point, optimize_adapt_decomp:
+"""Tests for adaptation/optimize/'s single entry point, optimize_adapt_decomp:
 dispatch over pool kind (memory/disk) and objective count (single/Pareto),
-unit selection, front selection rules, the default sampler, and worker
-processes. End-to-end searches are marked slow; the rest is pure logic.
+unit selection, front selection rules and the default sampler. Worker
+processes are tested in test_optimize_resources.py. End-to-end searches are
+marked slow; the rest is pure logic.
 """
 
 import numpy as np
@@ -11,12 +12,12 @@ import pytest
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize import (
     OptimisationResult,
-    _make_study,
-    _select_knee,
-    _select_pool_units,
     optimize_adapt_decomp,
     optimize_adapt_decomp_pooled_memory,
 )
+from adapt_decomp.adaptation.optimize.pareto import _select_knee
+from adapt_decomp.adaptation.optimize.search import _make_study
+from adapt_decomp.adaptation.optimize.units import select_pool_units
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 from tests.adaptation.test_optimize import (
     _make_pooled_disk_base_config,
@@ -90,14 +91,14 @@ def test_unsupervised_unit_selection_subsets_calibration_and_gt_and_drops_empty_
     empty, _ = _memory_pool(make_optimize_kwargs, ("empty",), cov_isi=[0.6, 0.5], gt=True)
     gt_before = pool["keep"].gt_paired_bin
 
-    selected = _select_pool_units({**pool, **empty}, "unsupervised", {"cov_th": 0.3})
+    selected = select_pool_units({**pool, **empty}, "unsupervised", {"cov_th": 0.3})
 
     assert set(selected) == {"keep"}
     assert selected["keep"].calibration.sources.shape[1] == 1
     np.testing.assert_array_equal(selected["keep"].gt_paired_bin, gt_before[:, [0]])
     with pytest.raises(ValueError, match="keeps any unit"):
-        _select_pool_units(empty, "unsupervised", {"cov_th": 0.3})
-    assert _select_pool_units(empty, None, {}) is empty  # ablation: every unit kept
+        select_pool_units(empty, "unsupervised", {"cov_th": 0.3})
+    assert select_pool_units(empty, None, {}) is empty  # ablation: every unit kept
 
 
 @pytest.mark.parametrize(
@@ -169,12 +170,23 @@ def test_dispatches_on_pool_kind_and_objective_count(
 
 
 @pytest.mark.slow
-def test_unit_selection_runs_the_search_on_the_selected_units(make_optimize_kwargs, tmp_path):
+@pytest.mark.parametrize(
+    "kwargs, n_units",
+    [({}, 2), (dict(unit_selection="unsupervised"), 1)],
+    ids=["default_keeps_every_unit", "unsupervised"],
+)
+def test_unit_selection_runs_the_search_on_the_selected_units(
+    make_optimize_kwargs, tmp_path, kwargs, n_units
+):
     pool, base_config = _memory_pool(make_optimize_kwargs, cov_isi=[0.1, 0.5])
     result = optimize_adapt_decomp(
-        pool=pool, base_config=base_config, n_trials=1, best_result_path=str(tmp_path / "best")
+        pool=pool,
+        base_config=base_config,
+        n_trials=1,
+        best_result_path=str(tmp_path / "best"),
+        **kwargs,
     )
-    assert result.outputs["dataset_a"].spikes.shape[1] == 1
+    assert result.outputs["dataset_a"].spikes.shape[1] == n_units
 
 
 @pytest.mark.slow
@@ -189,31 +201,6 @@ def test_knee_selection_builds_best_config_from_the_knee_member(make_optimize_kw
     )
     knee = _select_knee(result.pareto_front)
     assert result.best_config.wh_learning_rate == pytest.approx(knee.params["wh_learning_rate"])
-
-
-@pytest.mark.slow
-def test_worker_processes_reproduce_the_in_process_search(make_optimize_kwargs):
-    """Spreading each trial's datasets over worker processes keeps trials
-    sequential, so suggestions and per-dataset losses match an in-process run."""
-    pool, base_config = _memory_pool(make_optimize_kwargs, ("dataset_a", "dataset_b"))
-
-    def run(n_workers):
-        seen = []
-        optimize_adapt_decomp(
-            pool=pool,
-            base_config=base_config,
-            n_trials=3,
-            n_workers=n_workers,
-            on_trial=seen.append,
-        )
-        return seen
-
-    for in_process, workers in zip(run(1), run(2)):
-        assert workers["params"] == in_process["params"]
-        for name in pool:
-            assert workers["per_dataset"][name]["sv_loss"] == pytest.approx(
-                in_process["per_dataset"][name]["sv_loss"], rel=1e-4
-            )
 
 
 @pytest.mark.slow

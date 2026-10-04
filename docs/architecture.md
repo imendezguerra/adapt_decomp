@@ -40,7 +40,9 @@ flowchart TB
         AdaptConfig["config.py — AdaptConfig"]
         DataStruct["data_structures.py —\nData, RawData, Decomposition, AdaptationResult"]
         ops["ops.py — per-batch tensor primitives"]
-        optimize["optimize.py — Optuna search"]
+        optimize["optimize/ — Optuna search
+(search, scoring, units, resources,
+workers, pareto, persistence)"]
         io["io.py — HDF5 save/load"]
     end
 

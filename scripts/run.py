@@ -275,12 +275,12 @@ def _run_optuna(
         base_config=config,
         compute_roa=compute_roa,
         roa_kwargs=roa_kwargs,
-        unit_selection=optim_settings.get("unit_selection", "unsupervised"),
+        unit_selection=optim_settings.get("unit_selection"),
         unit_selection_kwargs=optim_settings.get("unit_selection_kwargs"),
         selection=optim_settings.get("selection", "min_sv_loss"),
         n_trials=n_trials if n_trials is not None else optim_settings.get("n_trials", 100),
         n_jobs=optim_settings.get("n_jobs", 1),
-        n_workers=optim_settings.get("n_workers", 1),
+        n_cores=optim_settings.get("n_cores"),
         sampler=optuna.samplers.TPESampler(seed=random_seed, **sampler_kwargs)
         if sampler_kwargs
         else None,
@@ -312,7 +312,7 @@ def run_optuna(
         ...,
         "--optim_config",
         help="Path to Optuna search-settings YAML -- param_space/objectives/selection/"
-        "unit_selection/sampler/n_trials/n_jobs/n_workers/random_seed. See "
+        "unit_selection/sampler/n_trials/n_jobs/n_cores/random_seed. See "
         "configs/sweep_configs/sweep_optuna.yaml.",
     ),
     wandb_project_name: str = typer.Option(

@@ -142,7 +142,7 @@ def make_adapter():
 @pytest.fixture
 def make_optimize_kwargs():
     """Factory fixture: tiny synthetic CBSSResult/CBSSConfig for
-    adaptation/optimize.py smoke tests -- no real EMG data needed.
+    adaptation/optimize/ smoke tests -- no real EMG data needed.
 
     Returns:
         Callable[[], Tuple[Dict, int]]: Call with no arguments; reseeds
@@ -203,3 +203,31 @@ def make_optimize_kwargs():
         ), M
 
     return _make
+
+
+@pytest.fixture(autouse=True)
+def _one_core_by_default(monkeypatch):
+    """Make optimize_adapt_decomp's default n_cores 1, so searches run in-process.
+
+    Tests of the worker processes request cores explicitly (see
+    allow_cores below), keeping the rest of the suite fast and independent of
+    the machine's core count.
+    """
+    from adapt_decomp.adaptation.optimize import resources
+
+    monkeypatch.setattr(resources, "available_cores", lambda: 1)
+
+
+@pytest.fixture
+def allow_cores(monkeypatch):
+    """Factory fixture: let optimize_adapt_decomp use up to n cores in this test.
+
+    Returns:
+        Callable[[int], None]: Call with the number of cores to allow.
+    """
+    from adapt_decomp.adaptation.optimize import resources
+
+    def _allow(n: int) -> None:
+        monkeypatch.setattr(resources, "available_cores", lambda: n)
+
+    return _allow

@@ -85,7 +85,7 @@ class CBSSResult:
     # ------------------------------------------------------------------
 
     def to_adapt_tensors(self) -> Dict[str, Optional[torch.Tensor]]:
-        """Unpack this result into the raw calibration tensors AdaptDecomp/optimize.py need.
+        """Unpack this result into the raw calibration tensors AdaptDecomp/optimize need.
 
         Returns:
             Dict[str, Optional[torch.Tensor]]: "whitening", "sep_vectors"

@@ -1,4 +1,4 @@
-"""Tests for adaptation/optimize.py: optimize_adapt_decomp_pooled_memory / _pooled_disk.
+"""Tests for adaptation/optimize/: optimize_adapt_decomp_pooled_memory / _pooled_disk.
 
 All marked slow -- each spins up a real (if tiny) Optuna study end to end.
 """

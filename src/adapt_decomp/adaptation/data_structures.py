@@ -477,7 +477,8 @@ class Decomposition:
             Z_w = X_w @ self.whitening.T  # [cs, fifo_samples, D]
             # stable_cov batches over the leading [cs] dim (replaces the old torch.bmm).
             Rz = stable_cov(Z_w, rowvar=False, rho=self.shrinkage, I=self.I, ddof=0)  # [cs, D, D]
-            signs, logdets = torch.linalg.slogdet(Rz)  # [cs]
+            # One matrix at a time: batched slogdet stalls on CPU with more than one torch thread
+            signs, logdets = (torch.stack(v) for v in zip(*(torch.linalg.slogdet(r) for r in Rz)))
             valid = signs > 0
             if not valid.any():
                 continue
@@ -770,7 +771,7 @@ class AdaptationResult:
             (per-unit, not built here) -- callers set it after computing
             their own comparison (e.g.
             adapt_decomp.spikes.comparison.rate_of_agreement_paired), such
-            as adaptation/optimize.py's optimize_adapt_decomp(compute_roa=True).
+            as adaptation/optimize/'s optimize_adapt_decomp(compute_roa=True).
         sil (Optional[np.ndarray]): Per-unit silhouette score with shape
             (M,), from the already-detected spike population against a
             freshly found base-peak population over the full recording.

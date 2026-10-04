@@ -355,7 +355,7 @@ Set only under other specific conditions:
 |-------|------|-------|---------|
 | `diagnostics` | `Optional[Dict[Any, Any]]` | keyed by batch index | Full per-batch diagnostic tensors; populated only when `AdaptConfig.debug=True` |
 | `gt_matched_indices` | `Optional[np.ndarray]` | `(M,)` | Index into a ground-truth unit set, one entry per unit; only set when the instance was built via `from_calibration()` from a calibration that went through `select_supervised` |
-| `roa` | `Optional[np.ndarray]` | `(M,)` | Rate of agreement against a ground-truth spike train, per unit. Mirrors `CBSSResult.roa`'s convention but is never computed here — a caller sets it after running its own comparison (e.g. `spikes.comparison.rate_of_agreement_paired`), as `optimize.py`'s `optimize_adapt_decomp(compute_roa=True)` does |
+| `roa` | `Optional[np.ndarray]` | `(M,)` | Rate of agreement against a ground-truth spike train, per unit. Mirrors `CBSSResult.roa`'s convention but is never computed here — a caller sets it after running its own comparison (e.g. `spikes.comparison.rate_of_agreement_paired`), as `optimize_adapt_decomp(compute_roa=True)` does |
 
 `to_dict()` (and therefore `outputs["key"]`/`outputs.get("key")`/`key in
 outputs`) only ever includes fields that aren't `None` — so a run without
@@ -379,7 +379,7 @@ outputs = adapter.process_data(emg)
 ```
 
 This is a per-batch HDF5 trace (`adaptation/io.py`), distinct from
-`optimize.py`'s `best_result_path`, which snapshots only the winning trial's
+`optimize_adapt_decomp`'s `best_result_path`, which snapshots only the winning trial's
 final `AdaptationResult` — see the main README's
 [Optimization](../README.md#optimization) section.
 

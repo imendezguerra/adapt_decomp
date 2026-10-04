@@ -35,7 +35,7 @@ def _make_result(
 
 def test_to_adapt_tensors_transposes_sep_vectors_and_matches_shapes():
     """to_adapt_tensors() should reshape sep_vectors from [dim, n_mu] (this
-    class's own storage convention) to [n_mu, dim] (AdaptDecomp/optimize.py's),
+    class's own storage convention) to [n_mu, dim] (AdaptDecomp/optimize's),
     and leave every other field's shape unchanged, as float32 tensors."""
     n_mu, T, D, C = 3, 20, 6, 2
     result = _make_result(n_mu=n_mu, T=T, D=D, C=C)

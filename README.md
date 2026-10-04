@@ -24,7 +24,7 @@ flowchart LR
         AD -->|".process_data(emg, ...)"| OUT
     end
 
-    subgraph OPT["Optimisation — adaptation/optimize.py"]
+    subgraph OPT["Optimisation — adaptation/optimize/"]
         O["optimize_adapt_decomp\n(in-memory or on-disk pool,\none objective or several)"]
         FRONT["Pareto front\n(study.best_trials)"]
         BEST["best AdaptConfig"]
@@ -85,7 +85,7 @@ pieces connect.
 | [docs/architecture.md](docs/architecture.md) | Repo layout, subpackage dependencies, how objects hand off between stages |
 | [docs/calibration.md](docs/calibration.md) | `cbss/`: running CBSS on raw EMG, loading/reusing an existing calibration |
 | [docs/adaptation.md](docs/adaptation.md) | `adaptation/`: the three ways to build an `AdaptDecomp` and run it |
-| [docs/optimisation.md](docs/optimisation.md) | `adaptation/optimize.py`: single-contraction and pooled hyperparameter search — single-objective (`objective`) and Pareto/multi-objective (`objectives`) |
+| [docs/optimisation.md](docs/optimisation.md) | `adaptation/optimize/`: single-contraction and pooled hyperparameter search — single-objective (`objective`) and Pareto/multi-objective (`objectives`) |
 
 ### Where to start
 
