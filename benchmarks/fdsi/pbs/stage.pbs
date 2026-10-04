@@ -1,0 +1,24 @@
+#!/bin/bash
+# One stage of the FDSI benchmark as a PBS Pro job (an array job for calibrate/search/apply).
+# Submitted by submit.sh, which sets the resources (-l), the array range (-J) and
+# STAGE, SPEC and CHUNK (-v). Each subjob runs CHUNK tasks: [index * CHUNK, (index + 1) * CHUNK).
+#PBS -N fdsi_benchmark
+#PBS -j oe
+
+set -euo pipefail
+
+# Site-specific: make conda available and activate the environment (edit for your cluster)
+# module load anaconda3/personal
+# source activate adapt_decomp
+
+cd "$PBS_O_WORKDIR"
+
+# One thread per run, so results don't depend on the node (python -m benchmarks.fdsi sets it too)
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+
+if [ "$STAGE" = "collect" ]; then
+    python -m benchmarks.fdsi collect --spec "$SPEC"
+else
+    python -m benchmarks.fdsi "$STAGE" --spec "$SPEC" \
+        --array-index "${PBS_ARRAY_INDEX:-0}" --chunk-size "${CHUNK:-1}"
+fi

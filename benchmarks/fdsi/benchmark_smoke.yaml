@@ -1,0 +1,46 @@
+# A small version of benchmark.yaml for checking the pipeline end to end on one machine:
+# one subject at 30 dB, the pool's three conditions plus a held-out one, a short CBSS search and
+# 4 trials per search. Its numbers are not meaningful.
+
+name: benchmark_smoke
+data_root: data/fdsi_benchmark/data
+outputs_root: data/fdsi_benchmark/outputs/benchmark_smoke
+v10_outputs_root: data/fdsi_benchmark/outputs
+
+grid:
+  subjects: [sub-01]
+  conditions: [staircase, triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
+  snr_levels: [30]
+  fs: 2048
+  cal_duration_s: 5.0
+  iso_duration_s: 5.0
+  tol_spike_ms: 2.0
+
+calibration:
+  cbss_config: {fs: 2048, ext_fact: 10, sil_th: 0.9, random_seed: 42, ica_iter: 100, search_iter: 40, save_emg: true, device: cpu}
+  supervised_roa_th: 0.9
+
+pool:
+  subject: sub-01
+  snr: 30
+  conditions: [triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
+
+search:
+  base_config: configs/adapt_configs/default_muniverse.yaml
+  overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
+  param_space: null
+  n_trials: 4
+  n_jobs: 2
+  random_seed: 42
+  unit_selection: null
+  compute_roa: true
+
+searches:
+  sv_mean:     {objectives: [sv_loss], sv_loss_reduction: mean}
+  sv_sum:      {objectives: [sv_loss], sv_loss_reduction: sum}
+  pareto_mean: {objectives: [wh_loss, sv_loss], selection: min_sv_loss, sv_loss_reduction: mean}
+  pareto_sum:  {objectives: [wh_loss, sv_loss], selection: min_sv_loss, sv_loss_reduction: sum}
+  roa:         {objectives: [roa]}
+
+apply:
+  fixed_config: configs/adapt_configs/default_fixed.yaml
