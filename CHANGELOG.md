@@ -30,14 +30,49 @@ and this project follows [Semantic Versioning](https://semver.org/).
   units per batch.
 - `optimize_adapt_decomp`: one search entry point for in-memory or on-disk pools and one or
   several objectives, returning an `OptimisationResult`. New options:
-  - `unit_selection` (`"unsupervised"` with `{"cov_th": 0.3}` by default, `"supervised"`,
-    or `None`): which calibration units a search adapts and scores;
+  - `unit_selection` (`None` by default, every unit; `"unsupervised"`, CoV-ISI ≤ 0.3 via
+    `unit_selection_kwargs`, recommended for recordings without ground truth; or
+    `"supervised"`): which calibration units a search adapts and scores;
   - `selection` (`"min_sv_loss"`, `"knee"`, `"max_roa_mean"`, or a callable): which Pareto
     front member builds the best config;
-  - `n_workers`: spread each trial's datasets over worker processes (reproducible).
+  - `n_cores` (default: all physical cores available, SLURM- and PBS-aware): spread runs over worker
+    processes first, leftover cores as torch threads per run (`plan_resources`); sets only
+    the speed;
+  - `n_jobs` now means trials suggested together (a synchronous batch), so the suggested
+    parameters depend on `random_seed` and `n_jobs`, not on the machine; the default
+    sampler's random start-up trials always run as one batch;
+  - a memory check before any worker starts: predicted from each dataset's shape, raising
+    over the machine's or job's limit and warning over the memory currently free, with
+    guidance on what to change. Results are not bit-identical to one-thread runs.
 - `CBSSResult.unsupervised_mask()`: the quality-threshold mask behind `select_unsupervised()`.
 - `scripts/run.py run_optuna` reads `objectives` (Pareto search from the CLI), `selection`,
-  `unit_selection`/`unit_selection_kwargs`, `sampler` and `n_workers` from `--optim_config`.
+  `unit_selection`/`unit_selection_kwargs`, `sampler` and `n_cores` from `--optim_config`.
+- `adapt_decomp.utils.system`: `available_cores()`/`available_memory()` (moved from
+  `adaptation/optimize/resources.py`, still re-exported from `adaptation.optimize`), now also
+  honouring PBS (`NCPUS`, `PBS_NUM_PPN`) and cgroup v1 memory limits; `describe_system()` (host,
+  scheduler job, OS, CPU/GPU/memory, Python and package versions).
+- `adapt_decomp.utils.provenance`: `build_metadata()`/`write_metadata()`/`read_metadata()` for a
+  result's metadata file (dates, run time, machine, git remote/commit/dirty state with a saved
+  diff patch, the command, and the lines that reproduce it), plus `git_state()`.
+- `benchmarks/fdsi/`: the FDSI benchmark as a spec (`benchmark.yaml`) and a CLI
+  (`python -m benchmarks.fdsi`) with one command per stage (`calibrate`, `search`, `apply`,
+  `collect`, `import-v10`, `verify`), content-hashed caching, a metadata file next to every
+  output, and PBS Pro array-job scripts. Its tables include `calibration_units.csv` (one row per
+  calibrated unit: the simulated motor unit it matches, `gt_unit`, and its calibration RoA, SIL
+  and CoV-ISI), and every per-unit table carries `gt_unit`, so runs with different calibrations
+  can be paired unit by unit. Stage code versions are part of the cache keys.
+- `benchmarks/fdsi/report.ipynb` (with `benchmarks/fdsi/report.py`): the benchmark's results,
+  read from the collected tables only; `benchmarks/fdsi/dataset.ipynb`: a tour of the raw data.
+- `adapt_decomp.adaptation.optimize.front_mask()`: the Pareto front of a finished search's
+  trials table.
+- `plot_search_landscape`, `plot_search_front` and `plot_search_parameters`
+  (`adapt_decomp.utils.plots`): static plots of a search, drawn from its trials table
+  (`study.trials_dataframe()`) rather than a pickled study; `plot_metric_heatmap` takes `cmap`
+  and `center`.
+- A documentation site (MkDocs Material, `mkdocs.yml`), published to GitHub Pages from `main`:
+  getting started, the guides, tested how-to guides (`docs/snippets/`), the rendered notebooks,
+  the FDSI benchmark and an API reference generated from the docstrings. Build it with the new
+  `docs` extra (`make docs`, `make docs-build`).
 
 ### Changed
 
@@ -57,6 +92,15 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `n_jobs > 1`), and `DEFAULT_PARAM_SPACE` includes `centroid_momentum` (0–0.95).
 - Search results are staged through `<best_result_path>_temp`, and `study.pkl` is
   snapshotted after every trial in single-objective searches too.
+- `adaptation/optimize.py` is now the subpackage `adaptation/optimize/`, one file per purpose
+  (`search`, `scoring`, `units`, `resources`, `workers`, `pareto`, `persistence`,
+  `deprecated`). Public imports from `adapt_decomp.adaptation.optimize` are unchanged.
+  Internal helpers moved, and those shared between files dropped their leading underscore
+  (e.g. `_score_dataset` is now `optimize.scoring.score_dataset`). The Pareto-front rules are
+  public as `SELECTION_RULES`. Log records name the submodule; a loguru filter on
+  `adapt_decomp.adaptation.optimize` still matches them.
+- `ci/check_deps_sync.py` checks every pyproject extra (`dev`, `docs`) against
+  `environment.yaml`, including its `pip:` entries, instead of a fixed list of names.
 
 ### Deprecated
 
@@ -70,6 +114,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `sv_epochs > 1` always stopped after the first epoch.
 - `load_example`'s legacy MATLAB calibrations stored `cov_isi` in percent; it is now a fraction,
   like CBSS's, so `cov_th` filters apply to them correctly.
+- `adapt_decomp.__all__` listed six functions as objects rather than names, so
+  `from adapt_decomp import *` raised `TypeError`.
 
 ## [1.0.0] - 2026-09-22
 

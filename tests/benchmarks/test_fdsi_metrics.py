@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 from benchmarks.fdsi import fdsi
@@ -14,6 +15,17 @@ class _Outputs:
     def __init__(self, spikes: np.ndarray, sil=None):
         self.spikes = torch.from_numpy(spikes.astype(np.int32))
         self.sil = sil
+
+
+class _Calibration:
+    """A minimal stand-in for CBSSResult: spikes, its ground-truth match and quality metrics."""
+
+    def __init__(self, n_units: int, gt_matched_indices=None, roa=None, sil=None, cov_isi=None):
+        self.spikes = np.zeros((10, n_units), dtype=np.int32)
+        self.gt_matched_indices = gt_matched_indices
+        self.roa = roa
+        self.sil = sil
+        self.cov_isi = cov_isi
 
 
 def _spike_train(n_samples: int, n_units: int, period: int = 40) -> np.ndarray:
@@ -62,6 +74,30 @@ def test_load_raw_emg_reads_the_noisy_npz(tmp_path):
     )
 
 
+def test_raw_data_loaders_read_the_fdsi_clean_and_noisy_files(tmp_path):
+    clean = tmp_path / "sub-01" / "clean"
+    noisy = tmp_path / "sub-01" / "noisy"
+    clean.mkdir(parents=True)
+    noisy.mkdir(parents=True)
+    stem = "sub-01_FDSI_staircase"
+    emg = np.random.randn(20, 3).astype(np.float32)
+    np.savez(clean / f"{stem}_emg.npz", emg=emg)
+    np.savez(clean / f"{stem}_angle.npz", angle=np.linspace(0, 40, 20))
+    np.savez(clean / f"{stem}_effort.npz", effort=np.full(20, 0.15))
+    (clean / f"{stem}_metadata.json").write_text('{"n_channels": 3, "fs": 2048}')
+    (noisy / f"{stem}_snr30dB_noise_metadata.json").write_text('{"snr_db_target": 30}')
+
+    np.testing.assert_array_equal(fdsi.load_clean_emg(tmp_path, "sub-01", "staircase"), emg)
+    angle = fdsi.load_angle_profile(tmp_path, "sub-01", "staircase")
+    assert angle.dtype == np.float32 and angle[-1] == 40
+    assert fdsi.load_effort_profile(tmp_path, "sub-01", "staircase")[0] == pytest.approx(0.15)
+    assert fdsi.load_recording_metadata(tmp_path, "sub-01", "staircase") == {
+        "n_channels": 3,
+        "fs": 2048,
+    }
+    assert fdsi.load_noise_metadata(tmp_path, "sub-01", "staircase", 30) == {"snr_db_target": 30}
+
+
 def test_load_gt_full_bin_selects_and_orders_the_matched_units(tmp_path):
     path = fdsi.gt_spikes_path(tmp_path, "sub-01", "triangular-ramp40s")
     path.parent.mkdir(parents=True)
@@ -106,6 +142,7 @@ def test_unit_metrics_of_a_perfect_triangular_result():
     metrics = fdsi.unit_metrics(
         _Outputs(spikes, sil=np.array([0.9, 0.8])),
         spikes,
+        _Calibration(2, gt_matched_indices=np.array([7, 3]), roa=np.array([0.95, 1.0])),
         "triangular-ramp10s",
         cal_end=400,
         iso_dur=400,
@@ -114,6 +151,8 @@ def test_unit_metrics_of_a_perfect_triangular_result():
     )
 
     assert list(metrics["unit"]) == [0, 1]
+    assert list(metrics["gt_unit"]) == [7, 3]  # the simulation motor units they track
+    np.testing.assert_allclose(metrics["roa_calib"], [0.95, 1.0])
     for column in ("roa_full", "roa_after_cal", "roa_first_iso", "roa_ramp", "roa_last_iso"):
         np.testing.assert_allclose(metrics[column], [1.0, 1.0])
     np.testing.assert_allclose(metrics["sil"], [0.9, 0.8])
@@ -123,14 +162,46 @@ def test_unit_metrics_of_a_perfect_triangular_result():
 
 def test_unit_metrics_without_phases_or_ground_truth():
     spikes = _spike_train(2000, 3)
-    staircase = fdsi.unit_metrics(_Outputs(spikes), spikes, "staircase", 400, 400, 2048, 1.0)
-    no_gt = fdsi.unit_metrics(_Outputs(spikes), None, "staircase", 400, 400, 2048, 1.0)
+    calibration = _Calibration(3)  # no supervised match
+    staircase = fdsi.unit_metrics(
+        _Outputs(spikes), spikes, calibration, "staircase", 400, 400, 2048, 1.0
+    )
+    no_gt = fdsi.unit_metrics(_Outputs(spikes), None, calibration, "staircase", 400, 400, 2048, 1.0)
 
     assert staircase["roa_ramp"].isna().all()  # phases only for triangular contractions
     assert staircase["roa_after_cal"].notna().all()
     assert no_gt["roa_full"].isna().all()
     assert (no_gt["n_spikes_gt"] == -1).all()
     assert no_gt["sil"].isna().all()
+    assert (no_gt["gt_unit"] == -1).all() and no_gt["roa_calib"].isna().all()
+
+
+def test_calibration_unit_metrics_list_each_unit_with_its_ground_truth_match():
+    calibration = _Calibration(
+        3,
+        gt_matched_indices=np.array([12, 0, 5]),
+        roa=np.array([0.97, 0.91, 1.0]),
+        sil=np.array([0.95, 0.85, 0.9]),
+        cov_isi=np.array([0.1, 0.2, 0.15]),
+    )
+    units = fdsi.calibration_unit_metrics(calibration)
+
+    assert list(units.columns) == ["unit", "gt_unit", "roa_calib", "sil_calib", "cov_isi_calib"]
+    assert list(units["unit"]) == [0, 1, 2]
+    assert list(units["gt_unit"]) == [12, 0, 5]
+    np.testing.assert_allclose(units["roa_calib"], [0.97, 0.91, 1.0])
+    assert int((units["sil_calib"] >= 0.9).sum()) == 2
+
+
+def test_with_recording_labels_prepends_the_recording_and_branch():
+    units = fdsi.calibration_unit_metrics(_Calibration(2))
+    labelled = fdsi.with_recording_labels(units, "sub-01", "staircase", 30, branch="sv_mean")
+    unlabelled = fdsi.with_recording_labels(units, "sub-01", "staircase", 30)
+
+    assert list(labelled.columns[:5]) == ["branch", "recording", "sub", "condition", "snr"]
+    assert set(labelled["recording"]) == {"sub-01_FDSI_staircase_snr30dB"}
+    assert list(unlabelled.columns[:4]) == ["recording", "sub", "condition", "snr"]
+    assert len(labelled) == len(units)
 
 
 def test_spikes_digest_depends_only_on_the_spikes_and_their_shape():

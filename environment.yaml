@@ -6,7 +6,7 @@
 # Installs the CPU build of pytorch. For GPU acceleration install a CUDA build of
 # torch afterwards (https://pytorch.org/get-started/locally/).
 #
-# Keep in sync with pyproject.toml's lower bounds (checked by ci/check_deps_sync.py).
+# Keep in sync with pyproject.toml's lower bounds and extras (checked by ci/check_deps_sync.py).
 name: adapt_decomp
 channels:
   - conda-forge
@@ -38,5 +38,11 @@ dependencies:
   - pre-commit==4.6.2
   - ipykernel==7.2.0
   - pip:
+      # Docs (pyproject's docs extra), from PyPI: conda-forge can lag behind these releases
+      - mkdocs==1.6.1
+      - mkdocs-material==9.7.7
+      - mkdocstrings==1.0.6
+      - mkdocstrings-python==2.0.9
+      - mkdocs-jupyter==0.26.3
       # The package itself (dependencies above already satisfy pyproject.toml).
       - -e .

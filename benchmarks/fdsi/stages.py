@@ -316,16 +316,22 @@ def calibrate(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         )
     except ValueError as exc:
         logger.warning(f"calibrate {task.id}: skipped, {exc}")
-        _remove([paths["result"], paths["config"]])
+        _remove([paths["result"], paths["config"], paths["units"]])
         return {"status": "skipped", "reason": str(exc), "inputs": inputs}
+
+    # Per-unit ground-truth match, RoA, SIL and CoV-ISI over the calibration window
+    units = fdsi.with_recording_labels(
+        fdsi.calibration_unit_metrics(result), rec.sub, rec.cond, rec.snr
+    )
 
     # Save
     _atomic(paths["result"], result.save)
     _atomic(paths["config"], cbss_config.to_yaml)
+    _atomic(paths["units"], lambda p: units.to_csv(p, index=False))
     return {
         "status": "done",
         "inputs": inputs,
-        "outputs": {"result": paths["result"].name, "config": paths["config"].name},
+        "outputs": {k: paths[k].name for k in ("result", "config", "units")},
         "digest": {
             "n_units": int(result.spikes.shape[1]),
             "spikes_sha256": fdsi.spikes_digest(result.spikes),
@@ -506,13 +512,22 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         spec.data_root, rec.sub, rec.cond, cbss_result, n_samples=outputs.spikes.shape[0]
     )
     outputs.roa = fdsi.compute_roa_for_result(outputs, gt_full_bin, spec.fs, spec.tol_spike_ms)
-    metrics = fdsi.unit_metrics(
-        outputs, gt_full_bin, rec.cond, spec.cal_end, spec.iso_dur, spec.fs, spec.tol_spike_ms
+    metrics = fdsi.with_recording_labels(
+        fdsi.unit_metrics(
+            outputs,
+            gt_full_bin,
+            cbss_result,
+            rec.cond,
+            spec.cal_end,
+            spec.iso_dur,
+            spec.fs,
+            spec.tol_spike_ms,
+        ),
+        rec.sub,
+        rec.cond,
+        rec.snr,
+        branch=branch,
     )
-    metrics.insert(0, "snr", rec.snr)
-    metrics.insert(0, "condition", rec.cond)
-    metrics.insert(0, "sub", rec.sub)
-    metrics.insert(0, "branch", branch)
 
     # Save
     _atomic(paths["result"], outputs.save)
@@ -591,29 +606,50 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
         command (Sequence[str]): The command as invoked.
 
     Returns:
-        Dict[str, Path]: Table name -> CSV in spec.tables_dir: calibrations,
-        searches (every trial), best_configs, recordings, units (per unit, the
-        metrics of fdsi.unit_metrics) and provenance (one row per task).
+        Dict[str, Path]: Table name -> CSV in spec.tables_dir: calibrations (per
+        recording), calibration_units (per calibrated unit, the metrics of
+        fdsi.calibration_unit_metrics), searches (every trial), best_configs,
+        recordings, units (per unit, the metrics of fdsi.unit_metrics) and
+        provenance (one row per task).
     """
     started = _now()
     rows: Dict[str, List[Any]] = {
-        name: [] for name in ("calibrations", "searches", "best_configs", "recordings", "units")
+        name: []
+        for name in (
+            "calibrations",
+            "calibration_units",
+            "searches",
+            "best_configs",
+            "recordings",
+            "units",
+        )
     }
     provenance = []
 
-    # Calibrations
+    # Calibrations: one row per recording, and their per-unit metrics
     for task in spec.tasks("calibrate"):
         status, meta = spec.task_status(task)
         provenance.append(_meta_row(task, status, meta))
         rec = task.recording
-        results = (meta or {}).get("results", {}) if status == "done" else {}
+        units = (
+            pd.read_csv(spec.calibration_paths(rec)["units"])
+            if status == "done"
+            else pd.DataFrame()
+        )
+        if len(units):
+            rows["calibration_units"].append(units)
         rows["calibrations"].append(
             {
+                "recording": rec.stub,
                 "sub": rec.sub,
                 "condition": rec.cond,
                 "snr": rec.snr,
                 "status": status,
-                "n_units": results.get("n_units"),
+                "n_units": len(units) if status == "done" else None,
+                "roa_calib_mean": units["roa_calib"].mean() if len(units) else None,
+                "n_units_sil_ge_0.9": int((units["sil_calib"] >= 0.9).sum())
+                if len(units)
+                else None,
                 "run_time_s": (meta or {}).get("run_time_s"),
             }
         )
@@ -650,6 +686,7 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
         rows["recordings"].append(
             {
                 "branch": task.branch,
+                "recording": rec.stub,
                 "sub": rec.sub,
                 "condition": rec.cond,
                 "snr": rec.snr,
@@ -665,6 +702,9 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
     # Write the tables
     tables = {
         "calibrations": pd.DataFrame(rows["calibrations"]),
+        "calibration_units": pd.concat(rows["calibration_units"], ignore_index=True)
+        if rows["calibration_units"]
+        else pd.DataFrame(),
         "searches": pd.concat(rows["searches"], ignore_index=True)
         if rows["searches"]
         else pd.DataFrame(),
@@ -742,7 +782,8 @@ def _v10_unit_metrics(
         rec (Recording): The recording.
 
     Returns:
-        Optional[pd.DataFrame]: As fdsi.unit_metrics, with branch/sub/condition/snr.
+        Optional[pd.DataFrame]: As fdsi.unit_metrics, with branch, recording, sub,
+        condition and snr; gt_unit pairs its units with this run's.
     """
     root = spec.v10_outputs_root
     result_path = fdsi.v10_result_path(root, rec.sub, rec.cond, rec.snr, sampler)
@@ -755,13 +796,16 @@ def _v10_unit_metrics(
         spec.data_root, rec.sub, rec.cond, cbss_result, n_samples=outputs.spikes.shape[0]
     )
     metrics = fdsi.unit_metrics(
-        outputs, gt_full_bin, rec.cond, spec.cal_end, spec.iso_dur, spec.fs, spec.tol_spike_ms
+        outputs,
+        gt_full_bin,
+        cbss_result,
+        rec.cond,
+        spec.cal_end,
+        spec.iso_dur,
+        spec.fs,
+        spec.tol_spike_ms,
     )
-    metrics.insert(0, "snr", rec.snr)
-    metrics.insert(0, "condition", rec.cond)
-    metrics.insert(0, "sub", rec.sub)
-    metrics.insert(0, "branch", branch)
-    return metrics
+    return fdsi.with_recording_labels(metrics, rec.sub, rec.cond, rec.snr, branch=branch)
 
 
 def import_v10(spec: BenchmarkSpec, *, command: Sequence[str], n_workers: int = 1) -> Path:

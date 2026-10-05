@@ -11,6 +11,7 @@ import yaml
 from adapt_decomp.adaptation.optimize import DEFAULT_PARAM_SPACE
 from adapt_decomp.utils import read_metadata, write_metadata
 from benchmarks.fdsi import fdsi, stages
+from benchmarks.fdsi import spec as spec_module
 from benchmarks.fdsi.spec import FIXED_BRANCH, load_spec, select_tasks
 
 
@@ -252,6 +253,31 @@ def test_changing_the_calibration_invalidates_everything(tmp_path, spec):
     raw = _mutate(_raw_spec(tmp_path), ("calibration", "cbss_config", "random_seed"), 7)
     before, after = _keys(spec), _keys(load_spec(_write(tmp_path, raw, "b.yaml")))
     assert all(before[k] != after[k] for k in before)
+
+
+@pytest.mark.parametrize(
+    "stage, downstream",
+    [
+        ("calibrate", {"calibrate", "search", "apply"}),
+        ("search", {"search", "apply"}),
+        ("apply", {"apply"}),
+    ],
+)
+def test_bumping_a_stage_version_invalidates_it_and_everything_downstream(
+    spec, monkeypatch, stage, downstream
+):
+    before = _keys(spec)
+    monkeypatch.setitem(spec_module.STAGE_VERSIONS, stage, spec_module.STAGE_VERSIONS[stage] + 1)
+    after = _keys(load_spec(spec.path))
+
+    changed_stages = {s for (s, _), key in before.items() if after[(s, _)] != key}
+    assert changed_stages == downstream
+    if stage == "search":  # the fixed baseline doesn't depend on any search
+        assert all(
+            before[("apply", t.id)] == after[("apply", t.id)]
+            for t in spec.tasks("apply")
+            if t.branch == FIXED_BRANCH
+        )
 
 
 def test_changing_an_input_file_invalidates_its_recording_and_the_searches_using_it(spec):

@@ -115,7 +115,7 @@ in their own `utils/` subpackage instead of inside `cbss/` or `adaptation/`:
   legacy-format recording) or `load_pooled_cbss_memory`/
   `load_pooled_cbss_disk` (one or more `CBSSResult`s, returning
   `Dict[str, PooledDatasetMemory]`/`Dict[str, PooledDatasetDisk]`) — see
-  [calibration.md](calibration.md#path-b--loading-from-a-different-object)
+  [calibration.md](calibration.md#path-b-loading-from-a-different-object)
   and [optimisation.md](optimisation.md).
 - **`plots.py`** — comparison/diagnostic plots.
 
@@ -131,6 +131,6 @@ Both subsystems follow the same dataclass pattern: `CBSSConfig` and
 (e.g. `spike_min_dist` from `spike_min_dist_ms`/`fs`), and both load/save via
 `from_yaml`/`to_yaml`. Neither is ever used as a mutable default argument —
 every constructor that takes one defaults to `None` and builds a fresh
-instance inside the function body. See the main README's
-[AdaptConfig reference](../README.md#adaptconfig-reference) for the full
-field table.
+instance inside the function body. See the API reference of
+[AdaptConfig](reference/adaptation.md#adapt_decomp.adaptation.AdaptConfig) and
+[CBSSConfig](reference/cbss.md#adapt_decomp.cbss.CBSSConfig) for every field.

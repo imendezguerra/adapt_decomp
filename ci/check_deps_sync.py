@@ -1,11 +1,12 @@
 """Check that the three dependency specs agree with each other.
 
-- pyproject.toml          -> lower bounds (what pip users get)
-- environment.yaml        -> exact pins (the reproducible environment)
-- ci/constraints-min.txt  -> the lower bounds, pinned (tested by the minimum-deps CI job)
+- pyproject.toml          -> lower bounds (what pip users get), runtime and extras (dev, docs)
+- environment.yaml        -> exact pins (the reproducible environment), conda and pip entries
+- ci/constraints-min.txt  -> the runtime lower bounds, pinned (tested by the minimum-deps CI job)
 
-Fails (exit 1) if a runtime dependency is missing from any of them, if an
-environment.yaml pin is not exact or falls outside pyproject's range, or if a
+Fails (exit 1) if a runtime dependency is missing from any of them, if an extra's
+dependency is missing from environment.yaml, if an environment.yaml pin is not exact,
+falls outside pyproject's range or is not a pyproject dependency, or if a
 constraints-min pin differs from pyproject's lower bound.
 """
 
@@ -25,8 +26,8 @@ except ModuleNotFoundError:  # Python 3.10
 ROOT = Path(__file__).resolve().parents[1]
 # conda-forge name -> PyPI name, where they differ.
 CONDA_TO_PYPI = {"pytorch": "torch"}
-# environment.yaml entries that are not pyproject runtime dependencies.
-NOT_RUNTIME = {"python", "pip", "pytest", "ruff", "pre-commit", "ipykernel"}
+# environment.yaml entries that are not pyproject dependencies.
+NOT_DEPENDENCIES = {"python", "pip"}
 
 
 def lower_bound(req: Requirement) -> Version | None:
@@ -44,15 +45,24 @@ def main() -> int:
     runtime = {
         canonicalize_name(r.name): r for r in map(Requirement, pyproject["project"]["dependencies"])
     }
+    extras = {
+        canonicalize_name(r.name): r
+        for group in pyproject["project"].get("optional-dependencies", {}).values()
+        for r in map(Requirement, group)
+    }
 
     env = yaml.safe_load((ROOT / "environment.yaml").read_text())
-    pins = {}
+    entries = []
     for dep in env["dependencies"]:
-        if not isinstance(dep, str):  # the pip: sub-list
-            continue
+        if isinstance(dep, dict):  # the pip: sub-list, minus pip options such as -e .
+            entries += [d for d in dep.get("pip", []) if not d.startswith("-")]
+        else:
+            entries.append(dep)
+    pins = {}
+    for dep in entries:
         name, _, version = dep.partition("==")
         name = canonicalize_name(name.split("=")[0].strip())
-        if name in NOT_RUNTIME:
+        if name in NOT_DEPENDENCIES:
             continue
         if not version:
             errors.append(f"environment.yaml: {dep!r} is not pinned with ==")
@@ -81,7 +91,13 @@ def main() -> int:
                 f"ci/constraints-min.txt: {name}=={constraints[name]} != pyproject lower bound {bound}"
             )
 
-    for name in sorted(pins.keys() - runtime.keys()):
+    for name, req in extras.items():
+        if name not in pins:
+            errors.append(f"environment.yaml: missing {name} (a pyproject.toml extra)")
+        elif not req.specifier.contains(pins[name], prereleases=True):
+            errors.append(f"environment.yaml: {name}=={pins[name]} does not satisfy {req}")
+
+    for name in sorted(pins.keys() - runtime.keys() - extras.keys()):
         errors.append(f"environment.yaml: {name} is not a pyproject.toml dependency")
     for name in sorted(constraints.keys() - runtime.keys()):
         errors.append(f"ci/constraints-min.txt: {name} is not a pyproject.toml dependency")

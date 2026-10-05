@@ -69,18 +69,19 @@ def preprocess_emg(
     by CBSS calibration (CBSS._preprocess_emg) and online adaptation (Data.preprocess_emg).
 
     Args:
-        data:              [T, C] EMG array.
-        fs:                Sampling frequency in Hz.
-        highpass, lowpass: Bandpass cutoffs in Hz.
-        filter_order:      Butterworth order for the bandpass stage.
-        notch_filter:      Whether to notch out powerline harmonics.
-        notch_freq:        Fundamental powerline frequency in Hz (50 or 60).
-        notch_width_hz:    Half-bandwidth of each notch in Hz (±notch_width_hz).
-        notch_n_harmonics: Number of harmonics to notch (including the fundamental).
-        notch_order:       Butterworth order for each notch stage.
+        data (np.ndarray): EMG with shape (T, C).
+        fs (float): Sampling frequency in Hz.
+        highpass (float): Bandpass low cutoff in Hz.
+        lowpass (float): Bandpass high cutoff in Hz.
+        filter_order (int): Butterworth order for the bandpass stage.
+        notch_filter (bool): Whether to notch out powerline harmonics.
+        notch_freq (float): Fundamental powerline frequency in Hz (50 or 60).
+        notch_width_hz (float): Half-bandwidth of each notch in Hz (±notch_width_hz).
+        notch_n_harmonics (int): Number of harmonics to notch, including the fundamental.
+        notch_order (int): Butterworth order for each notch stage.
 
     Returns:
-        Filtered array, same shape as input, float32.
+        np.ndarray: Filtered EMG, float32, with the same shape as data.
     """
     out = np.asarray(data, dtype=np.float64)
     sos_stages = _build_sos_stages(

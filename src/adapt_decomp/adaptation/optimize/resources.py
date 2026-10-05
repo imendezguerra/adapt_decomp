@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import joblib
 import numpy as np
 import psutil
 import torch
 from loguru import logger
 
 from adapt_decomp.utils.loaders import PooledDataset, PooledDatasetMemory, emg_shape, load_calib
-
+from adapt_decomp.utils.system import available_cores, available_memory
 
 _GB = 1024**3
 
@@ -32,45 +30,8 @@ _KL_CAL_WINDOWS = 32  # Decomposition._compute_mean_sigma_kl_cal's chunk of wind
 _MEMORY_GUIDANCE = (
     "To fit, lower n_cores (fewer runs at once), use a smaller pool or shorter recordings, "
     "use a disk pool (PooledDatasetDisk) so workers do not keep datasets resident, or "
-    "request more memory (e.g. SLURM --mem)."
+    "request more memory (e.g. SLURM --mem or PBS -l select=1:mem=...)."
 )
-
-
-def available_cores() -> int:
-    """Physical cores this process may use, honouring CPU affinity, containers and SLURM.
-
-    Returns:
-        int: Usable physical cores, at least 1.
-    """
-    cores = joblib.cpu_count(only_physical_cores=True)
-    slurm = os.environ.get("SLURM_CPUS_PER_TASK")
-    if slurm is not None:
-        cores = min(cores, int(slurm))
-    return max(1, cores)
-
-
-def available_memory() -> Tuple[int, int]:
-    """Memory limit and currently free memory for this process, in bytes.
-
-    The limit is the SLURM job's or the container's (cgroup v2) when set,
-    else the machine's total RAM.
-
-    Returns:
-        Tuple[int, int]: (limit, available), available never above limit.
-    """
-    vm = psutil.virtual_memory()
-    limit = vm.total
-    if "SLURM_MEM_PER_NODE" in os.environ:
-        limit = min(limit, int(os.environ["SLURM_MEM_PER_NODE"]) * 1024**2)
-    elif "SLURM_MEM_PER_CPU" in os.environ:
-        cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", "1"))
-        limit = min(limit, int(os.environ["SLURM_MEM_PER_CPU"]) * cpus * 1024**2)
-    cgroup = Path("/sys/fs/cgroup/memory.max")
-    if cgroup.exists():
-        value = cgroup.read_text().strip()
-        if value != "max":
-            limit = min(limit, int(value))
-    return limit, min(limit, vm.available)
 
 
 @dataclass(frozen=True)
@@ -271,7 +232,8 @@ def plan_search_resources(
     if n_cores > cores:
         raise ValueError(
             f"n_cores={n_cores} exceeds the {cores} physical cores available to this process. "
-            "Lower n_cores, or request more CPUs (e.g. SLURM --cpus-per-task)."
+            "Lower n_cores, or request more CPUs (e.g. SLURM --cpus-per-task or PBS "
+            "-l select=1:ncpus=...)."
         )
 
     # Memory per dataset, from each dataset's own shape
@@ -291,9 +253,7 @@ def plan_search_resources(
     budget = limit - psutil.Process().memory_info().rss
     if peak_bytes > budget:
         fitting = [c for c in range(n_cores - 1, 0, -1) if peak(c)[2] <= budget]
-        suggestion = (
-            f"n_cores={fitting[0]} fits. " if fitting else "Even n_cores=1 does not fit. "
-        )
+        suggestion = f"n_cores={fitting[0]} fits. " if fitting else "Even n_cores=1 does not fit. "
         raise ValueError(
             f"Predicted peak memory {peak_bytes / _GB:.1f} GB exceeds the {budget / _GB:.1f} GB "
             f"left under the {limit / _GB:.1f} GB limit. {suggestion}{_MEMORY_GUIDANCE}"

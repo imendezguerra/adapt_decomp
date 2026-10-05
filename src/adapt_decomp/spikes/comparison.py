@@ -358,7 +358,7 @@ def spikes_dict_to_binary(
     *,
     device: torch.device | str,
 ) -> torch.Tensor:
-    """Convert {unit: spike_indices} to a [T, n_units] int32 binary matrix."""
+    """Convert {unit: spike_indices} to an int32 binary matrix with shape (T, n_units)."""
     spike_trains = torch.zeros(n_samples, len(spikes_dict), dtype=torch.int32, device=device)
     for unit, idx in spikes_dict.items():
         idx_t = torch.as_tensor(idx, dtype=torch.long, device=device)
@@ -381,9 +381,9 @@ def remove_duplicates(
 ) -> Dict:
     """Remove duplicate motor units (by RoA), keeping the unit with lower CoV-ISI.
 
-    Operates on result['sources'] [T, n_mu] and result['spikes_dict'].
-    Per-unit arrays preserved: sil, cov_isi, spikes_centr, base_centr,
-    sep_vectors [dim, n_mu].
+    Operates on result["sources"], with shape (T, n_mu), and result["spikes_dict"].
+    Per-unit arrays preserved: sil, cov_isi, spikes_centr, base_centr and
+    sep_vectors, with shape (dim, n_mu).
     """
     sources = result.get("sources")
     spikes_dict = result.get("spikes_dict", {})

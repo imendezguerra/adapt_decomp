@@ -23,7 +23,7 @@ from adapt_decomp.adaptation.optimize import (
     optimize_adapt_decomp_pooled_disk_pareto,
     optimize_adapt_decomp_pooled_memory_pareto,
 )
-from adapt_decomp.adaptation.optimize.pareto import _dominates, update_front
+from adapt_decomp.adaptation.optimize.pareto import _dominates, front_mask, update_front
 from adapt_decomp.adaptation.optimize.persistence import save_study_snapshot
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 from tests.adaptation.test_optimize import (
@@ -84,6 +84,22 @@ def test_update_front_dominating_point_evicts_every_dominated_resident():
     assert joined is True
     assert sorted(evicted) == [0, 1, 2]
     assert front == {3: (1.0, 1.0)}
+
+
+def test_front_mask_matches_the_running_front_built_by_update_front():
+    rng = np.random.default_rng(0)
+    values = rng.random((40, 2))
+    values[7] = values[3]  # a tie stays on the front with its twin, as in update_front
+    front = {}
+    for number, row in enumerate(values):
+        update_front(front, number, tuple(row))
+
+    assert set(np.flatnonzero(front_mask(values))) == set(front)
+
+
+def test_front_mask_never_keeps_non_finite_rows():
+    values = np.array([[1.0, 1.0], [np.nan, 0.0], [0.5, np.inf], [2.0, 2.0]])
+    assert list(front_mask(values)) == [True, False, False, False]
 
 
 def test_update_front_mutually_non_dominated_members_both_survive():

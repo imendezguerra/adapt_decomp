@@ -1,5 +1,4 @@
-"""Optuna-based hyperparameter optimisation for AdaptDecomp.
-"""
+"""Optuna-based hyperparameter optimisation for AdaptDecomp."""
 
 from adapt_decomp.utils.loaders import PooledDataset
 from adapt_decomp.adaptation.optimize.units import DEFAULT_UNIT_SELECTION_KWARGS, UnitSelection
@@ -13,11 +12,15 @@ from adapt_decomp.adaptation.optimize.resources import (
     PROCESS_BASELINE_BYTES,
     RUN_OVERHEAD,
     ResourcePlan,
-    available_cores,
-    available_memory,
     plan_resources,
 )
-from adapt_decomp.adaptation.optimize.pareto import SELECTION_RULES, FrontSelector, SelectionName
+from adapt_decomp.utils.system import available_cores, available_memory
+from adapt_decomp.adaptation.optimize.pareto import (
+    SELECTION_RULES,
+    FrontSelector,
+    SelectionName,
+    front_mask,
+)
 from adapt_decomp.adaptation.optimize.search import (
     DEFAULT_N_STARTUP_TRIALS,
     OptimisationResult,
@@ -45,6 +48,7 @@ __all__ = [
     "UnitSelection",
     # Pareto-front selection
     "SELECTION_RULES",
+    "front_mask",
     "FrontSelector",
     "SelectionName",
     # Resources

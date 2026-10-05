@@ -1,11 +1,12 @@
 """FDSI-only glue: raw-data paths and loaders, triangular phases and per-unit metrics.
 
 Ported from notebooks/fdsi_benchmark/fdsi_common.py (which the v1.0/v1.1 notebooks keep
-using until they are retired): only what the benchmark CLI needs, plus the v1.0 result
-paths read by import-v10.
+using until they are retired): what the benchmark CLI and the dataset tour need, plus the
+v1.0 result paths read by import-v10.
 """
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -121,6 +122,83 @@ def load_raw_emg(data_root: Path, sub: str, cond: str, snr: int) -> np.ndarray:
     return load_emg(emg_path(data_root, sub, cond, snr))
 
 
+def load_clean_emg(data_root: Path, sub: str, cond: str) -> np.ndarray:
+    """Load one condition's noiseless simulated EMG (shared by its SNR levels).
+
+    Args:
+        data_root (Path): Raw data root (<dataset>/data).
+        sub (str): Subject id.
+        cond (str): Condition name.
+
+    Returns:
+        np.ndarray: EMG with shape (samples, channels).
+    """
+    return load_emg(data_root / sub / "clean" / f"{sub}_FDSI_{cond}_emg.npz")
+
+
+def load_angle_profile(data_root: Path, sub: str, cond: str) -> np.ndarray:
+    """Load one condition's wrist-angle trace, sample-aligned with its EMG.
+
+    Args:
+        data_root (Path): Raw data root (<dataset>/data).
+        sub (str): Subject id.
+        cond (str): Condition name.
+
+    Returns:
+        np.ndarray: Wrist angle in degrees with shape (samples,).
+    """
+    path = data_root / sub / "clean" / f"{sub}_FDSI_{cond}_angle.npz"
+    return np.asarray(np.load(path)["angle"], dtype=np.float32)
+
+
+def load_effort_profile(data_root: Path, sub: str, cond: str) -> np.ndarray:
+    """Load one condition's target contraction-effort trace, sample-aligned with its EMG.
+
+    Args:
+        data_root (Path): Raw data root (<dataset>/data).
+        sub (str): Subject id.
+        cond (str): Condition name.
+
+    Returns:
+        np.ndarray: Effort as a fraction of MVC (0-1) with shape (samples,).
+    """
+    path = data_root / sub / "clean" / f"{sub}_FDSI_{cond}_effort.npz"
+    return np.asarray(np.load(path)["effort"], dtype=np.float32)
+
+
+def load_recording_metadata(data_root: Path, sub: str, cond: str) -> Dict:
+    """Load one condition's simulation metadata (muscle model, grid, motor-unit pool).
+
+    Args:
+        data_root (Path): Raw data root (<dataset>/data).
+        sub (str): Subject id.
+        cond (str): Condition name.
+
+    Returns:
+        Dict: The parsed metadata.json.
+    """
+    path = data_root / sub / "clean" / f"{sub}_FDSI_{cond}_metadata.json"
+    with path.open() as f:
+        return json.load(f)
+
+
+def load_noise_metadata(data_root: Path, sub: str, cond: str, snr: int) -> Dict:
+    """Load one noisy recording's noise metadata (target and realised SNR, seed).
+
+    Args:
+        data_root (Path): Raw data root (<dataset>/data).
+        sub (str): Subject id.
+        cond (str): Condition name.
+        snr (int): SNR level in dB.
+
+    Returns:
+        Dict: The parsed noise_metadata.json.
+    """
+    path = data_root / sub / "noisy" / f"{recording_stub(sub, cond, snr)}_noise_metadata.json"
+    with path.open() as f:
+        return json.load(f)
+
+
 def load_gt_full_bin(
     data_root: Path, sub: str, cond: str, cbss_result: CBSSResult, n_samples: int
 ) -> Optional[np.ndarray]:
@@ -210,9 +288,84 @@ def compute_roa_for_result(
     return roa
 
 
+def _calibration_unit_columns(calibration: CBSSResult) -> Dict[str, np.ndarray]:
+    """The calibration's per-unit ground-truth match and its RoA over the calibration window.
+
+    Args:
+        calibration (CBSSResult): The calibration, normally narrowed by select_supervised.
+
+    Returns:
+        Dict[str, np.ndarray]: "gt_unit" (the matched simulation motor unit's index,
+        -1 without a supervised match) and "roa_calib" (0-1, NaN without one),
+        each with shape (units,).
+    """
+    n_units = calibration.spikes.shape[1]
+    gt_unit = calibration.gt_matched_indices
+    roa = calibration.roa
+    return {
+        "gt_unit": np.full(n_units, -1) if gt_unit is None else np.asarray(gt_unit, dtype=np.int64),
+        "roa_calib": np.full(n_units, np.nan) if roa is None else np.asarray(roa, dtype=float),
+    }
+
+
+def calibration_unit_metrics(calibration: CBSSResult) -> pd.DataFrame:
+    """Per-unit metrics of one calibration: its ground-truth match, RoA, SIL and CoV-ISI.
+
+    Args:
+        calibration (CBSSResult): The calibration, normally narrowed by select_supervised.
+
+    Returns:
+        pd.DataFrame: One row per calibrated unit: unit, gt_unit (the matched
+        simulation motor unit's index, its column in the ground-truth spike trains),
+        roa_calib (0-1, over the calibration window), sil_calib and cov_isi_calib.
+    """
+    n_units = calibration.spikes.shape[1]
+    nan = np.full(n_units, np.nan)
+    return pd.DataFrame(
+        {
+            "unit": np.arange(n_units),
+            **_calibration_unit_columns(calibration),
+            "sil_calib": nan
+            if calibration.sil is None
+            else np.asarray(calibration.sil, dtype=float),
+            "cov_isi_calib": nan
+            if calibration.cov_isi is None
+            else np.asarray(calibration.cov_isi, dtype=float),
+        }
+    )
+
+
+def with_recording_labels(
+    table: pd.DataFrame, sub: str, cond: str, snr: int, branch: Optional[str] = None
+) -> pd.DataFrame:
+    """Prepend the columns that identify a per-unit table's recording (and config).
+
+    Args:
+        table (pd.DataFrame): One row per unit.
+        sub (str): Subject id.
+        cond (str): Condition name.
+        snr (int): SNR level in dB.
+        branch (Optional[str], optional): The applied config, for an adaptation
+            result. Defaults to None (no branch column).
+
+    Returns:
+        pd.DataFrame: table with [branch,] recording, sub, condition and snr first.
+    """
+    labels = {
+        "recording": recording_stub(sub, cond, snr),
+        "sub": sub,
+        "condition": cond,
+        "snr": snr,
+    }
+    if branch is not None:
+        labels = {"branch": branch, **labels}
+    return pd.concat([pd.DataFrame(labels, index=table.index), table], axis=1)
+
+
 def unit_metrics(
     outputs: AdaptationResult,
     gt_full_bin: Optional[np.ndarray],
+    calibration: CBSSResult,
     cond: str,
     cal_end: int,
     iso_dur: int,
@@ -225,6 +378,8 @@ def unit_metrics(
         outputs (AdaptationResult): The adaptation result, with sil set.
         gt_full_bin (Optional[np.ndarray]): Binary ground truth with shape
             (samples, units), or None without a supervised match (RoA columns NaN).
+        calibration (CBSSResult): The calibration the result started from (its
+            units, in the same order).
         cond (str): Condition name; phase RoA is computed for triangular ones only.
         cal_end (int): Calibration window length in samples.
         iso_dur (int): Isometric bookend length in samples.
@@ -232,9 +387,10 @@ def unit_metrics(
         tol_spike_ms (float): Spike-alignment tolerance in ms.
 
     Returns:
-        pd.DataFrame: One row per unit: unit, roa_full, roa_after_cal, roa_<phase>
-        for each of PHASES (NaN for non-triangular conditions), sil, n_spikes and
-        n_spikes_gt (RoA as a 0-1 fraction).
+        pd.DataFrame: One row per unit: unit, gt_unit (the matched simulation motor
+        unit), roa_calib (the calibration's RoA), roa_full, roa_after_cal,
+        roa_<phase> for each of PHASES (NaN for non-triangular conditions), sil,
+        n_spikes and n_spikes_gt (RoA as a 0-1 fraction).
     """
     spikes = outputs.spikes.numpy().astype(np.float32)
     n_samples, n_units = spikes.shape
@@ -254,6 +410,7 @@ def unit_metrics(
     return pd.DataFrame(
         {
             "unit": np.arange(n_units),
+            **_calibration_unit_columns(calibration),
             "roa_full": roa["full"],
             "roa_after_cal": roa["after_cal"],
             **{f"roa_{phase}": roa.get(phase, nan) for phase in PHASES},

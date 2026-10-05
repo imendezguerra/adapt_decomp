@@ -411,6 +411,8 @@ def plot_metric_heatmap(
     vmin: Optional[float] = None,
     vmax: Optional[float] = None,
     axs: Optional[np.ndarray] = None,
+    cmap: str = "YlGn",
+    center: Optional[float] = None,
 ) -> np.ndarray:
     """Heatmap of a per-unit value aggregated by condition x SNR, one panel per config.
 
@@ -430,6 +432,9 @@ def plot_metric_heatmap(
         vmax (float, optional): Maximum value for the heatmap color scale. Defaults
             to None (auto).
         axs (Optional[np.ndarray], optional): Axes array, one per config. Defaults to None.
+        cmap (str, optional): Colour map. Defaults to "YlGn".
+        center (Optional[float], optional): Value at the colour map's centre, for a
+            diverging map (e.g. 0 for a difference). Defaults to None.
 
     Returns:
         np.ndarray: Axes array used for the plot.
@@ -469,7 +474,8 @@ def plot_metric_heatmap(
             pivot,
             annot=True,
             fmt=fmt_str,
-            cmap="YlGn",
+            cmap=cmap,
+            center=center,
             vmin=vmin,
             vmax=vmax,
             ax=ax,
@@ -990,3 +996,209 @@ def plot_pareto_scatter_grid(
         title="Real Pareto front -- wh_loss vs sv_loss, coloured by RoA",
     )
     return fig
+
+
+# Static search plots, drawn from a trials table (study.trials_dataframe() format)
+
+SEARCH_LOSS_COLS: Tuple[str, str, str] = (
+    "user_attrs_wh_loss",
+    "user_attrs_sv_loss",
+    "user_attrs_total_loss",
+)
+SEARCH_ROA_COL = "user_attrs_roa_mean_pooled"  # pooled mean RoA of a trial, 0-100
+
+
+def _complete_trials(trials: pd.DataFrame) -> pd.DataFrame:
+    """The COMPLETE rows of a trials table (all rows when it has no state column)."""
+    return trials[trials["state"] == "COMPLETE"] if "state" in trials else trials
+
+
+def _log_if_positive(ax: plt.Axes, values: pd.Series, axis: str = "x") -> None:
+    """Use a log scale on an axis when every value plotted on it is positive."""
+    if len(values) and (values > 0).all():
+        if axis == "x":
+            ax.set_xscale("log")
+        else:
+            ax.set_yscale("log")
+
+
+def plot_search_landscape(
+    trials: pd.DataFrame,
+    chosen_number: Optional[int] = None,
+    loss_cols: Tuple[str, ...] = SEARCH_LOSS_COLS,
+    roa_col: str = SEARCH_ROA_COL,
+    title: Optional[str] = None,
+    axs: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Pooled RoA against each pooled loss over a search's trials, one panel per loss.
+
+    Args:
+        trials (pd.DataFrame): One search's trials in study.trials_dataframe()
+            format, e.g. its rows of the FDSI benchmark's searches.csv; only
+            COMPLETE trials are drawn.
+        chosen_number (Optional[int], optional): Number of the trial the search
+            chose, marked with a diamond. Defaults to None.
+        loss_cols (Tuple[str, ...], optional): Loss columns, one panel each.
+            Defaults to SEARCH_LOSS_COLS.
+        roa_col (str, optional): Pooled RoA column (0-100). Defaults to SEARCH_ROA_COL.
+        title (Optional[str], optional): Prefix of each panel's title. Defaults to None.
+        axs (Optional[np.ndarray], optional): Axes, one per loss column. Defaults to None.
+
+    Returns:
+        np.ndarray: Axes array used for the plot.
+    """
+    if axs is None:
+        _fig, axs = plt.subplots(
+            1,
+            len(loss_cols),
+            figsize=(4.5 * len(loss_cols), 3.8),
+            layout="constrained",
+            sharey=True,
+        )
+    axs = np.ravel(axs)
+    complete = _complete_trials(trials)
+    best = complete.loc[complete[roa_col].idxmax()] if complete[roa_col].notna().any() else None
+    chosen = complete[complete["number"] == chosen_number]
+
+    for ax, col in zip(axs, loss_cols):
+        ax.scatter(complete[col], complete[roa_col], s=18, color="0.6", label="Trial")
+        if best is not None:
+            ax.scatter(
+                best[col],
+                best[roa_col],
+                marker="*",
+                s=180,
+                color="tab:orange",
+                edgecolor="black",
+                linewidth=0.6,
+                label="Highest RoA",
+                zorder=3,
+            )
+        if len(chosen):
+            ax.scatter(
+                chosen[col],
+                chosen[roa_col],
+                marker="D",
+                s=60,
+                color="tab:blue",
+                edgecolor="black",
+                linewidth=0.6,
+                label="Chosen",
+                zorder=4,
+            )
+        _log_if_positive(ax, complete[col])
+        name = col.replace("user_attrs_", "")
+        ax.set(xlabel=name, title=f"{title}: {name}" if title else name)
+    axs[0].set_ylabel("Pooled mean RoA (%)")
+    axs[0].legend(loc="best", fontsize="small")
+    return axs
+
+
+def plot_search_front(
+    trials: pd.DataFrame,
+    front: List[int],
+    chosen_number: Optional[int] = None,
+    objectives: Tuple[str, str] = ("wh_loss", "sv_loss"),
+    roa_col: str = SEARCH_ROA_COL,
+    title: Optional[str] = None,
+    ax: Optional[plt.Axes] = None,
+) -> plt.Axes:
+    """A two-objective search's trials and Pareto front, coloured by pooled RoA.
+
+    Args:
+        trials (pd.DataFrame): One search's trials in study.trials_dataframe()
+            format, with values_<objective> columns; only COMPLETE trials are drawn.
+        front (List[int]): Numbers of the trials on the Pareto front (e.g. from
+            adapt_decomp.adaptation.optimize.front_mask).
+        chosen_number (Optional[int], optional): Number of the trial the search
+            chose, marked with a diamond. Defaults to None.
+        objectives (Tuple[str, str], optional): The x and y objectives. Defaults
+            to ("wh_loss", "sv_loss").
+        roa_col (str, optional): Pooled RoA column (0-100). Defaults to SEARCH_ROA_COL.
+        title (Optional[str], optional): Axes title. Defaults to None.
+        ax (Optional[plt.Axes], optional): Axes to draw on. Defaults to None.
+
+    Returns:
+        plt.Axes: The axes used for the plot.
+    """
+    if ax is None:
+        _fig, ax = plt.subplots(figsize=(5.5, 4.2), layout="constrained")
+    complete = _complete_trials(trials)
+    x_col, y_col = (f"values_{objective}" for objective in objectives)
+
+    points = ax.scatter(
+        complete[x_col], complete[y_col], c=complete[roa_col], cmap="viridis", s=24, zorder=2
+    )
+    on_front = complete[complete["number"].isin(front)].sort_values(x_col)
+    ax.plot(on_front[x_col], on_front[y_col], color="black", linewidth=1, label="Pareto front")
+    chosen = complete[complete["number"] == chosen_number]
+    if len(chosen):
+        ax.scatter(
+            chosen[x_col],
+            chosen[y_col],
+            marker="D",
+            s=70,
+            facecolor="none",
+            edgecolor="tab:red",
+            linewidth=1.5,
+            label="Chosen",
+            zorder=3,
+        )
+    _log_if_positive(ax, complete[x_col], "x")
+    _log_if_positive(ax, complete[y_col], "y")
+    ax.set(xlabel=objectives[0], ylabel=objectives[1], title=title)
+    ax.figure.colorbar(points, ax=ax, label="Pooled mean RoA (%)")
+    ax.legend(loc="best", fontsize="small")
+    return ax
+
+
+def plot_search_parameters(
+    trials: pd.DataFrame,
+    params: Optional[List[str]] = None,
+    hue: Optional[str] = None,
+    roa_col: str = SEARCH_ROA_COL,
+    axs: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Pooled RoA against each searched parameter, one panel per parameter.
+
+    Shows how the result depends on each hyperparameter's scale; learning rates
+    are drawn on a log axis.
+
+    Args:
+        trials (pd.DataFrame): Trials in study.trials_dataframe() format, from one
+            search or several (see hue); only COMPLETE trials are drawn.
+        params (Optional[List[str]], optional): Parameter names (without the
+            "params_" prefix). Defaults to None (every params_* column).
+        hue (Optional[str], optional): Column colouring the points, e.g. "search".
+            Defaults to None.
+        roa_col (str, optional): Pooled RoA column (0-100). Defaults to SEARCH_ROA_COL.
+        axs (Optional[np.ndarray], optional): Axes, one per parameter. Defaults to None.
+
+    Returns:
+        np.ndarray: Axes array used for the plot.
+    """
+    complete = _complete_trials(trials)
+    if params is None:
+        params = [c.removeprefix("params_") for c in complete.columns if c.startswith("params_")]
+    if axs is None:
+        _fig, axs = plt.subplots(
+            1, len(params), figsize=(4.5 * len(params), 3.8), layout="constrained", sharey=True
+        )
+    axs = np.ravel(axs)
+
+    for ax, param in zip(axs, params):
+        sns.scatterplot(
+            data=complete,
+            x=f"params_{param}",
+            y=roa_col,
+            hue=hue,
+            s=22,
+            ax=ax,
+            legend=ax is axs[-1],
+        )
+        if "learning_rate" in param:
+            _log_if_positive(ax, complete[f"params_{param}"])
+        ax.set(xlabel=param, ylabel="Pooled mean RoA (%)")
+    if hue is not None and axs[-1].get_legend() is not None:
+        sns.move_legend(axs[-1], "upper left", bbox_to_anchor=(1, 1), title=hue)
+    return axs

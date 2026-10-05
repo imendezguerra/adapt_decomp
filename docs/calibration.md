@@ -76,7 +76,7 @@ config = CBSSConfig(
 )
 result = CBSS(config).decompose(emg, timestamps)  # emg: (samples, channels)
 ```
-The snippet shows every field of [CBSSConfig](..\src\adapt_decomp\cbss\config.py)
+The snippet shows every field of [CBSSConfig](reference/cbss.md#adapt_decomp.cbss.CBSSConfig)
 
 `ch_mask` is `None` by default (no channel selection at all). Set it to a
 boolean mask (`True` = keep) to either drop (`replace_bad_channels=False`)

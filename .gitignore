@@ -198,3 +198,6 @@ wandb/
 archive/
 .claude/
 .vscode/
+
+# MkDocs build output (mkdocs build)
+site/

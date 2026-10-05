@@ -1,4 +1,4 @@
-.PHONY: install env lint test test-all data repro reference clean
+.PHONY: install env lint test test-all data repro reference docs docs-build clean
 
 install:
 	pip install -e ".[dev]"
@@ -23,6 +23,12 @@ repro:
 
 reference:
 	python tests/reproducibility/make_reference.py
+
+docs:
+	mkdocs serve
+
+docs-build:
+	mkdocs build --strict
 
 clean:
 	rm -rf .pytest_cache .ruff_cache **/__pycache__

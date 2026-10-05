@@ -8,7 +8,7 @@ just a one-entry pool**:
 - **Single-objective vs Pareto** — chosen by `objectives`: one name scores
   every trial on that scalar; two or more score it jointly and return a front
   of trials, from which `selection` picks one. See
-  [Pareto / multi-objective search](#pareto--multi-objective-search).
+  [Pareto / multi-objective search](#pareto-multi-objective-search).
 - **In memory vs on disk** — chosen by the pool's entries:
   `PooledDatasetMemory` (preloaded) or `PooledDatasetDisk` (loaded fresh per
   trial). See [Pooled datasets](#pooled-datasets).
@@ -130,7 +130,7 @@ disagreement, reconciled fresh every trial inside `from_calibration()` — see
 
 `load_data`/`load_pooled_cbss_memory` build `pool` directly from a
 `datasets:` list, one entry or several — see
-[configs/data_configs/fdsi_pool_memory_example.yaml](../configs/data_configs/fdsi_pool_memory_example.yaml):
+[configs/data_configs/fdsi_pool_memory_example.yaml](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/data_configs/fdsi_pool_memory_example.yaml):
 
 ```yaml
 loader: 'load_pooled_cbss_memory'
@@ -228,7 +228,7 @@ Two settings, with separate roles:
   a batch isn't sent to one region. With `random_seed`, `n_jobs` fixes the
   suggested parameters on any machine.
 - **`n_cores`** (default: all physical cores this process may use, honouring
-  CPU affinity, containers and SLURM) sets only the speed.
+  CPU affinity, containers, SLURM and PBS) sets only the speed.
   `plan_resources` fills the cores with dataset runs first: up to
   `n_cores // len(pool)` trials at once, each over up to `len(pool)` worker
   processes holding their share of the pool; leftover cores become torch
@@ -336,7 +336,7 @@ when it dominates on both. Empirically, no rescaling of `wh_loss`/`sv_loss`
 into `total_loss` beat `sv_loss` alone, and a retrospective front over
 single-objective studies' trials contained meaningfully better-RoA trials
 than the single-scalar search settled on (see
-[`05_comparison_sv_loss_pareto_roa.ipynb`](../notebooks/fdsi_benchmark/05_comparison_sv_loss_pareto_roa.ipynb)).
+[`05_comparison_sv_loss_pareto_roa.ipynb`](https://github.com/imendezguerra/adapt_decomp/blob/v1.0.0/notebooks/fdsi_benchmark/05_comparison_sv_loss_pareto_roa.ipynb)).
 
 The study runs under `directions=[...]`, one `"minimize"` per objective;
 `study.best_value`/`study.best_params` raise `RuntimeError` on it — read
@@ -423,7 +423,7 @@ internally.
 `--optim_config` points at a YAML holding `optimize_adapt_decomp`'s
 *search-strategy* arguments — reusable across datasets/runs, unlike
 `best_result_path`/`compute_roa`/`roa_kwargs`, which are run-specific — see
-[configs/sweep_configs/sweep_optuna.yaml](../configs/sweep_configs/sweep_optuna.yaml):
+[configs/sweep_configs/sweep_optuna.yaml](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/sweep_configs/sweep_optuna.yaml):
 
 ```yaml
 param_space:                       # omit to use DEFAULT_PARAM_SPACE
@@ -463,7 +463,7 @@ plain [wandb sweep config](https://docs.wandb.ai/guides/sweeps/define-sweep-conf
 `sweep_counts` (the number of sweep iterations to run — popped out before the
 rest of the file is handed to `wandb.sweep()`, which doesn't know it), also
 overridable via `--sweep_counts` — see
-[configs/sweep_configs/sweep_wandb.yaml](../configs/sweep_configs/sweep_wandb.yaml).
+[configs/sweep_configs/sweep_wandb.yaml](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/sweep_configs/sweep_wandb.yaml).
 Each sweep iteration is a **plain** run (`run`'s own code path) with
 hyperparameters chosen by wandb itself — there is no nested Optuna search
 inside a wandb sweep, by design.

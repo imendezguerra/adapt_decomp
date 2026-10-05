@@ -43,10 +43,18 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "pre-commit>=3", "ipykernel>=6.29"]
+# The documentation site (mkdocs.yml): mkdocs build --strict
+docs = [
+    "mkdocs>=1.6,<2",          # MkDocs 2 drops the plugin system the site relies on
+    "mkdocs-material>=9.6",
+    "mkdocstrings>=1.0",
+    "mkdocstrings-python>=2.0",
+    "mkdocs-jupyter>=0.25",
+]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests", "scripts"]
+src = ["src", "tests", "scripts", "."]   # "." makes benchmarks/ first-party
 extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
@@ -58,6 +66,8 @@ ignore = ["E741", "E501", "RUF001", "RUF002", "RUF003"]
 [tool.ruff.lint.per-file-ignores]
 # Import order in package __init__ files is load-bearing (avoids circular imports).
 "__init__.py" = ["I001", "RUF022"]
+# How-to snippets: each section brings its own imports, since a page shows only that section.
+"docs/snippets/*.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -68,6 +68,30 @@ def update_front(
     return True, evicted
 
 
+def front_mask(values: np.ndarray) -> np.ndarray:
+    """Which rows of an objective table are on its Pareto front, every objective minimised.
+
+    The table-based counterpart of update_front, for a finished search read back
+    from its trials table (e.g. study.trials_dataframe()'s values_* columns).
+
+    Args:
+        values (np.ndarray): Objective values with shape (trials, objectives).
+
+    Returns:
+        np.ndarray: Boolean mask with shape (trials,): True for every row that no
+        other row dominates (ties stay on the front, as in study.best_trials);
+        rows with a non-finite value are never on it.
+    """
+    values = np.asarray(values, dtype=float)
+    candidates = np.flatnonzero(np.all(np.isfinite(values), axis=1))
+    mask = np.zeros(len(values), dtype=bool)
+    for i in candidates:
+        mask[i] = not any(
+            _dominates(tuple(values[j]), tuple(values[i])) for j in candidates if j != i
+        )
+    return mask
+
+
 def _select_min_sv_loss(pareto_front: List[optuna.trial.FrozenTrial]) -> optuna.trial.FrozenTrial:
     """Default Pareto-front selection: the front's own minimum pooled sv_loss member.
 

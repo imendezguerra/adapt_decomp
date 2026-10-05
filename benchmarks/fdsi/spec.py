@@ -27,6 +27,11 @@ STAGES: Tuple[str, ...] = ("calibrate", "search", "apply")
 FIXED_BRANCH = "fixed"  # the no-adaptation baseline, applied next to every search's winner
 THREADS_PER_RUN = 1  # torch threads of every run, so results don't depend on the machine
 
+# Version of each stage's outputs, hashed into its cache keys: bump it when a stage's code
+# changes what it writes, so the outputs written before become stale (and so does every
+# output downstream of them). calibrate 2 / apply 2: per-unit ground-truth match and RoA.
+STAGE_VERSIONS: Dict[str, int] = {"calibrate": 2, "search": 1, "apply": 2}
+
 # Array-index environment variables, in lookup order: PBS Pro, Torque, SLURM
 ARRAY_INDEX_VARS: Tuple[str, ...] = ("PBS_ARRAY_INDEX", "PBS_ARRAYID", "SLURM_ARRAY_TASK_ID")
 
@@ -514,12 +519,13 @@ class BenchmarkSpec:
 
         Returns:
             Dict[str, Path]: "result" (CBSSResult pickle), "config" (CBSSConfig
-            YAML) and "meta" (metadata YAML).
+            YAML), "units" (per-unit CSV) and "meta" (metadata YAML).
         """
         stem = self.outputs_root / "calibration" / rec.sub / f"{rec.stub}_cbss"
         return {
             "result": stem.with_name(f"{stem.name}.pkl"),
             "config": stem.with_name(f"{stem.name}_config.yaml"),
+            "units": stem.with_name(f"{stem.name}_units.csv"),
             "meta": stem.with_name(f"{stem.name}.meta.yaml"),
         }
 
@@ -628,6 +634,7 @@ class BenchmarkSpec:
             self._keys[cache] = _digest(
                 {
                     "stage": "calibrate",
+                    "version": STAGE_VERSIONS["calibrate"],
                     "id": rec.stub,
                     "cbss_config": self.cbss_config().to_dict(),
                     "supervised_roa_th": self.calibration["supervised_roa_th"],
@@ -650,6 +657,7 @@ class BenchmarkSpec:
             self._keys[cache] = _digest(
                 {
                     "stage": "search",
+                    "version": STAGE_VERSIONS["search"],
                     "id": name,
                     "settings": {k: v for k, v in settings.items() if k != "base_config"},
                     "base_config": self.search_base_config(name).to_dict(),
@@ -672,6 +680,7 @@ class BenchmarkSpec:
             self._keys[cache] = _digest(
                 {
                     "stage": "apply",
+                    "version": STAGE_VERSIONS["apply"],
                     "id": f"{branch}/{rec.stub}",
                     "config": config,
                     "calibration": self.calibration_key(rec),

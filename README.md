@@ -43,7 +43,7 @@ flowchart LR
 - [Installation](#installation)
 - [Documentation](#documentation)
 - [Tutorial](#tutorial)
-- [FDSI Benchmark](#fdsi-benchmark)
+- [FDSI benchmark](#fdsi-benchmark)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -77,30 +77,39 @@ The code is tested on macOS, Windows, and Linux in CI (see [Development](#develo
 
 ## Documentation
 
-A task-oriented manual for each entry point, with diagrams of how the
-pieces connect.
+The documentation site, **<https://imendezguerra.github.io/adapt_decomp/>**, has:
 
-| Page | Covers |
-|------|--------|
-| [docs/architecture.md](docs/architecture.md) | Repo layout, subpackage dependencies, how objects hand off between stages |
-| [docs/calibration.md](docs/calibration.md) | `cbss/`: running CBSS on raw EMG, loading/reusing an existing calibration |
-| [docs/adaptation.md](docs/adaptation.md) | `adaptation/`: the three ways to build an `AdaptDecomp` and run it |
-| [docs/optimisation.md](docs/optimisation.md) | `adaptation/optimize/`: single-contraction and pooled hyperparameter search — single-objective (`objective`) and Pareto/multi-objective (`objectives`) |
+- **Getting started:** installation, the data, and the whole pipeline on one recording;
+- **the user guide:** [architecture](docs/architecture.md), [calibration](docs/calibration.md),
+  [adaptation](docs/adaptation.md) and [optimisation](docs/optimisation.md), also readable here;
+- **how-to guides**, with tested code: calibrating, adapting, tuning, evaluating, plotting,
+  running on a cluster, recording provenance and processing online;
+- **the API reference**, generated from the docstrings;
+- **the FDSI benchmark:** its design, a tour of the dataset and the results.
 
-### Where to start
+To build it locally: `pip install -e ".[docs]"` (or use `environment.yaml`), then `make docs`
+(live preview) or `make docs-build` (`mkdocs build --strict`, as in CI).
 
-- **Have raw EMG, need motor units:** [docs/calibration.md](docs/calibration.md).
-- **Have a calibration, need an online decomposition:**
-  [docs/adaptation.md](docs/adaptation.md).
-- **Have one or more calibrations, need tuned hyperparameters:**
-  [docs/optimisation.md](docs/optimisation.md).
-- **New to the codebase, want the map first:**
-  [docs/architecture.md](docs/architecture.md).
+## Tutorial
 
-## Tutorials
-To learn how to use the adaptive decomposition go to [adaptive_emg_decomp_dyn_example](https://github.com/imendezguerra/adapt_decomp/blob/feature_structure/notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) for a step by step tutorial. The notebook loads synethetic data and a precomputed decomposition model and runs the adaptation pipeline on a simulated wrist dynamic contraction ([NeuroMotion](https://github.com/shihan-ma/NeuroMotion): a 15% MVC index flexion recorded while the wrist ramps from 0° to -40° in a staircase pattern, precalibrated on the first 30 s plateau).
+To learn how to use the adaptive decomposition, follow
+[adaptive_emg_decomp_dyn_example](notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb),
+a step-by-step tutorial. It loads synthetic data and a precomputed decomposition model and runs
+the adaptation pipeline on a simulated wrist dynamic contraction
+([NeuroMotion](https://github.com/shihan-ma/NeuroMotion): a 15% MVC index flexion recorded
+while the wrist ramps from 0° to -40° in a staircase pattern, precalibrated on the first 30 s
+plateau).
 
-For more examples go to [fdsi_benchmark](https://github.com/imendezguerra/adapt_decomp/blob/main/notebooks/fdsi_benchmark), where there is a collection of notebooks covering decomposition claibration using cbss, hyperparameter optimization (3 methods), online decomposition with and without adaptation (best configs), and model comparison. The dataset used by these notebooks comprises 100 synthetic HD-EMG recordings (100 chs) simulated with NeuroMotion using [MUniverse](https://github.com/dfarinagroup/muniverse) (5 subjects x 5 wrist-kinematic conditions x 4 SNR levels, each with a matching ground-truth spike train), configured via [configs/data_configs/fdsi_benchmark_grid.yaml](configs/data_configs/fdsi_benchmark_grid.yaml). For more information on the datset start by [00_dataset.ipynb](notebooks/fdsi_benchmark/00_dataset.ipynb) and follow the notebooks in order.
+## FDSI benchmark
+
+[`benchmarks/fdsi/`](benchmarks/fdsi) runs `adapt_decomp` on 100 synthetic HD-EMG recordings
+(100 channels) simulated with NeuroMotion via [MUniverse](https://github.com/dfarinagroup/muniverse)
+(5 subjects × 5 wrist-kinematic conditions × 4 SNR levels, each with its ground-truth spike
+trains): calibration, hyperparameter searches and their application to every recording, as one
+cached, reproducible pipeline that runs locally or as PBS Pro array jobs. See its
+[documentation](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/) and
+[results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/report/). The v1.0
+benchmark notebooks are in [`notebooks/fdsi_benchmark/`](notebooks/fdsi_benchmark).
 
 ## Downloading the data
 

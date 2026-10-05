@@ -33,11 +33,11 @@ __all__ = [
     "optimize_adapt_decomp_pooled_memory",
     "optimize_adapt_decomp_pooled_disk",
     # Plots
-    plot_sep_vectors_comp,
-    plot_whitening_comp,
-    plot_sep_vectors_diff,
+    "plot_sep_vectors_comp",
+    "plot_whitening_comp",
+    "plot_sep_vectors_diff",
     # Loaders
-    load_data,
-    load_pooled_cbss_memory,
-    load_pooled_cbss_disk,
+    "load_data",
+    "load_pooled_cbss_memory",
+    "load_pooled_cbss_disk",
 ]

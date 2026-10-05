@@ -207,15 +207,15 @@ removed in a future version.
 
 ## Config essentials
 
-The full field-by-field reference is in the main README's
-[AdaptConfig reference](../README.md#adaptconfig-reference). The fields
-you'll touch most often:
+The full field-by-field reference is
+[AdaptConfig's API reference](reference/adaptation.md#adapt_decomp.adaptation.AdaptConfig).
+The fields you'll touch most often:
 
 | Field | Purpose |
 |-------|---------|
 | `adapt_wh` / `adapt_sv` / `adapt_sd` | Turn whitening / separation-vector / centroid adaptation on or off independently |
 | `batch_ms` | Batch duration (ms); drives `batch_size = batch_ms * fs / 1000` |
-| `wh_learning_rate` / `sv_learning_rate`/`centroid_momentum` | Step-size hyperparameters — see the main README's [Optimization](../README.md#optimization) section to tune them |
+| `wh_learning_rate` / `sv_learning_rate`/`centroid_momentum` | Step-size hyperparameters — see [Optimisation](optimisation.md) to tune them |
 | `wh_mode` / `lr_mode` / `contrast_scope` | Mode switches for the whitening/separation-vector update — see [Mode choices](#mode-choices-wh_mode-lr_mode-contrast_scope) below |
 | `compute_loss` | Populate `wh_loss`/`sv_loss`/`wh_trace`/`wh_loss_total`/`sv_loss_total`/`total_loss` on the output |
 | `sv_loss_reduction` | How `sv_loss_total` reduces across units per batch: `"mean"` (default, independent of the unit count) or `"sum"` (1.0.0) |
@@ -380,11 +380,10 @@ outputs = adapter.process_data(emg)
 
 This is a per-batch HDF5 trace (`adaptation/io.py`), distinct from
 `optimize_adapt_decomp`'s `best_result_path`, which snapshots only the winning trial's
-final `AdaptationResult` — see the main README's
-[Optimization](../README.md#optimization) section.
+final `AdaptationResult` — see
+[Optimisation](optimisation.md#persisting-the-chosen-trial).
 
 ## Next
 
 To search `wh_learning_rate`/`sv_learning_rate` (or other fields) instead of
-setting them by hand, see the main README's
-[Optimization](../README.md#optimization) section.
+setting them by hand, see [Optimisation](optimisation.md).
