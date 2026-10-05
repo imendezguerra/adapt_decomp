@@ -18,7 +18,6 @@ from adapt_decomp.adaptation.optimize.resources import ResourcePlan
 from adapt_decomp.adaptation.optimize.scoring import score_dataset
 from adapt_decomp.utils.loaders import PooledDataset
 
-
 _WORKER_POOL: Dict[str, PooledDataset] = {}
 
 

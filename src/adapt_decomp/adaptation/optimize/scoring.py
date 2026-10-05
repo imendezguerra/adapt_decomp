@@ -23,7 +23,6 @@ from adapt_decomp.spikes.comparison import rate_of_agreement_paired
 from adapt_decomp.utils import validate_literals
 from adapt_decomp.utils.loaders import PooledDataset
 
-
 DEFAULT_PARAM_SPACE: dict = {
     "wh_learning_rate": ("log_float", 1e-4, 5e-2),
     "sv_learning_rate": ("log_float", 1e-4, 1e-1),

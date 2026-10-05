@@ -7,7 +7,6 @@ from typing import Callable, Dict, List, Literal, Tuple, Union
 import numpy as np
 import optuna
 
-
 FrontSelector = Callable[[List[optuna.trial.FrozenTrial]], optuna.trial.FrozenTrial]
 
 

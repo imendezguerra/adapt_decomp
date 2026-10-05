@@ -11,7 +11,6 @@ from loguru import logger
 from adapt_decomp.cbss.data_structure import CBSSResult
 from adapt_decomp.utils.loaders import PooledDataset, PooledDatasetMemory
 
-
 UnitSelection = Literal["unsupervised", "supervised", None]
 _VALID_UNIT_SELECTIONS: Tuple[Optional[str], ...] = ("unsupervised", "supervised", None)
 DEFAULT_UNIT_SELECTION_KWARGS: dict = {"cov_th": 0.3}
