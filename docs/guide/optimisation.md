@@ -32,6 +32,28 @@ flowchart LR
     B --> R["OptimisationResult\n(best_config, study)"]
 ```
 
+## Key parameters
+
+| Argument | Default | Controls | Change it |
+|---|---|---|---|
+| `pool` | (required) | The calibrated recordings every trial adapts | See [the pool](#the-pool) |
+| `base_config` | `AdaptConfig()` | The config every trial starts from; the search overrides the searched fields | To the closest [preset](adaptation.md#presets) |
+| `param_space` | `DEFAULT_PARAM_SPACE` | The fields searched and their ranges | To search more fields, or narrower ranges; see [what is searched](#what-is-searched) |
+| `objectives` | `"sv_loss"` | What each trial is scored on; two or more give a Pareto front | See [objectives](#objectives) |
+| `selection` | `"min_sv_loss"` | Which Pareto front member builds `best_config` | See [Pareto front](#two-objectives-a-pareto-front) |
+| `unit_selection` | None | Which calibration units the search adapts and scores | `"unsupervised"` without ground truth; see [unit selection](#unit-selection) |
+| `unit_selection_kwargs` | `{"cov_th": 0.3}` | The thresholds of `unit_selection="unsupervised"` | |
+| `compute_roa` | False | Whether to also score every trial against the ground truth | True on simulations, to compare objectives |
+| `n_trials` | 100 | Number of trials | Fewer for a quick check; 50 or more in practice |
+| `n_jobs` | 1 | Trials suggested together, before the sampler sees their results | Larger to run more trials at once; part of the search's definition |
+| `n_cores` | None (all available) | Cores used; sets only the speed | To share a machine; see [speed and resources](#speed-and-resources) |
+| `random_seed` | 1909 | Seed of the default sampler | None for a different search on every run |
+| `sampler` | Multivariate TPE | The Optuna sampler | To use another Optuna sampler |
+| `best_result_path` | None | Folder the best results, configs and study are written to as the search runs | To keep the results, including the completed trials of an interrupted search |
+| `on_trial` | None | Function called after every trial with its losses | To stream progress to a tracker or a log |
+
+The [API reference](../reference/optimisation.md) describes every argument.
+
 ## The pool
 
 The pool is a dict from a recording's name to its data: the EMG, its calibration and the
@@ -135,14 +157,18 @@ the machine's or the job's limit, naming the largest `n_cores` that fits.
 
 ## What you get back
 
-An `OptimisationResult`: `best_config` (the base config with the chosen trial's setting),
-`study` (the Optuna study), `pareto_front` (Pareto searches only) and `outputs` (the chosen
-trial's `AdaptationResult` per recording, with `best_result_path`).
+An `OptimisationResult`:
+
+| Field | Holds |
+|---|---|
+| `best_config` | The base config with the chosen trial's setting |
+| `study` | The Optuna study, with every trial |
+| `pareto_front` | The front's trials, for a Pareto search; None otherwise |
+| `outputs` | The chosen trial's `AdaptationResult` per recording, with `best_result_path` and an in-memory pool; None otherwise |
 
 With `best_result_path`, results are written as the search runs: the best trial's results and
 config (or one folder per front member), and `study.pkl` after every trial, so an interrupted
-search keeps its completed trials. `on_trial`, a function called after every trial with its
-losses, streams progress to a tracker or a log.
+search keeps its completed trials.
 
 ## Reproducibility
 

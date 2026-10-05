@@ -33,6 +33,16 @@ def test_workflow_and_tune_snippets_run_from_the_repository_root(monkeypatch):
     assert workflow["calibration"].gt_matched_indices is not None
     assert workflow["adapted"].spikes.shape == workflow["fixed"].spikes.shape
     assert (OUTPUTS / "results.meta.yaml").exists()
+    assert (OUTPUTS / "sources.png").exists() and (OUTPUTS / "spikes.png").exists()
+
+    # The process_batch loop reproduces the online mode, batch for batch
+    n_loop = (workflow["batch_idx"] + 1) * workflow["batch_size"]
+    if workflow["batch"].shape[0] < workflow["batch_size"]:
+        n_loop -= workflow["batch_size"]  # the partial last batch was not processed
+    last = slice(n_loop - workflow["batch_size"], n_loop)
+    assert (
+        workflow["batch_spikes"].cpu() == workflow["streamed"].spikes[last].cpu()
+    ).all()
 
     tune = runpy.run_path(str(SNIPPETS / "tune.py"), run_name="__main__")
     assert tune["result"].best_config is not None

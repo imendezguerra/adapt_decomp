@@ -76,16 +76,21 @@ and the momentum.
 | `wh_learning_rate` | 5e-3 | Step size of the whitening update | Tune it |
 | `sv_learning_rate` | 1e-3 | Step size of the separation-vector update | Tune it |
 | `centroid_momentum` | 0.95 | How slowly the spike detection follows each batch, from 0 to 1 | Tune it |
-| `adapt_wh`, `adapt_sv`, `adapt_sd` | True | Which parts adapt | All False: no adaptation (the `fixed` preset) |
+| `adapt_wh` | True | Whether the whitening adapts | False to freeze it; all three flags False is no adaptation (the `fixed` preset) |
+| `adapt_sv` | True | Whether the separation vectors adapt | False to freeze them |
+| `adapt_sd` | True | Whether the spike detection centroids adapt | False to freeze them |
 | `batch_ms` | 100 | Batch duration, in ms | Shorter for lower latency; the tuned learning rates assume their batch duration |
+| `source_fifo_from_calib` | False | Whether the first batch sees the calibration's last sources, to detect spikes at its start | True when the EMG starts where the calibration window ends |
 | `compute_loss` | True | Whether to compute the losses | False in real time |
 | `device` | None | Compute device; None picks CUDA, then MPS, then the CPU | |
 | `save_params` | False | Whether to write the model of every batch to an HDF5 file (`save_path`) | To study how the model changes |
+| `lr_mode` | "fixed" | Update rule: a plain step of the learning rate, or `"rel_error"`, a step scaled by the normalised error | Keep the default: the presets were tuned with it |
+| `wh_mode` | "kl_to_identity" | Whitening error: the divergence of the whitened covariance from the identity, or `"kl_to_cal"`, from the calibration's | Keep the default: the presets were tuned with it |
+| `contrast_scope` | "spike_based" | Samples the separation-vector update uses: the detected spikes, or `"batch_based"`, the whole batch | Keep the default: the presets were tuned with it |
 
-Three switches choose between alternative update rules: `lr_mode`, `wh_mode` and
-`contrast_scope`. Keep their defaults, which the presets were tuned with; the alternatives
-exist for ablation studies. The [API reference](../reference/adaptation.md#adapt_decomp.adaptation.AdaptConfig)
-lists every field.
+The alternatives of the last three exist for ablation studies, and need their own tuning. The
+[API reference](../reference/adaptation.md#adapt_decomp.adaptation.AdaptConfig) lists every
+field.
 
 **Settings shared with calibration.** The preprocessing, channel and extension settings, and
 `spike_det_exp`, must be the calibration's. `from_calibration` copies them from `cbss_config`
@@ -101,9 +106,12 @@ a time:
 
 ```python
 adapter = AdaptDecomp.from_calibration(calibration, cbss_config, adapt_config)
-for chunk in live_feed:  # torch.Tensor, (batch_size, channels)
-    spikes, sources = adapter.process_batch(chunk)
+for batch_idx, batch in enumerate(live_feed):  # torch.Tensor, (batch_size, channels)
+    spikes, sources = adapter.process_batch(batch, batch_idx)
 ```
+
+[Process online](../how-to/process-online.md) runs this loop on a recording, and checks it
+gives the same output as `processing_mode="online"`.
 
 ## What you get back
 
@@ -113,9 +121,16 @@ An `AdaptationResult`, with `M` units and one entry per batch for the per-batch 
 |---|---|---|
 | `spikes` | (samples, M) | Binary spike trains |
 | `sources` | (samples, M) | Each unit's source |
-| `total_time_ms` | (batches,) | Time per batch, in ms; `wh_time_ms`, `sv_time_ms`, `sd_time_ms` and `preprocess_time_ms` split it by step |
-| `wh_loss`, `sv_loss` | (batches,), (batches, M) | The losses, if `compute_loss` |
-| `wh_loss_total`, `sv_loss_total`, `total_loss` | scalars | The losses over the whole run, as the search scores them |
+| `total_time_ms` | (batches,) | Time per batch, in ms |
+| `preprocess_time_ms` | (batches,) | Preprocessing time per batch, in ms; zero offline, where the recording is preprocessed upfront |
+| `wh_time_ms` | (batches,) | Whitening step time per batch, in ms |
+| `sv_time_ms` | (batches,) | Separation-vector step time per batch, in ms |
+| `sd_time_ms` | (batches,) | Spike detection step time per batch, in ms |
+| `wh_loss` | (batches,) | Whitening loss per batch, if `compute_loss` |
+| `sv_loss` | (batches, M) | Separation-vector loss per batch and unit, if `compute_loss` |
+| `wh_loss_total` | scalar | The whitening loss over the whole run, as the search scores it |
+| `sv_loss_total` | scalar | The separation-vector loss over the whole run, as the search scores it |
+| `total_loss` | scalar | `wh_loss_total + sv_loss_total` |
 | `gt_matched_indices` | (M,) | The ground-truth unit each unit tracks, carried over from the calibration |
 
 Save it with `result.save(path)` and reload it with `AdaptationResult.load(path)`.

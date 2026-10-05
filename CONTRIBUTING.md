@@ -94,6 +94,9 @@ The site (https://imendezguerra.github.io/adapt_decomp/) is built with MkDocs Ma
 - Notebooks: the tutorial and the benchmark's dataset and results notebooks are added from
   outside `docs/` by `docs/hooks.py`, and rendered from their stored outputs (they are not
   executed by the build). Re-run a notebook and commit its outputs to update its page.
+- Figures: the plots on the *Plot results* page (`docs/assets/how-to/*.png`) are the ones
+  `docs/snippets/workflow.py` saves to `data/fdsi_example/outputs/docs-example/`. After changing
+  its plot sections, run it and copy them over.
 
 To preview the site, run `make docs` (`mkdocs serve`) and open the address it prints. It
 reloads when you edit `docs/`, `README.md`, `CHANGELOG.md` or the source. `make docs-build`

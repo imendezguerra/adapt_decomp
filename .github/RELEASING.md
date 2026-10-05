@@ -80,7 +80,8 @@ and `fdsi_benchmark-outputs`, with the v1.1 benchmark outputs):
     ```
     Check the MD5 Zenodo shows against `md5sum dist/adapt_decomp-fdsi_example-data.zip`.
 5. **Bake the version DOI** into `ARCHIVES` in `src/adapt_decomp/utils/download.py` (and its
-   size), and the concept DOI into the dataset's README if it cites itself.
+   size), into the data table of `docs/getting-started/installation.md`, and the concept DOI
+   into the dataset's README if it cites itself.
 6. **Publish** the draft, then check the download end to end:
     ```sh
     adapt-decomp-data get fdsi_example-data --dest /tmp/check

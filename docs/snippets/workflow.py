@@ -118,14 +118,30 @@ import matplotlib.pyplot as plt
 
 from adapt_decomp.utils.plots import plot_sources
 
+units = slice(0, 4)  # the first four units
 axs = plot_sources(
-    sources={"no adaptation": fixed.sources.numpy(), "adapted": adapted.sources.numpy()},
+    sources={"adapted": adapted.sources.numpy()[:, units]},  # more entries are overlaid
     timestamps=np.arange(CAL_END, emg.shape[0]) / FS,  # the samples of emg[CAL_END:]
-    spikes={"adapted": adapted.spikes.numpy()},
-    time_range=(40, 50),  # seconds
+    spikes={"adapted": adapted.spikes.numpy()[:, units]},  # marked on the sources
+    time_range=(45, 50),  # seconds
 )
-plt.savefig(OUT / "sources.png", dpi=100)
+plt.savefig(OUT / "sources.png", dpi=100, bbox_inches="tight")
 # --8<-- [end:plot-sources]
+
+# --8<-- [start:plot-spikes]
+from adapt_decomp.utils.plots import plot_spikes
+
+ax = plot_spikes(
+    spikes={
+        "ground truth": gt_paired[:, units],  # the simulated motor unit each unit tracks
+        "no adaptation": fixed.spikes.numpy()[:, units],
+        "adapted": adapted.spikes.numpy()[:, units],
+    },
+    timestamps=np.arange(CAL_END, emg.shape[0]) / FS,
+    time_range=(45, 50),  # seconds
+)
+plt.savefig(OUT / "spikes.png", dpi=100, bbox_inches="tight")
+# --8<-- [end:plot-spikes]
 
 # --8<-- [start:online]
 # The same model, preprocessing each raw batch itself as it would online
@@ -134,6 +150,22 @@ adapter = AdaptDecomp.from_calibration(
 )
 streamed = adapter.process_data(emg[CAL_END : 15 * FS], processing_mode="online")
 # --8<-- [end:online]
+
+# --8<-- [start:online-loop]
+# A live feed: hand each raw batch to process_batch as it arrives
+import torch
+
+adapter = AdaptDecomp.from_calibration(
+    calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
+)
+batch_size = adapter.config.batch_size  # samples per batch (batch_ms)
+live_feed = torch.as_tensor(emg[CAL_END : 15 * FS]).split(batch_size)  # stands in for the device
+
+for batch_idx, batch in enumerate(live_feed):
+    if batch.shape[0] < batch_size:
+        break  # a live feed only hands over full batches
+    batch_spikes, batch_sources = adapter.process_batch(batch, batch_idx)  # (batch_size, units)
+# --8<-- [end:online-loop]
 
 # --8<-- [start:provenance]
 import sys

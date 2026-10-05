@@ -1,12 +1,34 @@
 # Plot results
 
-## Sources and spikes
+These examples continue the [quickstart](../getting-started/quickstart.md), with its `adapted`
+and `fixed` results and the ground truth paired to the units (`gt_paired`).
 
-Overlay the sources of several results, one row per unit:
+## Sources
+
+`plot_sources` draws each unit's source, one row per unit, with its detected spikes marked.
+Several results passed together are overlaid, one colour each.
 
 ```python
 --8<-- "workflow.py:plot-sources"
 ```
+
+![The sources of four units after adaptation, with their detected spikes](../assets/how-to/sources.png)
+
+## Spikes
+
+`plot_spikes` draws spike trains as a raster, one group of rows per unit, which compares
+results unit by unit. Here, the units' spikes without and with adaptation, under the ground
+truth they should match:
+
+```python
+--8<-- "workflow.py:plot-spikes"
+```
+
+![Spike rasters of four units: ground truth, no adaptation and adapted](../assets/how-to/spikes.png)
+
+Without adaptation, the units have drifted away from the simulated motor units they tracked at
+calibration, and few of their spikes are detected; with adaptation, the detected spikes follow
+the ground truth.
 
 ## Results over many recordings
 
