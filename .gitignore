@@ -201,3 +201,6 @@ archive/
 
 # MkDocs build output (mkdocs build)
 site/
+
+# PBS job logs (benchmarks/fdsi/pbs/submit.sh)
+.job_outputs/

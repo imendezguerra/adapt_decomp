@@ -11,6 +11,7 @@
 name: adapt_decomp
 channels:
   - conda-forge
+  - nodefaults   # ignore a .condarc's defaults channel, whose libraries mix badly with conda-forge's
 dependencies:
   - python=3.12.3
   - pip
@@ -20,7 +21,7 @@ dependencies:
   - scipy==1.17.1
   - scikit-learn==1.9.1
   - joblib==1.5.3
-  - psutil==5.9.0
+  - psutil==7.2.2
   - pandas==3.0.2
   - h5py==3.16.0
   - matplotlib==3.10.9

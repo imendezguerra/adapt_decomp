@@ -8,7 +8,7 @@ the scheduler's allocation: `SLURM_CPUS_PER_TASK` on SLURM, `NCPUS` on PBS Pro a
 limit (SLURM's, or the cgroup's on PBS). Request the cores and memory the search needs:
 
 ```sh
-#PBS -l select=1:ncpus=12:mem=64gb      # PBS Pro
+#PBS -l select=1:ncpus=12:ompthreads=12:mem=64gb   # PBS Pro (NCPUS comes from ompthreads)
 #SBATCH --cpus-per-task=12 --mem=64G     # SLURM
 ```
 

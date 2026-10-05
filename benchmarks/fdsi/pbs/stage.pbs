@@ -2,14 +2,16 @@
 # One stage of the FDSI benchmark as a PBS Pro job (an array job for calibrate/search/apply).
 # Submitted by submit.sh, which sets the resources (-l), the array range (-J) and
 # STAGE, SPEC and CHUNK (-v). Each subjob runs CHUNK tasks: [index * CHUNK, (index + 1) * CHUNK).
+# Its log (stdout and stderr) goes to .job_outputs/ (-o, set by submit.sh).
 #PBS -N fdsi_benchmark
 #PBS -j oe
 
-set -euo pipefail
+# Site-specific: make conda available and activate the environment (edit for your cluster).
+# Before set -u, as conda's activation scripts read unset variables.
+eval "$("$HOME/miniforge3/bin/conda" shell.bash hook)"
+conda activate adapt_decomp
 
-# Site-specific: make conda available and activate the environment (edit for your cluster)
-# module load anaconda3/personal
-# source activate adapt_decomp
+set -euo pipefail
 
 cd "$PBS_O_WORKDIR"
 
