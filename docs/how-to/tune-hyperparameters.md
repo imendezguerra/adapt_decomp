@@ -2,7 +2,7 @@
 
 `optimize_adapt_decomp` searches `wh_learning_rate`, `sv_learning_rate` and
 `centroid_momentum` (by default) over a pool of calibrated recordings: every trial adapts every
-recording with one suggested setting. The [optimisation guide](../optimisation.md) explains
+recording with one suggested setting. The [optimisation guide](../guide/optimisation.md) explains
 each option in depth.
 
 ## Build a pool
@@ -10,6 +10,11 @@ each option in depth.
 ```python
 --8<-- "tune.py:pool"
 ```
+
+`start` (and `stop`) select the samples every trial adapts and scores, the EMG and the ground
+truth alike: here from the end of the 5 s calibration window, so the search scores the same part
+of the recording as [adapting from the calibration end](adapt-from-calibration-end.md).
+`source_fifo_from_calib` starts each trial's source FIFO from the calibration's last sources.
 
 For pools too large to keep in memory, `load_pooled_cbss_disk` takes the same `datasets` list
 and loads each recording per trial instead.
@@ -50,5 +55,5 @@ its default (`None`).
 
 `sv_loss_reduction` on the base config sets whether `sv_loss` is averaged (`"mean"`, the
 default) or summed over units. `n_jobs` and `n_cores` set how many trials run together and on
-how many cores; see [Faster searches](../optimisation.md#faster-searches-n_cores-and-n_jobs).
+how many cores; see [Speed and resources](../guide/optimisation.md#speed-and-resources).
 The [FDSI benchmark results](../benchmarks/fdsi/report.ipynb) compare these choices.

@@ -1,9 +1,15 @@
+# Documentation: built on every PR and push to main (to catch errors),
+# deployed to GitHub Pages only on a release (or a manual run), so the site matches the
+# latest release on PyPI.
+
 name: Docs
 
 on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -38,13 +44,13 @@ jobs:
       - name: Build
         run: mkdocs build --strict
       - uses: actions/upload-pages-artifact@v5
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         with:
           path: site
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     permissions:

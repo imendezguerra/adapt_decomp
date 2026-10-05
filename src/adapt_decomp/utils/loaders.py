@@ -145,7 +145,9 @@ def load_example(
     Returns:
         Dict: "cbss_result" (CBSSResult), "cbss_config" (CBSSConfig, a
         best-effort reconstruction), "emg" (torch.Tensor, shape
-        (samples, channels)), "gt_full_bin" (Optional[np.ndarray], paired to
+        (samples, channels)), "gt_spikes" (np.ndarray, shape (samples,
+        simulated units), binary spike trains of every simulated motor unit),
+        "gt_full_bin" (Optional[np.ndarray], paired to
         cbss_result's units), "roa_calib" (Optional[np.ndarray], per-unit
         rate of agreement at the calibration window), "preprocess" (bool),
         "fs" (int), "timestamps" (np.ndarray, shape (samples,), seconds),
@@ -179,6 +181,7 @@ def load_example(
         "cbss_result": cbss_result,
         "cbss_config": cbss_config,
         "emg": torch.from_numpy(np.asarray(sim_data["emg"], dtype=np.float32)),
+        "gt_spikes": spikes_gt,
         "gt_full_bin": gt_full_bin,
         "roa_calib": roa_calib,
         "preprocess": preprocess,
@@ -365,6 +368,43 @@ def _resolve_pool_loaders(
     )
 
 
+def _resolve_pool_window(dataset: Dict) -> Tuple[int, Optional[int]]:
+    """Read one dataset's optional start/stop samples from its data_config entry.
+
+    Args:
+        dataset (Dict): One dataset's data_config entry.
+
+    Returns:
+        Tuple[int, Optional[int]]: start, 0 if unset; stop, None (the end) if unset.
+    """
+    stop = dataset.get("stop")
+    return int(dataset.get("start", 0)), int(stop) if stop is not None else None
+
+
+def _sample_window(label: str, start: int, stop: Optional[int], n_samples: int) -> slice:
+    """Check that [start, stop) selects samples of a recording.
+
+    Args:
+        label (str): The dataset, named in the error message.
+        start (int): First sample kept.
+        stop (Optional[int]): One past the last sample kept, None for the end.
+        n_samples (int): Samples in the recording.
+
+    Raises:
+        ValueError: If [start, stop) selects no samples of the recording.
+
+    Returns:
+        slice: slice(start, stop).
+    """
+    window = slice(start, stop)
+    if len(range(n_samples)[window]) == 0:
+        raise ValueError(
+            f"{label}: start={start}, stop={stop} selects no samples of a "
+            f"{n_samples}-sample recording."
+        )
+    return window
+
+
 # ------------------------------------------------------------------
 # Pooled dataset dataclasses
 # ------------------------------------------------------------------
@@ -385,7 +425,7 @@ class PooledDatasetMemory:
         preprocess (bool, optional): Whether to preprocess emg before
             extension, for every dataset's AdaptDecomp. Defaults to True.
         gt_paired_bin (Optional[np.ndarray]): Ground-truth binary spike
-            train for the full recording, matched and reordered to
+            train over the same samples as emg, matched and reordered to
             calibration's units (see CBSSResult.select_supervised), with
             shape (samples, M). Required when
             optimize_adapt_decomp(compute_roa=True) is used;
@@ -445,6 +485,10 @@ class PooledDatasetDisk:
         fs (Optional[int]): Sampling frequency override for matching
             path_gt. Defaults to None, which uses the loaded calibration's
             own fs each trial.
+        start (int, optional): First sample of the recording adapted and
+            scored, e.g. the calibration's end. Defaults to 0.
+        stop (Optional[int]): One past the last sample adapted and scored.
+            Defaults to None, the end of the recording.
     """
 
     path_calib: Path
@@ -456,6 +500,8 @@ class PooledDatasetDisk:
     preprocess: bool = True
     path_gt: Optional[Path] = None
     fs: Optional[int] = None
+    start: int = 0
+    stop: Optional[int] = None
 
     def resolve(
         self,
@@ -464,8 +510,12 @@ class PooledDatasetDisk:
 
         Matches ground truth to calibration units via
         CBSSResult.select_supervised() when path_gt is set, narrowing
-        calibration to GT-matched units in the process. Nothing is cached --
-        call this once per trial.
+        calibration to GT-matched units in the process, on the full
+        recording; then slices emg and gt_paired_bin to [start, stop).
+        Nothing is cached -- call this once per trial.
+
+        Raises:
+            ValueError: If [start, stop) selects no samples of the recording.
 
         Returns:
             Tuple[np.ndarray, CBSSResult, CBSSConfig, bool, Optional[np.ndarray]]:
@@ -476,7 +526,9 @@ class PooledDatasetDisk:
             self.path_calib, self.path_calib_config, self.calib_loader
         )
         emg = load_emg(self.path_emg, self.emg_loader)
+        window = _sample_window(str(self.path_emg), self.start, self.stop, emg.shape[0])
 
+        # Match ground truth on the calibration window (samples [0, L) of the recording)
         gt_paired_bin = None
         if self.path_gt is not None:
             spikes_gt_full = load_gt(self.path_gt, emg.shape[0], self.gt_loader)
@@ -485,9 +537,9 @@ class PooledDatasetDisk:
                 spikes_gt_full[: calibration.sources.shape[0]],
                 fs=fs,
             )
-            gt_paired_bin = spikes_gt_full[:, calibration.gt_matched_indices]
+            gt_paired_bin = spikes_gt_full[window, calibration.gt_matched_indices]
 
-        return emg, calibration, cbss_config, self.preprocess, gt_paired_bin
+        return emg[window], calibration, cbss_config, self.preprocess, gt_paired_bin
 
 
 # One entry of an optimize_adapt_decomp pool, in memory or on disk
@@ -518,14 +570,23 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
             emg_loader: <optional per-dataset override>
             gt_loader: <optional per-dataset override>
             fs: <optional -- defaults to CBSSResult.fs (needs timestamps set)>
+            start: <optional -- first sample adapted and scored, e.g. the calibration's end;
+                    defaults to 0>
+            stop: <optional -- one past the last sample adapted and scored; defaults to the end>
 
     Ground truth (if given) is matched to each dataset's calibration via
     CBSSResult.select_supervised() -- the calibration itself (and therefore
     the resulting PooledDatasetMemory) is narrowed to only GT-matched
-    units.
+    units. Matching compares the calibration with the first samples of the
+    full ground truth, so the calibration window must start at sample 0;
+    only then are emg and gt_paired_bin sliced to [start, stop), together.
 
     Args:
         data_config (Dict): Parsed pooled data_config YAML, as above.
+
+    Raises:
+        ValueError: If a dataset's [start, stop) selects no samples of its
+            recording.
 
     Returns:
         Dict[str, Any]: Dataset name -> PooledDatasetMemory, ready to
@@ -548,7 +609,9 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
             calib_loader,
         )
         emg_full = load_emg(root / dataset["path_emg"], emg_loader)
+        window = _sample_window(dataset["name"], *_resolve_pool_window(dataset), emg_full.shape[0])
 
+        # Match ground truth on the calibration window (samples [0, L) of the recording)
         gt_paired_bin = None
         if dataset.get("path_gt") is not None:
             spikes_gt_full = load_gt(root / dataset["path_gt"], emg_full.shape[0], gt_loader)
@@ -557,10 +620,10 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
                 spikes_gt_full[: cbss_result.sources.shape[0]],
                 fs=fs,
             )
-            gt_paired_bin = spikes_gt_full[:, cbss_result.gt_matched_indices]
+            gt_paired_bin = spikes_gt_full[window, cbss_result.gt_matched_indices]
 
         pool[dataset["name"]] = PooledDatasetMemory(
-            emg=torch.from_numpy(emg_full),
+            emg=torch.from_numpy(emg_full[window].copy()),  # a copy: the full recording is freed
             calibration=cbss_result,
             cbss_config=cbss_config,
             preprocess=dataset.get("preprocess", default_preprocess),
@@ -598,6 +661,12 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
             emg_loader: <optional per-dataset override>
             gt_loader: <optional per-dataset override>
             fs: <optional -- defaults to the loaded calibration's own fs each trial>
+            start: <optional -- first sample adapted and scored, e.g. the calibration's end;
+                    defaults to 0>
+            stop: <optional -- one past the last sample adapted and scored; defaults to the end>
+
+    Each trial matches ground truth on the full recording, then slices emg
+    and gt_paired_bin to [start, stop) (see PooledDatasetDisk.resolve).
 
     Args:
         data_config (Dict): Parsed pooled data_config YAML, as above.
@@ -618,6 +687,7 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
     for dataset in data_config["datasets"]:
         calib_loader, emg_loader, gt_loader = _resolve_pool_loaders(dataset, defaults)
         path_gt = dataset.get("path_gt")
+        start, stop = _resolve_pool_window(dataset)
         pool[dataset["name"]] = PooledDatasetDisk(
             path_calib=root / dataset["path_calib"],
             path_calib_config=root / dataset["path_calib_config"],
@@ -628,6 +698,8 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
             preprocess=dataset.get("preprocess", default_preprocess),
             path_gt=root / path_gt if path_gt is not None else None,
             fs=int(dataset["fs"]) if "fs" in dataset else None,
+            start=start,
+            stop=stop,
         )
     return pool
 

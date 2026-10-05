@@ -13,6 +13,8 @@ datasets:
     path_calib: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss.pkl'
     path_calib_config: 'outputs/calibration/sub-01/sub-01_FDSI_triangular-ramp40s_snr30dB_cbss_config.yaml'
     path_gt: 'data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz'   # Optional; omit for no RoA
+    # start: 10240           # Optional: first sample adapted and scored, e.g. the 5 s calibration's end
+    # stop: null             # Optional: one past the last sample adapted and scored (default: the end)
 
   - name: triangular-ramp10s
     path_emg: 'data/sub-01/noisy/sub-01_FDSI_triangular-ramp10s_snr30dB_emg.npz'

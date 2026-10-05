@@ -1,7 +1,7 @@
 """Shared code path for the cross-platform reproducibility test and its reference.
 
 Runs the adaptation from notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb
-(section 2.2: NeuroMotion simulation, default_neuromotion.yaml, CPU, no parameter
+(section 2.2: NeuroMotion simulation, the neuromotion preset, CPU, no parameter
 saving) and reduces the outputs to a small "fingerprint" that is compared against
 tests/reproducibility/reference/neuromotion_adapt.npz.
 """
@@ -17,7 +17,6 @@ ROOT = Path(__file__).resolve().parents[2]
 NM_DATA = ROOT / "data" / "neuromotion" / "data"
 PATH_EMG = NM_DATA / "data_sim.hdf5"
 PATH_DECOMP = NM_DATA / "calibration" / "decomp_sim.mat"
-PATH_CONFIG = ROOT / "configs" / "adapt_configs" / "default_neuromotion.yaml"
 PATH_REFERENCE = Path(__file__).resolve().parent / "reference" / "neuromotion_adapt.npz"
 
 SEED = 1909
@@ -57,7 +56,7 @@ def run_tutorial_adaptation() -> Dict[str, np.ndarray]:
     data = load_example(PATH_EMG, PATH_DECOMP, False)
     cbss_result = data["cbss_result"]
 
-    config = AdaptConfig.from_yaml(PATH_CONFIG)
+    config = AdaptConfig.from_preset("neuromotion")
     config.device = "cpu"
     config.ext_fact = cbss_result.ext_fact
     config.compute_loss = True

@@ -1,6 +1,6 @@
 """End-to-end run of the FDSI benchmark stages on real data: calibrate, search, apply, collect
 and verify, on the pool's three recordings with one one-trial search. Needs the FDSI data
-(python scripts/download_data.py get fdsi_benchmark-data)."""
+(adapt-decomp-data get fdsi_benchmark-data)."""
 
 import pandas as pd
 import pytest

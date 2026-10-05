@@ -8,7 +8,6 @@ import json
 import os
 import pickle
 import shutil
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -47,7 +46,7 @@ REPRODUCE_SETUP = (
     "conda env create -f environment.yaml",
     "conda activate adapt_decomp",
     "pip install -e .",
-    "python scripts/download_data.py get fdsi_benchmark-data",
+    "adapt-decomp-data get fdsi_benchmark-data",
 )
 
 # v1.0's applied configs (lr_mode="fixed"): branch -> search dir, None for the fixed baseline
@@ -373,21 +372,12 @@ def search(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
                 "path_calib_config": str(spec.calibration_paths(rec)["config"]),
                 "path_gt": str(spec.gt_path(rec)),
                 "fs": spec.fs,
+                "start": spec.cal_end,
             }
             for rec in spec.pool_recordings()
         ],
     }
     pool = load_pooled_cbss_memory(data_config)
-    pool = {
-        cond: replace(
-            dataset,
-            emg=dataset.emg[spec.cal_end :],
-            gt_paired_bin=None
-            if dataset.gt_paired_bin is None
-            else dataset.gt_paired_bin[spec.cal_end :],
-        )
-        for cond, dataset in pool.items()
-    }
 
     # Search, writing into a temporary directory swapped in when complete
     out_dir = spec.search_paths(name)["dir"]
@@ -494,12 +484,21 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         else AdaptConfig.from_yaml(spec.search_paths(branch)["dir"] / "best_config.yaml")
     )
 
-    # Adapt forwards from the end of the calibration window, keeping CBSS's output over it
+    # Adapt from the end of the calibration window, the source FIFO seeded from its tail
     emg_full = fdsi.load_raw_emg(spec.data_root, rec.sub, rec.cond, rec.snr)
+    adapt_config.source_fifo_from_calib = True
     adapter = AdaptDecomp.from_calibration(
         calibration=cbss_result, cbss_config=cbss_config, adapt_config=adapt_config
     )
-    outputs = adapter.process_from_calib_end(emg_full, slice(0, spec.cal_end))
+    outputs = adapter.process_data(emg_full[spec.cal_end :])
+
+    # Prepend CBSS's own output over the calibration window, so the whole recording is scored
+    outputs.spikes = torch.cat(
+        [torch.as_tensor(cbss_result.spikes, dtype=outputs.spikes.dtype), outputs.spikes]
+    )
+    outputs.sources = torch.cat(
+        [torch.as_tensor(cbss_result.sources, dtype=outputs.sources.dtype), outputs.sources]
+    )
 
     # Score against the ground truth
     outputs.sil = get_sil(

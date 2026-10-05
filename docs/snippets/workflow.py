@@ -1,7 +1,7 @@
 """How-to examples on one FDSI recording: calibrate, adapt, evaluate, plot and record.
 
-Run from the repository root with the FDSI data downloaded
-(python scripts/download_data.py get fdsi_benchmark-data); the how-to pages include its
+Run it from the directory holding data/, with the example recording downloaded
+(adapt-decomp-data get fdsi_example-data); the quickstart and the how-to pages include its
 sections, and tests/docs/test_snippets.py runs it.
 """
 
@@ -12,8 +12,8 @@ import numpy as np
 
 from adapt_decomp.utils import load_emg, load_gt
 
-DATA = Path("data/fdsi_benchmark/data/sub-01")
-OUT = Path("data/fdsi_benchmark/outputs/docs-example")
+DATA = Path("data/fdsi_example/data/sub-01")
+OUT = Path("data/fdsi_example/outputs/docs-example")
 FS = 2048
 CAL_END = 5 * FS  # calibrate on the first 5 s
 
@@ -57,41 +57,47 @@ from adapt_decomp.adaptation import AdaptConfig
 
 calibration = CBSSResult.load(OUT / "calibration.pkl")
 cbss_config = CBSSConfig.from_yaml(OUT / "calibration_config.yaml")
-adapt_config = AdaptConfig.from_yaml("configs/adapt_configs/default_muniverse.yaml")
+adapt_config = AdaptConfig.from_preset("muniverse")  # tuned on the FDSI benchmark
 adapt_config.device = "cpu"
+adapt_config.source_fifo_from_calib = True  # the EMG below starts where calibration ends
 
 adapter = AdaptDecomp.from_calibration(
     calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
 )
-# Keep CBSS's own output over the calibration window, adapt forwards from its end
-adapted = adapter.process_from_calib_end(emg, slice(0, CAL_END))
+# Adapt from the end of the calibration window
+adapted = adapter.process_data(emg[CAL_END:])
 print(adapted.spikes.shape, f"{adapted.total_time_ms.float().mean():.1f} ms per 100 ms batch")
 # --8<-- [end:adapt]
 
+# --8<-- [start:prepend]
+# The whole recording: CBSS's own output over the calibration window, then the adapted samples
+spikes_full = np.concatenate([calibration.spikes, adapted.spikes.numpy()])
+sources_full = np.concatenate([calibration.sources, adapted.sources.numpy()])
+# --8<-- [end:prepend]
+
 # --8<-- [start:baseline]
 # The same calibration without adaptation: every adapt_* flag off
-fixed_config = AdaptConfig.from_yaml("configs/adapt_configs/default_fixed.yaml")
+fixed_config = AdaptConfig.from_preset("fixed")
 fixed_config.device = "cpu"
+fixed_config.source_fifo_from_calib = True
 fixed = AdaptDecomp.from_calibration(
     calibration=calibration, cbss_config=cbss_config, adapt_config=fixed_config
-).process_from_calib_end(emg, slice(0, CAL_END))
+).process_data(emg[CAL_END:])
 # --8<-- [end:baseline]
 
 # --8<-- [start:evaluate]
 from adapt_decomp.spikes import get_sil, rate_of_agreement_paired
 
-gt_paired = gt_spikes[:, calibration.gt_matched_indices]  # (samples, units), in unit order
-after_cal = slice(CAL_END, None)
+# Ground truth of the adapted samples, one column per unit, in unit order
+gt_paired = gt_spikes[CAL_END:, calibration.gt_matched_indices]
 for name, result in (("no adaptation", fixed), ("adapted", adapted)):
-    roa, _, _ = rate_of_agreement_paired(
-        gt_paired[after_cal], result.spikes.numpy()[after_cal], fs=FS, tol_spike_ms=2
-    )
+    roa, _, _ = rate_of_agreement_paired(gt_paired, result.spikes.numpy(), fs=FS, tol_spike_ms=2)
     print(f"{name}: mean RoA after calibration {100 * roa.mean():.1f} %")
 # --8<-- [end:evaluate]
 
 # --8<-- [start:evaluate-window]
-# Any window, e.g. the ramp of this triangular contraction (10 s to 80 s)
-ramp = slice(10 * FS, 80 * FS)
+# Any window, e.g. the ramp of this triangular contraction (10 s to 80 s of the recording)
+ramp = slice(10 * FS - CAL_END, 80 * FS - CAL_END)  # in samples of emg[CAL_END:]
 roa_ramp, _, _ = rate_of_agreement_paired(
     gt_paired[ramp], adapted.spikes.numpy()[ramp], fs=FS, tol_spike_ms=2
 )
@@ -114,7 +120,7 @@ from adapt_decomp.utils.plots import plot_sources
 
 axs = plot_sources(
     sources={"no adaptation": fixed.sources.numpy(), "adapted": adapted.sources.numpy()},
-    timestamps=np.arange(emg.shape[0]) / FS,
+    timestamps=np.arange(CAL_END, emg.shape[0]) / FS,  # the samples of emg[CAL_END:]
     spikes={"adapted": adapted.spikes.numpy()},
     time_range=(40, 50),  # seconds
 )
@@ -126,7 +132,7 @@ plt.savefig(OUT / "sources.png", dpi=100)
 adapter = AdaptDecomp.from_calibration(
     calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
 )
-streamed = adapter.process_data(emg[: 15 * FS], processing_mode="online")
+streamed = adapter.process_data(emg[CAL_END : 15 * FS], processing_mode="online")
 # --8<-- [end:online]
 
 # --8<-- [start:provenance]

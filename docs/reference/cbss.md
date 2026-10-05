@@ -1,7 +1,7 @@
 # Calibration (`adapt_decomp.cbss`)
 
 Convolutive blind source separation on a calibration window. See the
-[calibration guide](../calibration.md) for how the pieces fit together.
+[calibration guide](../guide/calibration.md).
 
 ::: adapt_decomp.cbss.CBSS
 

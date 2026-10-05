@@ -16,16 +16,13 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Cross-platform reproducibility test (`tests/reproducibility/`): the tutorial's adaptation is
   checked against a stored reference on every OS.
 - `Makefile` with common tasks.
-- `AdaptDecomp.process_from_calib_end(emg, calib_indices, backward=False)`: keeps the
-  calibration's own output over its window and adapts forwards from its last sample, and
-  optionally backwards from its first sample (offline). `emg` is filtered once for both passes;
-  each pass starts with FIFOs seeded from the samples next to it
-  (`AdaptConfig.backward_fifo_seed`: `"forward_head"` or `"calib_tail"`).
-- `process_data(..., reverse=True)`: offline backward pass, adapting from the last batch to
-  the first; spikes/sources are returned in sample order.
 - `AdaptConfig.source_fifo_from_calib`: seed the source FIFO with the calibration's tail, for
-  online EMG that starts where calibration ends. `Decomposition.seed_fifos()` seeds either
-  FIFO from given rows.
+  EMG that starts where calibration ends (e.g. `process_data(emg[b:])` after a calibration
+  window `[a, b)`). `Decomposition.seed_source_fifo()` seeds it from given sources.
+- Pooled data configs (`load_pooled_cbss_memory`, `load_pooled_cbss_disk`) take optional `start`
+  and `stop` per dataset: the samples every trial adapts and scores, EMG and ground truth alike,
+  e.g. from the end of the calibration window. Ground truth is still matched to the calibration
+  on the full recording first. `PooledDatasetDisk` gains the same two fields.
 - `AdaptConfig.sv_loss_reduction` (`"mean"` | `"sum"`): how `sv_loss_total` reduces across
   units per batch.
 - `optimize_adapt_decomp`: one search entry point for in-memory or on-disk pools and one or
@@ -69,10 +66,31 @@ and this project follows [Semantic Versioning](https://semver.org/).
   (`adapt_decomp.utils.plots`): static plots of a search, drawn from its trials table
   (`study.trials_dataframe()`) rather than a pickled study; `plot_metric_heatmap` takes `cmap`
   and `center`.
-- A documentation site (MkDocs Material, `mkdocs.yml`), published to GitHub Pages from `main`:
-  getting started, the guides, tested how-to guides (`docs/snippets/`), the rendered notebooks,
-  the FDSI benchmark and an API reference generated from the docstrings. Build it with the new
-  `docs` extra (`make docs`, `make docs-build`).
+- A documentation site (MkDocs Material, `mkdocs.yml`), deployed to GitHub Pages on each
+  release: installation, a quickstart, the tutorial, a user guide to calibration, adaptation and
+  hyperparameter optimisation with their key parameters, tested how-to guides
+  (`docs/snippets/`), the FDSI benchmark and an API reference generated from the docstrings.
+  Build it with the new `docs` extra (`make docs`, `make docs-build`).
+- `AdaptConfig.from_preset(name)`: the configs shipped with the package (`PRESETS`:
+  `"muniverse"`, `"neuromotion"`, `"wrist"`, `"forearm"`, `"fixed"`), so a pip install has them
+  too.
+- `adapt-decomp-data`, a command installed with the package (`adapt-decomp-data list`,
+  `adapt-decomp-data get <archive>`), and `adapt_decomp.utils.download_data()`: download and
+  unpack the Zenodo datasets.
+- `fdsi_example-data`: one FDSI recording (70 MB) for the quickstart and how-to guides, so they
+  no longer need the 10 GB benchmark archive. Not published on Zenodo yet.
+- `scripts/pack_data.py`: builds the data archives for upload to Zenodo.
+- `load_example()` also returns `gt_spikes`, the spike trains of every simulated motor unit.
+- `configs/data_configs/fdsi_example.yaml`: a data config for `scripts/run.py` on the example
+  recording.
+- The tutorial calibrates the same recording with CBSS too, and compares both calibrations with
+  and without adaptation (section 8).
+- PyPI releases (`.github/workflows/publish.yml`, Trusted Publishing, with a TestPyPI rehearsal),
+  checking the tag against `__version__`, `CITATION.cff` and this changelog. CI builds and
+  smoke-tests the wheel on every push.
+- `CONTRIBUTING.md` (development setup, tests, docs, dependencies, reproducibility across OSes,
+  the automated checks) and `.github/RELEASING.md` (versions, data archives, benchmark results,
+  the release checklist).
 
 ### Changed
 
@@ -82,8 +100,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `dev` extra. Minimum Python is 3.10 (the code already required it) and minimum torch is 2.7
   (earlier versions lack `slogdet` on Apple's MPS backend).
 - Codebase formatted and linted with ruff.
-- `calibrate_and_process` adapts from the end of the calibration window by default
-  (`adapt_from="calib_end"`), returning CBSS's output over the window;
+- `calibrate_and_process` adapts from the end of the calibration window `[a, b)` by default
+  (`adapt_from="calib_end"`), with the source FIFO seeded from its tail, and returns CBSS's
+  output over `[0, b)`: the calibration's own when the window starts at the first sample, else
+  `CBSS.apply()` over `emg[:b]`. Per-batch arrays and loss totals cover the adapted samples only.
   `adapt_from="emg_start"` keeps the 1.0.0 behaviour.
 - `sv_loss_total` is the per-unit mean by default (`sv_loss_reduction="mean"`), so pooled
   searches no longer favour recordings with more units. Not comparable with 1.0.0 values;
@@ -101,6 +121,15 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `adapt_decomp.adaptation.optimize` still matches them.
 - `ci/check_deps_sync.py` checks every pyproject extra (`dev`, `docs`) against
   `environment.yaml`, including its `pip:` entries, instead of a fixed list of names.
+- The version is read from `adapt_decomp.__version__` (single source); `pyproject.toml` gains
+  the PyPI metadata (licence, keywords, classifiers, project URLs). `environment.yaml` installs
+  the package with its `dev` and `docs` extras.
+- `CBSSConfig`, `AdaptConfig` and `CBSSResult` document every field in their docstring
+  (`Attributes:`), shown in the API reference, instead of in inline comments.
+- `load_config(defaults_path, ...)` requires the path: its default pointed into the repository.
+- `CITATION.cff` cites the software's Zenodo DOI, with the paper as the preferred citation.
+- The README is shorter and links to the documentation, which includes its overview,
+  installation and citation sections.
 
 ### Deprecated
 
@@ -108,8 +137,19 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `_pareto` variants: thin wrappers over `optimize_adapt_decomp` (with `unit_selection=None`)
   keeping their 1.0.0 signatures and return shapes; they emit a `FutureWarning`.
 
+### Removed
+
+- `configs/adapt_configs/default_{muniverse,neuromotion,wrist,forearm,fixed}.yaml`: moved into
+  the package (`src/adapt_decomp/adaptation/presets/`); load them with
+  `AdaptConfig.from_preset(name)`, or by path from there.
+- `scripts/download_data.py`: replaced by the `adapt-decomp-data` command, with the same `list`
+  and `get` subcommands.
+
 ### Fixed
 
+- `scripts/run_example.sh`, `sweep_optuna_example.sh` and `sweep_wandb_example.sh` pointed at a
+  config that didn't exist; they now run on the example recording. `sweep_wandb_example.sh` had
+  its `set -e` inside a comment.
 - The separation-vector convergence check compared each update with itself, so
   `sv_epochs > 1` always stopped after the first epoch.
 - `load_example`'s legacy MATLAB calibrations stored `cov_isi` in percent; it is now a fraction,

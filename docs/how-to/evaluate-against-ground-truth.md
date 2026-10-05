@@ -9,7 +9,8 @@ it tracks, so the rate of agreement (RoA) can be computed unit by unit.
 --8<-- "workflow.py:evaluate"
 ```
 
-Score after the calibration window: before it, the output is CBSS's own.
+The adapted results start where the calibration window ends, so the ground truth is sliced the
+same way: row `i` of both is sample `CAL_END + i` of the recording.
 
 ## Over any window
 

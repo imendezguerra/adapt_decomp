@@ -2,7 +2,7 @@
 
 import pytest
 
-from adapt_decomp.adaptation.config import AdaptConfig
+from adapt_decomp.adaptation.config import PRESETS, AdaptConfig, preset_path
 
 
 def test_adapt_config_to_yaml_from_yaml_roundtrip(tmp_path):
@@ -40,3 +40,20 @@ def test_adapt_config_from_yaml_rejects_bad_literal(tmp_path):
 
     with pytest.raises(ValueError):
         AdaptConfig.from_yaml(path)
+
+
+@pytest.mark.parametrize("name", PRESETS)
+def test_every_preset_loads_from_the_package(name):
+    config = AdaptConfig.from_preset(name)
+    assert preset_path(name).is_file()
+    assert config.batch_size > 0
+
+
+def test_fixed_preset_switches_every_adaptation_off():
+    config = AdaptConfig.from_preset("fixed")
+    assert not (config.adapt_wh or config.adapt_sv or config.adapt_sd)
+
+
+def test_unknown_preset_raises_with_the_valid_names():
+    with pytest.raises(ValueError, match="muniverse"):
+        AdaptConfig.from_preset("not_a_preset")

@@ -1,6 +1,6 @@
 """How-to examples of hyperparameter searches, on the calibration docs/snippets/workflow.py saved.
 
-Run from the repository root after workflow.py; tests/docs/test_snippets.py runs both. The
+Run it after workflow.py, from the same directory; tests/docs/test_snippets.py runs both. The
 searches are kept tiny (2 trials) so they run in a few minutes; use 50 or more in practice.
 """
 
@@ -9,14 +9,14 @@ from pathlib import Path
 from adapt_decomp.adaptation import AdaptConfig
 from adapt_decomp.adaptation.optimize import front_mask, optimize_adapt_decomp
 
-OUT = Path("data/fdsi_benchmark/outputs/docs-example")
-base_config = AdaptConfig.from_yaml("configs/adapt_configs/default_muniverse.yaml")
+OUT = Path("data/fdsi_example/outputs/docs-example")
+base_config = AdaptConfig.from_preset("muniverse")
 base_config.device = "cpu"
 
 # --8<-- [start:pool]
 from adapt_decomp.utils import load_pooled_cbss_memory
 
-DATA = "data/fdsi_benchmark/data/sub-01"
+DATA = "data/fdsi_example/data/sub-01"
 pool = load_pooled_cbss_memory(
     {
         "root": ".",
@@ -27,11 +27,13 @@ pool = load_pooled_cbss_memory(
                 "path_calib": str(OUT / "calibration.pkl"),
                 "path_calib_config": str(OUT / "calibration_config.yaml"),
                 "path_gt": f"{DATA}/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz",  # optional
+                "start": 5 * 2048,  # optional: adapt and score from the calibration's end
             },
             # ... one entry per recording to pool
         ],
     }
 )
+base_config.source_fifo_from_calib = True  # each trial's EMG starts where calibration ends
 # --8<-- [end:pool]
 
 # --8<-- [start:single]

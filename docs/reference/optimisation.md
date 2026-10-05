@@ -1,7 +1,7 @@
 # Optimisation (`adapt_decomp.adaptation.optimize`)
 
 Optuna search of `AdaptConfig` hyperparameters over a pool of calibrated recordings. See the
-[optimisation guide](../optimisation.md).
+[optimisation guide](../guide/optimisation.md).
 
 ::: adapt_decomp.adaptation.optimize.optimize_adapt_decomp
 

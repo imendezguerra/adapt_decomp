@@ -13,30 +13,69 @@ import torch
 
 @dataclass
 class CBSSResult:
-    """Output of CBSS.decompose() and CBSS.apply(). All array fields are CPU numpy arrays."""
+    """Output of CBSS.decompose() and CBSS.apply(). All array fields are CPU numpy arrays.
 
-    sources: np.ndarray  # [T, n_mu]
-    spikes: np.ndarray  # [T, n_mu]  int32
+    Below, n_mu is the number of units and dim the whitened dimension (channels times
+    ext_fact, or n_components with PCA).
+
+    Attributes:
+        sources (np.ndarray): Source of each unit with shape (samples, n_mu).
+        spikes (np.ndarray): Binary spike trains with shape (samples, n_mu), int32.
+        spikes_dict (Dict[int, np.ndarray]): Spike sample indices of each unit.
+        sep_vectors (np.ndarray): Separation vectors with shape (dim, n_mu).
+        whitening (np.ndarray): Whitening matrix with shape (dim, dim).
+        extension_mean (np.ndarray): Mean of the extended EMG with shape
+            (1, channels * ext_fact), subtracted before whitening.
+        spikes_centr (np.ndarray): Spike centroid of each unit's source with shape
+            (n_mu,).
+        base_centr (np.ndarray): Baseline centroid of each unit's source with shape
+            (n_mu,).
+        sil (np.ndarray): Silhouette of each unit with shape (n_mu,).
+        cov_isi (np.ndarray): Coefficient of variation of each unit's inter-spike
+            intervals with shape (n_mu,), as a fraction.
+        ext_fact (int): Extension factor used to build sep_vectors and whitening.
+        pca_components (Optional[np.ndarray]): PCA components with shape
+            (n_components, channels * ext_fact). None without PCA.
+        pca_mean (Optional[np.ndarray]): PCA mean with shape (channels * ext_fact,).
+            None without PCA.
+        pnr (Optional[np.ndarray]): Pulse-to-noise ratio of each unit, in dB, with
+            shape (n_mu,). Set when CBSSConfig.compute_properties is True.
+        dr (Optional[np.ndarray]): Mean discharge rate of each unit, in Hz, with shape
+            (n_mu,). Set when CBSSConfig.compute_properties is True.
+        muaps (Optional[np.ndarray]): Spike-triggered average MUAPs with shape
+            (n_mu, rows, cols, window). Set when CBSSConfig.compute_properties is True.
+        emg (Optional[np.ndarray]): Calibration EMG after preprocessing, before
+            extension, with shape (samples, channels). Set when CBSSConfig.save_emg is
+            True; required by AdaptDecomp.from_calibration().
+        timestamps (Optional[np.ndarray]): Time of each calibration sample, in s, with
+            shape (samples,). Set when CBSSConfig.save_emg is True.
+        gt_matched_indices (Optional[np.ndarray]): Ground-truth unit tracked by each
+            unit with shape (n_mu,). Set by select_supervised().
+        roa (Optional[np.ndarray]): Rate of agreement of each unit with its
+            ground-truth unit with shape (n_mu,), as a fraction. Set by
+            select_supervised().
+    """
+
+    sources: np.ndarray
+    spikes: np.ndarray
     spikes_dict: Dict[int, np.ndarray]
-    sep_vectors: np.ndarray  # [dim, n_mu]
-    whitening: np.ndarray  # [dim, dim]
-    extension_mean: np.ndarray  # [1, C*ext_fact]
-    spikes_centr: np.ndarray  # [n_mu]
-    base_centr: np.ndarray  # [n_mu]
-    sil: np.ndarray  # [n_mu]
-    cov_isi: np.ndarray  # [n_mu] coefficient of variation of inter-spike intervals
-    ext_fact: int  # extension factor used to build sep_vectors/whitening
-    pca_components: Optional[np.ndarray] = None  # [n_comp, C*ext_fact] or None
-    pca_mean: Optional[np.ndarray] = None  # [C*ext_fact] or None
+    sep_vectors: np.ndarray
+    whitening: np.ndarray
+    extension_mean: np.ndarray
+    spikes_centr: np.ndarray
+    base_centr: np.ndarray
+    sil: np.ndarray
+    cov_isi: np.ndarray
+    ext_fact: int
+    pca_components: Optional[np.ndarray] = None
+    pca_mean: Optional[np.ndarray] = None
     pnr: Optional[np.ndarray] = None
     dr: Optional[np.ndarray] = None
     muaps: Optional[np.ndarray] = None
     emg: Optional[np.ndarray] = None
     timestamps: Optional[np.ndarray] = None
-    gt_matched_indices: Optional[np.ndarray] = (
-        None  # [n_mu] index into GT units after supervised selection
-    )
-    roa: Optional[np.ndarray] = None  # [n_mu] RoA vs gt_matched_indices, set by select_supervised
+    gt_matched_indices: Optional[np.ndarray] = None
+    roa: Optional[np.ndarray] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to a plain dict, omitting fields that are still None.

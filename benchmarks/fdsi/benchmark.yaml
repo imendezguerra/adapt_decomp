@@ -34,7 +34,7 @@ pool:                      # The recordings every search is run on
   conditions: [triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
 
 search:                    # Shared by every search; the keys of configs/sweep_configs/sweep_optuna.yaml
-  base_config: configs/adapt_configs/default_muniverse.yaml
+  base_config: src/adapt_decomp/adaptation/presets/muniverse.yaml
   overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
   param_space: null        # DEFAULT_PARAM_SPACE: wh_learning_rate, sv_learning_rate, centroid_momentum
   n_trials: 50
@@ -51,4 +51,4 @@ searches:                  # Each overrides the shared settings; sv_loss_reducti
   roa:         {objectives: [roa]}
 
 apply:
-  fixed_config: configs/adapt_configs/default_fixed.yaml   # The no-adaptation baseline
+  fixed_config: src/adapt_decomp/adaptation/presets/fixed.yaml   # The no-adaptation baseline

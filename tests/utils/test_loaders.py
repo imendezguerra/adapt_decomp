@@ -263,6 +263,42 @@ class TestLoadPooledCbssMemory:
 
         assert pool["dataset_b_no_gt"].gt_paired_bin is None
 
+    def test_start_stop_slice_emg_and_gt_after_matching_on_the_calibration(self, tmp_path):
+        """start/stop slice emg and gt_paired_bin together, after the ground
+        truth is matched to the calibration over its window, the recording's
+        first samples."""
+        n_mu, T, C, n_full = 2, 20, 2, 60
+        result = _make_cbss_result(n_mu=n_mu, T=T, C=C)
+        result.save(tmp_path / "cbss.pkl")
+        CBSSConfig(ext_fact=result.ext_fact).to_yaml(tmp_path / "cbss_config.yaml")
+        emg_full = np.random.randn(n_full, C).astype(np.float32)
+        np.savez(tmp_path / "emg.npz", emg=emg_full)
+        gt_dense = np.zeros((n_full, n_mu), dtype=np.float32)
+        gt_dense[::5] = 1  # matches _make_cbss_result's spike stride over [0, T)
+        gt_dense[T:, 1] = 0  # the units differ after the calibration window
+        np.savez(tmp_path / "spikes.npz", spikes=gt_dense)
+        dataset = {
+            "name": "a",
+            "path_emg": "emg.npz",
+            "path_calib": "cbss.pkl",
+            "path_calib_config": "cbss_config.yaml",
+            "path_gt": "spikes.npz",
+            "start": T,
+            "stop": 50,
+        }
+
+        entry = load_pooled_cbss_memory({"root": str(tmp_path), "datasets": [dataset]})["a"]
+
+        np.testing.assert_array_equal(entry.emg.numpy(), emg_full[T:50])
+        assert entry.calibration.spikes.shape[1] == n_mu  # matched over [0, T)
+        np.testing.assert_array_equal(
+            entry.gt_paired_bin, gt_dense[T:50][:, entry.calibration.gt_matched_indices]
+        )
+
+        dataset["start"] = n_full
+        with pytest.raises(ValueError, match="selects no samples"):
+            load_pooled_cbss_memory({"root": str(tmp_path), "datasets": [dataset]})
+
     def test_gt_match_narrows_calibration_and_gt_paired_bin_together(self, tmp_path):
         """A calibration unit with no correlated ground truth is dropped by
         select_supervised, and gt_paired_bin's column count follows it down --
@@ -502,7 +538,7 @@ class TestPooledDatasetMemoryResolve:
 
 
 class TestPooledDatasetDiskResolve:
-    def _build_entry(self, tmp_path, n_mu=2, T=20, D=4, C=2, path_gt=None, fs=None):
+    def _build_entry(self, tmp_path, n_mu=2, T=20, D=4, C=2, path_gt=None, fs=None, **window):
         result = _make_cbss_result(n_mu=n_mu, T=T, D=D, C=C)
         calib_path = tmp_path / "cbss.pkl"
         result.save(calib_path)
@@ -521,6 +557,7 @@ class TestPooledDatasetDiskResolve:
             dataset["path_gt"] = path_gt
         if fs is not None:
             dataset["fs"] = fs
+        dataset.update(window)  # start/stop
 
         pool = load_pooled_cbss_disk(
             {
@@ -558,6 +595,30 @@ class TestPooledDatasetDiskResolve:
         assert gt_paired_bin is not None
         assert gt_paired_bin.shape[0] == 60
         assert gt_paired_bin.shape[1] == calibration.spikes.shape[1]
+
+    def test_resolve_slices_emg_and_gt_to_start_stop(self, tmp_path):
+        """resolve() matches the ground truth over the calibration window, then
+        slices emg and gt_paired_bin to [start, stop) together."""
+        n_mu = 2
+        gt_dense = np.zeros((60, n_mu), dtype=np.float32)
+        gt_dense[::5] = 1  # matches _make_cbss_result's spike stride over [0, T)
+        gt_dense[20:, 1] = 0  # the units differ after the calibration window
+        np.savez(tmp_path / "spikes.npz", spikes=gt_dense)
+
+        entry, _ = self._build_entry(tmp_path, n_mu=n_mu, path_gt="spikes.npz", start=20, stop=50)
+        assert (entry.start, entry.stop) == (20, 50)
+
+        emg, calibration, _cbss_config, _preprocess, gt_paired_bin = entry.resolve()
+
+        np.testing.assert_array_equal(emg, np.load(tmp_path / "emg.npz")["emg"][20:50])
+        np.testing.assert_array_equal(
+            gt_paired_bin, gt_dense[20:50][:, calibration.gt_matched_indices]
+        )
+
+    def test_resolve_raises_on_an_empty_window(self, tmp_path):
+        entry, _ = self._build_entry(tmp_path, start=60)
+        with pytest.raises(ValueError, match="selects no samples"):
+            entry.resolve()
 
     def test_resolve_gt_match_narrows_calibration_and_gt_paired_bin_together(self, tmp_path):
         """A calibration unit with no correlated ground truth is dropped by

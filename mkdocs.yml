@@ -79,6 +79,12 @@ plugins:
       execute: false
       include_source: true
 
+# Files outside docs/ that mkdocs serve also live-reloads on
+watch:
+  - README.md
+  - CHANGELOG.md
+  - src
+
 # Notebooks that live outside docs/ (benchmarks/, notebooks/) are added by this hook
 hooks:
   - docs/hooks.py
@@ -95,12 +101,15 @@ validation:
 
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+      - "Tutorial: adaptation in depth": notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb
   - User guide:
-      - Architecture: architecture.md
-      - Calibration: calibration.md
-      - Adaptation: adaptation.md
-      - Optimisation: optimisation.md
+      - Overview: guide/overview.md
+      - Calibration: guide/calibration.md
+      - Adaptation: guide/adaptation.md
+      - Hyperparameter optimisation: guide/optimisation.md
   - How-to guides:
       - how-to/index.md
       - Calibrate a recording: how-to/calibrate-a-recording.md
@@ -108,15 +117,15 @@ nav:
       - Tune hyperparameters: how-to/tune-hyperparameters.md
       - Evaluate against ground truth: how-to/evaluate-against-ground-truth.md
       - Plot results: how-to/plot-results.md
+      - Process online: how-to/process-online.md
+      - Use the command line: how-to/use-the-command-line.md
       - Run on a cluster: how-to/run-on-a-cluster.md
       - Record provenance: how-to/record-provenance.md
-      - Process online: how-to/process-online.md
-  - Examples:
-      - Tutorial: notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb
-  - Benchmarks:
-      - FDSI benchmark: benchmarks/fdsi.md
+  - FDSI benchmark:
+      - Overview: benchmarks/fdsi.md
       - Dataset: benchmarks/fdsi/dataset.ipynb
       - Results: benchmarks/fdsi/report.ipynb
+      - Running the benchmark: benchmarks/fdsi/running.md
   - API reference:
       - reference/index.md
       - Calibration (cbss): reference/cbss.md

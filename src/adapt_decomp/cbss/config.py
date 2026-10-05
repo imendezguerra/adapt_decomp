@@ -13,11 +13,82 @@ from adapt_decomp.utils import dtype_from_string, to_yaml_safe, validate_literal
 
 @dataclass
 class CBSSConfig:
-    """Configuration for the CBSS decomposition algorithm."""
+    """Configuration for the CBSS decomposition algorithm.
+
+    The preprocessing, channel and extension fields are shared with AdaptConfig: an
+    adaptation built with AdaptDecomp.from_calibration() takes them from this config.
+
+    Attributes:
+        fs (float): Sampling frequency, in Hz.
+        preprocess_emg (bool): Whether to band-pass and notch filter the EMG before
+            extension.
+        lowcut (Optional[float]): High-pass cutoff, in Hz. None skips the high-pass.
+        highcut (Optional[float]): Low-pass cutoff, in Hz. None skips the low-pass.
+        filter_order (int): Butterworth band-pass filter order.
+        powerline (bool): Whether to notch out the powerline frequency and its
+            harmonics.
+        powerline_freq (float): Powerline frequency, in Hz (50 or 60).
+        notch_width_hz (float): Half-bandwidth of each notch, in Hz.
+        notch_n_harmonics (int): Number of powerline harmonics notched out, the
+            fundamental included.
+        notch_order (int): Notch filter order.
+        replace_bad_channels (bool): False drops the channels that ch_mask marks as
+            bad; True interpolates them from their neighbours on ch_map.
+        ch_mask (Optional[np.ndarray]): Boolean channel mask with shape (channels,),
+            True to keep. None keeps every channel.
+        ch_map (Optional[np.ndarray]): Electrode grid layout with shape (rows, cols),
+            holding raw channel indices. Required by replace_bad_channels and MUAP
+            computation.
+        ext_fact (int): Extension factor: the number of delayed copies of each
+            channel.
+        ext_mode (Literal["block", "toeplitz"]): Column order of the extended EMG.
+        n_components (Optional[int]): Number of PCA components kept before whitening.
+            None skips PCA. The fitted PCA is reused unchanged by AdaptDecomp.
+        whitening_method (Literal["ZCA", "PCA"]): Whitening transform.
+        regularization (Union[Literal["auto"], float, None]): Value added to the
+            covariance eigenvalues before whitening. "auto" uses the mean of the
+            smaller half of the eigenvalues; None adds nothing.
+        eps (float): Numerical stability constant for whitening and normalisation.
+        contrast_fun (Literal["logcosh", "square", "cube", "smooth_abs"]): Contrast
+            function of the fixed-point ICA.
+        contrast_exp (float): Exponent of the "smooth_abs" contrast. Ignored by the
+            other contrasts.
+        search_iter (int): Number of ICA initialisations tried, each of which can
+            yield one unit.
+        ica_iter (int): Maximum fixed-point iterations per initialisation.
+        ica_tol (float): Fixed-point convergence tolerance.
+        spike_det_exp (float): Power the source is raised to before peak detection.
+        spike_min_dist_ms (float): Minimum inter-spike interval, in ms.
+        spike_min_dist (int): spike_min_dist_ms in samples. Derived, not set by the
+            caller.
+        refinement_loop (bool): Whether to refine each converged unit by re-estimating
+            its separation vector from its own spikes.
+        refinement_mode (Literal["cov_isi", "sil"]): Metric the refinement loop
+            improves: the silhouette (higher is better) or the coefficient of
+            variation of the inter-spike intervals (lower is better).
+        refine_max_iter (int): Maximum refinement iterations per unit.
+        sil_th (float): Minimum silhouette for a unit to be kept.
+        min_spikes (int): Minimum number of spikes for a unit to be kept.
+        roa_th (float): Rate of agreement above which two units count as duplicates.
+        run_duplicate_removal (bool): Whether to remove duplicate units.
+        selection (Literal["unsupervised", "supervised", None]): Unit selection
+            applied at the end of decompose(): on unit properties ("unsupervised") or
+            against ground truth ("supervised"). None keeps every unit.
+        selection_kwargs (Optional[Dict[str, Any]]): Keyword arguments for
+            CBSSResult.select_unsupervised() or select_supervised().
+        compute_properties (bool): Whether to compute each unit's pulse-to-noise ratio,
+            discharge rate and MUAPs. Required by unsupervised selection.
+        save_emg (bool): Whether to store the calibration EMG and timestamps in the
+            result. Required to build an AdaptDecomp from it.
+        device (Optional[Literal["cpu", "mps", "cuda"]]): Compute device. None picks
+            CUDA, then MPS, then the CPU.
+        dtype (torch.dtype): Floating-point precision of the computation.
+        random_seed (Optional[int]): Seed of the ICA initialisation order. None gives
+            a different decomposition on every run.
+        verbose (bool): Whether to print progress.
+    """
 
     # Preprocessing
-    # Shares preprocessing.preprocess_emg with the online AdaptDecomp AdaptConfig
-
     fs: float = 2048.0
     preprocess_emg: bool = True
     lowcut: Optional[float] = 20.0
@@ -25,18 +96,18 @@ class CBSSConfig:
     filter_order: int = 4
     powerline: bool = True
     powerline_freq: float = 50.0
-    notch_width_hz: float = 1.0  # half-bandwidth per notch, in Hz
+    notch_width_hz: float = 1.0
     notch_n_harmonics: int = 3
     notch_order: int = 2
     replace_bad_channels: bool = False
-    ch_mask: Optional[np.ndarray] = None  # boolean, length = raw channel count; True = keep
+    ch_mask: Optional[np.ndarray] = None
     ch_map: Optional[np.ndarray] = None
 
     # Extension
     ext_fact: int = 10
     ext_mode: Literal["block", "toeplitz"] = "block"
 
-    # PCA dimensionality reduction before whitening (None = skip PCA)
+    # PCA
     n_components: Optional[int] = None
 
     # Whitening
@@ -46,15 +117,15 @@ class CBSSConfig:
 
     # ICA
     contrast_fun: Literal["logcosh", "square", "cube", "smooth_abs"] = "square"
-    contrast_exp: float = 3.0  # Only used for smooth_abs
+    contrast_exp: float = 3.0
     search_iter: int = 100
     ica_iter: int = 100
     ica_tol: float = 1e-4
 
     # Spike detection
     spike_det_exp: float = 2.0
-    spike_min_dist_ms: float = 10.0  # Minimum inter-spike distance in ms
-    spike_min_dist: int = field(init=False)  # Derived: spike_min_dist_ms in samples
+    spike_min_dist_ms: float = 10.0
+    spike_min_dist: int = field(init=False)
 
     # Refinement loop
     refinement_loop: bool = True
@@ -69,15 +140,9 @@ class CBSSConfig:
     roa_th: float = 0.3
     run_duplicate_removal: bool = True
 
-    # Unit selection (post-hoc filter, applied inside decompose() after CBSS
-    # finds units). None = keep every discovered unit, matching decompose()'s
-    # behaviour with no selection configured.
-    # - unsupervised: selection based on motor unit properties
-    # - supervised: selection based on ground truth
+    # Unit selection
     selection: Literal["unsupervised", "supervised", None] = None
-    selection_kwargs: Optional[Dict[str, Any]] = (
-        None  # forwarded to CBSSResult.select_unsupervised()/select_supervised()
-    )
+    selection_kwargs: Optional[Dict[str, Any]] = None
 
     # Compute properties
     compute_properties: bool = True
@@ -85,7 +150,7 @@ class CBSSConfig:
     # Result storage
     save_emg: bool = True
 
-    # Compute device (None = auto: CUDA > MPS > CPU)
+    # Compute device
     device: Optional[Literal["cpu", "mps", "cuda"]] = "cpu"
     dtype: torch.dtype = torch.float32
 

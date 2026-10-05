@@ -517,32 +517,19 @@ class Decomposition:
         """
         self.fifo_cov = torch.cat([self.fifo_cov, emg_batch], dim=0)[-self.fifo_samples :]
 
-    def seed_fifos(
-        self, emg_ext: Optional[torch.Tensor] = None, sources: Optional[torch.Tensor] = None
-    ) -> None:
-        """Seed the extended-EMG and/or source FIFOs with rows preceding the next batch.
-
-        Rows must be in processing order, oldest first, e.g. reversed for a
-        reverse pass. emg_ext is pushed batch by batch exactly like live
-        batches (centred per batch, PCA-projected), so it should hold at
-        least fifo_samples rows to replace the whole FIFO.
+    def seed_source_fifo(self, sources: torch.Tensor) -> None:
+        """Seed the source FIFO with the sources preceding the next batch.
 
         Args:
-            emg_ext (Optional[torch.Tensor], optional): Extended EMG with
-                shape (samples, D). Defaults to None (whitening FIFO kept).
-            sources (Optional[torch.Tensor], optional): Sources with shape
+            sources (torch.Tensor): Sources in time order, with shape
                 (samples, M); its last source_fifo_batches * batch_size rows
-                become the source FIFO. Defaults to None (source FIFO kept).
+                become the source FIFO.
 
         Returns:
             None
         """
-        if emg_ext is not None:
-            for batch in emg_ext.to(self.device).split(self.batch_size):
-                self._update_fifo_cov(self._apply_pca(batch - batch.mean(0, keepdim=True)))
-        if sources is not None:
-            n_rows = self.source_fifo_batches * self.batch_size
-            self.source_fifo = sources[-n_rows:].to(self.device).clone()
+        n_rows = self.source_fifo_batches * self.batch_size
+        self.source_fifo = sources[-n_rows:].to(self.device).clone()
 
     def _compute_Rz_from_fifo(self) -> torch.Tensor:
         """Apply current wh to the FIFO and return the regularised whitened covariance.
@@ -680,7 +667,7 @@ class Decomposition:
         self.base_centr = self.base_centr_cal.clone()
         self.source_fifo: Optional[torch.Tensor] = None
         if self.source_fifo_from_calib:
-            self.seed_fifos(sources=self.sources_calib)
+            self.seed_source_fifo(self.sources_calib)
 
         sources = self.sources_calib.to(self.device)  # [N_cal, M]
         spikes = self.spikes_calib.to(self.device)  # [N_cal, M] int32

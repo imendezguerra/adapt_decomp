@@ -1,6 +1,6 @@
 # General
 fs: 2048                          # Sampling frequency (Hz)
-device: cpu                       # Compute device: null (auto), "cpu", "cuda", "mps"
+device: null                      # Compute device: null (auto), "cpu", "cuda", "mps"
 
 # Preprocessing
 lowcut: 20.0                      # High-pass cutoff (Hz)
@@ -25,20 +25,20 @@ compute_loss: true                # Log wh_loss, sv_loss, wh_trace each batch
 sv_loss_reduction: mean           # sv_loss_total across units: "mean" (unit-count independent) or "sum" (v1.0)
 save_params: false                # Save newly adapted parameters per batch (HDF5)
 
-# Main adaptation hyperparameters -- TPE-optimal, lr_mode="fixed"
-wh_learning_rate: 4.7057124821825707e-4   # Whitening learning rate
-sv_learning_rate: 9.982265369641319e-4    # Separation-vector learning rate
-centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
+# Main adaptation hyperparameters
+wh_learning_rate: 2.0e-3          # Whitening learning rate -- Forearm-tuned (v1)
+sv_learning_rate: 5.0e-4          # Separation-vector learning rate -- Forearm-tuned (v1)
+centroid_momentum: 0.8            # EMA momentum for centroid updates (0 = no memory)
 
 # Adaptation behaviour
 lr_mode: fixed                    # Step-size formula: "fixed" (v1's raw gradient) or "rel_error" (natural-gradient direction, needs its own tuning)
 
 # Whitening
 wh_mode: kl_to_identity           # KL target: "kl_to_identity" or "kl_to_cal"
-wh_sv_coupling: true               # Propagate V-step frame correction to B -- fixed input to the TPE search
+wh_sv_coupling: false              # Propagate V-step frame correction to B
 
 # Separation vectors
-contrast_scope: spike_based       # Samples used for contrast: "batch_based" or "spike_based" -- fixed input to the TPE search
+contrast_scope: spike_based       # Samples used for contrast: "batch_based" or "spike_based"
 sv_epochs: 1                      # Fixed-point iterations per batch for B
 sv_tol: 1.0e-4                    # Early-exit threshold: ||ΔB||_F / ||B||_F < sv_tol
 
@@ -59,7 +59,6 @@ ema_alpha: 0.95                   # EMA momentum used for update scaling by grad
 fifo_length: null                 # FIFO samples for covariance (null = auto: 2×D)
 source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
 source_fifo_from_calib: false     # Seed the source FIFO with the calibration's tail (online EMG starting at its end)
-backward_fifo_seed: forward_head  # process_from_calib_end backward-pass FIFO seed: "forward_head" or "calib_tail"
 max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
 
 # Debug

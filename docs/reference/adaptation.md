@@ -1,7 +1,7 @@
 # Adaptation (`adapt_decomp.adaptation`)
 
 Online adaptation of a calibrated decomposition, batch by batch. See the
-[adaptation guide](../adaptation.md).
+[adaptation guide](../guide/adaptation.md).
 
 ::: adapt_decomp.adaptation.AdaptDecomp
 
@@ -9,9 +9,11 @@ Online adaptation of a calibrated decomposition, batch by batch. See the
 
 ::: adapt_decomp.adaptation.AdaptationResult
 
-::: adapt_decomp.adaptation.Decomposition
+## Presets
 
-::: adapt_decomp.adaptation.Data
+::: adapt_decomp.adaptation.config.PRESETS
+
+::: adapt_decomp.adaptation.config.preset_path
 
 ## HDF5 input and output
 

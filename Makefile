@@ -16,7 +16,7 @@ test-all:
 	pytest
 
 data:
-	python scripts/download_data.py get neuromotion-data
+	adapt-decomp-data get neuromotion-data
 
 repro:
 	pytest tests/reproducibility -m repro

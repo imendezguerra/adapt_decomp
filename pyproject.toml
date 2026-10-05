@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -8,14 +8,42 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The configs shipped with the package (AdaptConfig.from_preset)
+[tool.setuptools.package-data]
+"adapt_decomp.adaptation" = ["presets/*.yaml"]
+
+[tool.setuptools.dynamic]
+version = {attr = "adapt_decomp.__version__"}
+
 [project]
 name = "adapt_decomp"
-version = "1.1.0"
+dynamic = ["version"]
 description = "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
 authors = [{ name = "Irene Mendez Guerra", email = "irene.mendez17@imperial.ac.uk" }]
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = [
+    "EMG",
+    "HD-EMG",
+    "motor unit",
+    "decomposition",
+    "blind source separation",
+    "online learning",
+    "adaptive",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 
 # Lower bounds only -- the exact, reproducible versions live in environment.yaml.
 # Keep in sync with environment.yaml and ci/constraints-min.txt (checked by
@@ -40,6 +68,16 @@ dependencies = [
     "tqdm>=4.66",
     "typer>=0.12",             # scripts/run.py's CLI
 ]
+
+[project.urls]
+Homepage = "https://imendezguerra.github.io/adapt_decomp/"
+Documentation = "https://imendezguerra.github.io/adapt_decomp/"
+Source = "https://github.com/imendezguerra/adapt_decomp"
+Issues = "https://github.com/imendezguerra/adapt_decomp/issues"
+Changelog = "https://imendezguerra.github.io/adapt_decomp/changelog/"
+
+[project.scripts]
+adapt-decomp-data = "adapt_decomp.utils.download:app"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "pre-commit>=3", "ipykernel>=6.29"]

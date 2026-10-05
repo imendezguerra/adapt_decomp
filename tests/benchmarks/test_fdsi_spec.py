@@ -36,7 +36,7 @@ def _raw_spec(tmp_path: Path) -> dict:
         },
         "pool": {"subject": "sub-01", "snr": 30, "conditions": ["triangular-ramp40s"]},
         "search": {
-            "base_config": "configs/adapt_configs/default_muniverse.yaml",
+            "base_config": "src/adapt_decomp/adaptation/presets/muniverse.yaml",
             "overrides": {"lr_mode": "fixed", "device": "cpu"},
             "n_trials": 5,
             "n_jobs": 2,
@@ -50,7 +50,7 @@ def _raw_spec(tmp_path: Path) -> dict:
                 "sv_loss_reduction": "sum",
             },
         },
-        "apply": {"fixed_config": "configs/adapt_configs/default_fixed.yaml"},
+        "apply": {"fixed_config": "src/adapt_decomp/adaptation/presets/fixed.yaml"},
     }
 
 
@@ -295,7 +295,7 @@ def test_changing_an_input_file_invalidates_its_recording_and_the_searches_using
 
 def test_missing_input_files_point_to_the_download(spec):
     spec.emg_path(spec.recordings()[0]).unlink()
-    with pytest.raises(FileNotFoundError, match=r"download_data.py"):
+    with pytest.raises(FileNotFoundError, match=r"adapt-decomp-data get"):
         load_spec(spec.path).task_key(spec.tasks("calibrate")[0])
 
 
@@ -348,7 +348,7 @@ def test_run_task_runs_once_then_skips_and_writes_full_metadata(spec, fake_calib
         reproduce[-1]
         == f"python -m benchmarks.fdsi calibrate --spec {spec.spec_ref} --task-index 3"
     )
-    assert "python scripts/download_data.py get fdsi_benchmark-data" in reproduce
+    assert "adapt-decomp-data get fdsi_benchmark-data" in reproduce
     for section in ("started_at", "run_time_s", "host", "os", "hardware", "python", "packages"):
         assert section in meta
 

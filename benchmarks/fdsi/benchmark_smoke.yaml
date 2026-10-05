@@ -26,7 +26,7 @@ pool:
   conditions: [triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
 
 search:
-  base_config: configs/adapt_configs/default_muniverse.yaml
+  base_config: src/adapt_decomp/adaptation/presets/muniverse.yaml
   overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
   param_space: null
   n_trials: 4
@@ -43,4 +43,4 @@ searches:
   roa:         {objectives: [roa]}
 
 apply:
-  fixed_config: configs/adapt_configs/default_fixed.yaml
+  fixed_config: src/adapt_decomp/adaptation/presets/fixed.yaml

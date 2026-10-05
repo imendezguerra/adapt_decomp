@@ -21,7 +21,7 @@ of wandb:
 git clone https://github.com/imendezguerra/adapt_decomp.git
 cd adapt_decomp
 git checkout -b "docs-example" <commit>
-git apply data/fdsi_benchmark/outputs/docs-example/patches/<hash>.patch   # only with uncommitted changes
+git apply data/fdsi_example/outputs/docs-example/patches/<hash>.patch   # only with uncommitted changes
 python docs/snippets/workflow.py
 ```
 

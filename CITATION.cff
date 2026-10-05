@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+message: "If you use this software, please cite the paper below, and the software version you used."
 authors:
 - family-names: "Mendez Guerra"
   given-names: "Irene"
@@ -10,10 +10,24 @@ authors:
 - family-names: "Farina"
   given-names: "Dario"
   orcid: "https://orcid.org/0000-0002-7883-2697"
-title: "Adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
+title: "adapt_decomp: adaptive EMG decomposition in dynamic conditions based on online learning metrics with tunable hyperparameters"
+abstract: >-
+  Python package to decompose high-density EMG into motor unit firings during dynamic
+  contractions in real time: convolutive blind source separation calibration, online
+  adaptation of the decomposition, and hyperparameter optimisation.
 version: 1.0.0
-doi: 10.1088/1741-2552/ad5ebf
-url: "https://github.com/imendezguerra/adapt_decomp"
+doi: 10.5281/zenodo.22902494
+date-released: 2026-09-22
+license: MIT
+url: "https://imendezguerra.github.io/adapt_decomp/"
+repository-code: "https://github.com/imendezguerra/adapt_decomp"
+keywords:
+  - EMG
+  - HD-EMG
+  - motor unit
+  - decomposition
+  - blind source separation
+  - online learning
 preferred-citation:
   type: article
   authors:

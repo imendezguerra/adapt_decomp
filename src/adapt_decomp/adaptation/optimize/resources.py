@@ -81,7 +81,7 @@ def _nbytes(value: Any) -> int:
 
 
 def _dataset_shape(dataset: PooledDataset) -> Tuple[int, int, int, int]:
-    """(samples, channels, ext_fact, units) of a pool entry, without loading a disk entry's EMG.
+    """(samples adapted, channels, ext_fact, units) of a pool entry, without loading a disk entry's EMG.
 
     Args:
         dataset (PooledDataset): Pool entry.
@@ -97,6 +97,7 @@ def _dataset_shape(dataset: PooledDataset) -> Tuple[int, int, int, int]:
             dataset.path_calib, dataset.path_calib_config, dataset.calib_loader
         )
         n_samples, n_channels = emg_shape(dataset.path_emg, dataset.emg_loader)
+        n_samples = len(range(n_samples)[dataset.start : dataset.stop])  # the samples adapted
     return int(n_samples), int(n_channels), int(cbss_config.ext_fact), calibration.sources.shape[1]
 
 

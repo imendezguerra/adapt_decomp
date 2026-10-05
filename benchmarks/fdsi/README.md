@@ -2,7 +2,7 @@
 
 A reproducible, cached run of `adapt_decomp` on the FDSI dataset: calibration, hyperparameter
 searches and application to 100 recordings, locally or as PBS Pro array jobs. The full
-documentation (commands, settings, caching, outputs, run metadata, release checklist) is on the
+documentation (design, commands, settings, caching, outputs, run metadata) is on the
 [documentation site](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/), with the
 [results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/report/) and a
 [tour of the dataset](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/dataset/).
@@ -10,7 +10,7 @@ documentation (commands, settings, caching, outputs, run metadata, release check
 From the repository root, with the `adapt_decomp` environment active:
 
 ```sh
-python scripts/download_data.py get fdsi_benchmark-data
+adapt-decomp-data get fdsi_benchmark-data
 
 python -m benchmarks.fdsi calibrate --all --n-workers 8
 python -m benchmarks.fdsi search --all

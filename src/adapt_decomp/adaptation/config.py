@@ -1,6 +1,7 @@
 """Configuration dataclass for adaptive EMG decomposition."""
 
 from dataclasses import dataclass, field, fields
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Union
 
@@ -32,14 +33,102 @@ class _LegacyConfig:
 
 @dataclass
 class AdaptConfig(_LegacyConfig):
-    """Configuration parameters."""
+    """Configuration of the online adaptation.
 
-    # General parameters
+    The preprocessing, channel and extension fields, and spike_det_exp, must match the
+    calibration: AdaptDecomp.from_calibration() overwrites them with the CBSSConfig's
+    values. Tuned values come from the presets (AdaptConfig.from_preset()).
+
+    Attributes:
+        contrast_fun (Literal["logcosh"]): Legacy, ignored: kept so old YAML files load.
+        spike_height_mult (int): Legacy, ignored.
+        spike_prev_weight (int): Legacy, ignored.
+        cov_alpha (float): Legacy, ignored.
+        fs (int): Sampling frequency, in Hz.
+        device (Literal["cpu", "cuda", "mps", None]): Compute device. None picks CUDA,
+            then MPS, then the CPU.
+        lowcut (float): High-pass cutoff, in Hz.
+        highcut (float): Low-pass cutoff, in Hz.
+        filter_order (int): Butterworth band-pass filter order.
+        powerline (bool): Whether to notch out the powerline frequency and its
+            harmonics.
+        powerline_freq (float): Powerline frequency, in Hz (50 or 60).
+        notch_width_hz (float): Half-bandwidth of each notch, in Hz.
+        notch_n_harmonics (int): Number of powerline harmonics notched out, the
+            fundamental included.
+        notch_order (int): Notch filter order.
+        ch_mask (Optional[np.ndarray]): Boolean channel mask with shape (channels,),
+            True to keep. None keeps every channel.
+        ch_map (Optional[np.ndarray]): Electrode grid layout with shape (rows, cols),
+            holding raw channel indices. Only needed to interpolate bad channels online.
+        replace_bad_channels (bool): False drops the channels that ch_mask marks as
+            bad; True interpolates them from their neighbours on ch_map.
+        ext_fact (int): Extension factor: the number of delayed copies of each
+            channel.
+        ext_mode (Literal["block", "toeplitz"]): Column order of the extended EMG.
+        batch_ms (int): Batch duration, in ms. Each batch is one adaptation step.
+        batch_size (int): batch_ms in samples. Derived, not set by the caller.
+        adapt_wh (bool): Whether to adapt the whitening matrix.
+        adapt_sv (bool): Whether to adapt the separation vectors.
+        adapt_sd (bool): Whether to adapt the spike detection centroids.
+        compute_loss (bool): Whether to compute the whitening and separation-vector
+            losses. Needed for hyperparameter searches, not for the adaptation itself.
+        sv_loss_reduction (Literal["sum", "mean"]): How sv_loss_total reduces across
+            units per batch: "mean" weighs every recording the same in a pooled search
+            whatever its unit count; "sum" is the 1.0.0 behaviour.
+        save_params (bool): Whether to write the adapted parameters of every batch to
+            the HDF5 file given as save_path.
+        wh_learning_rate (float): Step size of the whitening update. NeuroMotion: 7e-3 |
+            Wrist: 1e-3 | Forearm: 2e-3 | MUniverse: 4.7e-4.
+        sv_learning_rate (float): Step size of the separation-vector update.
+            NeuroMotion: 3e-3 | Wrist: 5e-4 | Forearm: 5e-4 | MUniverse: 1e-3.
+        lr_mode (Literal["fixed", "rel_error"]): "fixed" takes a plain step of the
+            learning rate along the gradient (the 1.0 behaviour); "rel_error" scales a
+            unit-norm step by the normalised error, so it shrinks as the error does.
+        wh_mode (Literal["kl_to_identity", "kl_to_cal"]): Whitening error: the KL
+            divergence of the whitened covariance to the identity, or to the
+            calibration's whitened covariance.
+        wh_sv_coupling (bool): Whether each whitening update also applies its
+            first-order frame correction to the separation vectors.
+        contrast_scope (Literal["batch_based", "spike_based"]): Samples the
+            separation-vector contrast is computed on: the detected spikes only, or the
+            whole batch.
+        sv_epochs (int): Maximum separation-vector updates per batch.
+        sv_tol (float): Convergence tolerance that stops the separation-vector updates
+            early when sv_epochs > 1.
+        spike_min_dist_ms (int): Minimum inter-spike interval, in ms.
+        spike_min_dist (int): spike_min_dist_ms in samples. Derived, not set by the
+            caller.
+        spike_det_exp (float): Power the source is raised to before peak detection.
+        centroid_momentum (float): Momentum of the spike and baseline centroid updates,
+            from 0 (follow each batch) to 1 (never move). NeuroMotion, Wrist, Forearm:
+            0.8 | MUniverse: 0.95.
+        shrinkage (float): Tikhonov shrinkage added to the whitening FIFO covariance.
+        eps (float): Numerical stability floor.
+        safety_clip_multiplier_wh (float): Caps the relative size of each whitening
+            update at this multiple of wh_learning_rate.
+        safety_clip_multiplier_sv (float): Caps the relative size of each
+            separation-vector update at this multiple of sv_learning_rate.
+        ema_alpha (float): Exponential moving average weight of the running centring
+            mean in online mode and of the update norms in lr_mode="rel_error".
+        fifo_length (Optional[int]): Number of extended samples in the whitening
+            covariance FIFO. None uses twice the extended dimension.
+        source_fifo_batches (int): Past batches of sources kept to detect spikes at the
+            start of each batch.
+        source_fifo_from_calib (bool): Whether to seed the source FIFO with the
+            calibration's last sources, for EMG that starts where calibration ends,
+            e.g. process_data(emg[b:]) after a calibration window [a, b).
+        max_sigma_batches (int): Maximum calibration batches used to estimate the
+            calibration statistics the losses are normalised by.
+        debug (bool): Whether to store per-batch diagnostics in
+            AdaptationResult.diagnostics.
+    """
+
+    # General
     fs: int = 2048
     device: Literal["cpu", "cuda", "mps", None] = None
 
-    # Preprocessing parameters
-    # Shares preprocessing.preprocess_emg with CBSS CBSSConfig
+    # Preprocessing
     lowcut: float = 20
     highcut: float = 500
     filter_order: int = 4
@@ -49,78 +138,56 @@ class AdaptConfig(_LegacyConfig):
     notch_n_harmonics: int = 3
     notch_order: int = 2
 
-    # Bad-channel handling shared with CBSSConfig
-    ch_mask: Optional[np.ndarray] = None  # boolean, length = raw channel count; True = keep
-    ch_map: Optional[np.ndarray] = (
-        None  # electrode map (only needed to replicate interpolation online)
-    )
-    replace_bad_channels: bool = False  # False = drop bad channels, True = interpolate bad channels
+    # Bad channels
+    ch_mask: Optional[np.ndarray] = None
+    ch_map: Optional[np.ndarray] = None
+    replace_bad_channels: bool = False
 
-    # Extension parameters (to be inherited from calibration)
+    # Extension
     ext_fact: int = 10
     ext_mode: Literal["block", "toeplitz"] = "block"
 
-    # Decomposition adaptation flags
+    # Adaptation flags
     batch_ms: int = 100
-    adapt_wh: bool = True  # Adapt whitening
-    adapt_sv: bool = True  # Adapt separation vectors
-    adapt_sd: bool = True  # Adapt spike detection
-    compute_loss: bool = True  # Log wh_loss and sv_loss
-    sv_loss_reduction: Literal["sum", "mean"] = "mean"  # Unit reduction of sv_loss_total
-    save_params: bool = False  # Save newly adapted parameters per batch
+    adapt_wh: bool = True
+    adapt_sv: bool = True
+    adapt_sd: bool = True
+    compute_loss: bool = True
+    sv_loss_reduction: Literal["sum", "mean"] = "mean"
+    save_params: bool = False
 
-    # Main adaptation hyperparameters to tune
+    # Hyperparameters
     wh_learning_rate: float = 5e-3
     sv_learning_rate: float = 1e-3
-
-    # ---- Adaptation behaviour -----
-
-    # Learning rate mode: "fixed" (previously lr_alone=True) or "rel_error" (previously lr_alone=False)
     lr_mode: Literal["fixed", "rel_error"] = "fixed"
 
     # Whitening
-    wh_mode: Literal["kl_to_identity", "kl_to_cal"] = (
-        "kl_to_identity"  # Reference point for calibration
-    )
-    wh_sv_coupling: bool = (
-        False  # Propagate the first-order frame correction from each wh step to sv.
-    )
+    wh_mode: Literal["kl_to_identity", "kl_to_cal"] = "kl_to_identity"
+    wh_sv_coupling: bool = False
 
     # Separation vectors
-    contrast_scope: Literal["batch_based", "spike_based"] = (
-        "spike_based"  # Samples to use for separation vector update
-    )
-    sv_epochs: int = 1  # Max number of separation vector updates per batch
-    sv_tol: float = (
-        1e-4  # Convergence tolerance in case multiple updates per batch for early stopping
-    )
+    contrast_scope: Literal["batch_based", "spike_based"] = "spike_based"
+    sv_epochs: int = 1
+    sv_tol: float = 1e-4
 
     # Spike detection
-    spike_min_dist_ms: int = 10  # Minimum inter-spike distance in ms
-    spike_min_dist: int = field(init=False)  # Derived: samples
-    spike_det_exp: float = 2.0  # Exponent for spike detection
-    centroid_momentum: float = 0.95  # Momentum for centroid EMA update
+    spike_min_dist_ms: int = 10
+    spike_min_dist: int = field(init=False)
+    spike_det_exp: float = 2.0
+    centroid_momentum: float = 0.95
 
-    # ---- Constants ----
-
-    # Numerical stability constants
-    shrinkage: float = 1e-3  # Tikhonov shrinkage on per-FIFO covariance
-    eps: float = 1e-7  # Numerical stability floor
-
-    # Safety clip multipliers
+    # Numerical stability
+    shrinkage: float = 1e-3
+    eps: float = 1e-7
     safety_clip_multiplier_wh: float = 20.0
     safety_clip_multiplier_sv: float = 20.0
-    ema_alpha: float = 0.95  # Used for update scaling based on EMA norm
+    ema_alpha: float = 0.95
 
-    # Fifo constants for calibration parameter estimation
-    fifo_length: Optional[int] = None  # If None, defaults to 2x number of varaibles
-    source_fifo_batches: int = 2  # Past batches of sources prepended for edge spike support
-    source_fifo_from_calib: bool = False  # Seed the source FIFO with the calibration's tail
-    # FIFO seed of process_from_calib_end's backward pass, reversed into its processing order
-    backward_fifo_seed: Literal["forward_head", "calib_tail"] = "forward_head"
-    max_sigma_batches: int = (
-        300  # Max number of calibration batches used to compute mean and std of signal properties
-    )
+    # FIFOs and calibration statistics
+    fifo_length: Optional[int] = None
+    source_fifo_batches: int = 2
+    source_fifo_from_calib: bool = False
+    max_sigma_batches: int = 300
 
     # Debugging
     debug: bool = False
@@ -179,6 +246,48 @@ class AdaptConfig(_LegacyConfig):
             data = yaml.safe_load(f) or {}
         return cls(**data)
 
+    @classmethod
+    def from_preset(cls, name: str) -> "AdaptConfig":
+        """Load one of the configs shipped with the package.
+
+        Args:
+            name (str): Preset name, one of PRESETS: "muniverse" (tuned on the FDSI
+                benchmark pool), "neuromotion" (the NeuroMotion simulation of the
+                tutorial), "wrist" and "forearm" (the experimental recordings of the
+                JNE 2024 paper, with the electrodes on the wrist or the forearm), or
+                "fixed" (every adaptation switched off, the baseline).
+
+        Returns:
+            AdaptConfig: A new instance built from the preset's YAML file.
+
+        Raises:
+            ValueError: If name is not one of PRESETS.
+        """
+        if name not in PRESETS:
+            raise ValueError(f"Unknown preset: {name!r}. Expected one of {list(PRESETS)}.")
+        return cls.from_yaml(preset_path(name))
+
+
+# Configs shipped with the package, in adaptation/presets/<name>.yaml
+PRESETS = ("muniverse", "neuromotion", "wrist", "forearm", "fixed")
+
+
+def preset_path(name: str) -> Path:
+    """Return the path of a preset's YAML file.
+
+    Args:
+        name (str): Preset name, one of PRESETS.
+
+    Returns:
+        Path: The preset's YAML file inside the installed package.
+
+    Raises:
+        ValueError: If name is not one of PRESETS.
+    """
+    if name not in PRESETS:
+        raise ValueError(f"Unknown preset: {name!r}. Expected one of {list(PRESETS)}.")
+    return Path(str(files("adapt_decomp.adaptation") / "presets" / f"{name}.yaml"))
+
 
 def load_yaml(file_path: str) -> Dict:
     """Load a YAML file into a dictionary."""
@@ -186,10 +295,7 @@ def load_yaml(file_path: str) -> Dict:
         return yaml.safe_load(f)
 
 
-def load_config(
-    defaults_path: str = "configs/adapt_configs/default_neuromotion.yaml",
-    wandb_config=None,
-) -> AdaptConfig:
+def load_config(defaults_path: str, wandb_config=None) -> AdaptConfig:
     """Load YAML config and apply optional wandb sweep overrides."""
     defaults = load_yaml(defaults_path)
     if wandb_config:

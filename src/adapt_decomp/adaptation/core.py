@@ -2,13 +2,13 @@
 
 import time
 import warnings
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import dataclass
 from typing import Any, Literal, Optional, Tuple, Union
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, TensorDataset
+from torch.utils.data import DataLoader
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import AdaptationResult, Data, Decomposition, RawData
@@ -137,7 +137,6 @@ class AdaptDecomp:
         processing_mode: Literal["offline", "online"] = "offline",
         save_path: Optional[str] = None,
         adapt_from: Literal["calib_end", "emg_start"] = "calib_end",
-        backward: bool = False,
     ) -> Tuple[AdaptationResult, CBSSResult]:
         """Run CBSS on emg[calib_indices], then AdaptDecomp over the rest of emg.
 
@@ -167,25 +166,27 @@ class AdaptDecomp:
                 parameters during process_data(), used when
                 adapt_config.save_params is True. Defaults to None.
             adapt_from (Literal["calib_end", "emg_start"], optional):
-                "calib_end" keeps CBSS's output over the calibration window
-                and adapts forwards from its last sample (see
-                process_from_calib_end; calib_indices must be contiguous);
-                "emg_start" adapts over the entire emg from its first sample,
-                calibration window included. Defaults to "calib_end".
-            backward (bool, optional): With adapt_from="calib_end", also
-                adapt backwards over the samples before the calibration
-                window. Offline only. Defaults to False.
+                "calib_end" adapts emg[b:] from the end of the calibration
+                window [a, b), which must be contiguous, with the source
+                FIFO seeded from the calibration's tail, and fills [0, b)
+                with CBSS's output: the calibration's own when a is 0, else
+                CBSS.apply() over emg[:b]. "emg_start" adapts over the
+                entire emg from its first sample, calibration window
+                included. Defaults to "calib_end".
 
         Raises:
-            ValueError: If emg/timestamps are malformed, the calibration
-                window is too short, CBSS finds no units, or
-                cbss_config.selection is set and keeps no units (see
-                CBSS.decompose()); or see process_from_calib_end.
+            ValueError: If emg/timestamps are malformed, adapt_from is
+                unknown, the calibration window is too short or, with
+                adapt_from="calib_end", not contiguous, CBSS finds no units,
+                or cbss_config.selection is set and keeps no units (see
+                CBSS.decompose()).
 
         Returns:
             Tuple[AdaptationResult, CBSSResult]: outputs, this run's typed
-            result over the entire emg; calibration, the CBSSResult CBSS
-            produced on the calibration window.
+            result, with spikes and sources over the entire emg and the
+            per-batch arrays and loss totals of the adapted samples only;
+            calibration, the CBSSResult CBSS produced on the calibration
+            window.
         """
 
         # Format data
@@ -207,6 +208,12 @@ class AdaptDecomp:
             raise ValueError(
                 f"Calibration window has only {emg_calib.shape[0]} samples — too short for CBSS."
             )
+        if adapt_from not in ("calib_end", "emg_start"):
+            raise ValueError(
+                f"Unknown adapt_from: {adapt_from!r}. Expected 'calib_end' or 'emg_start'."
+            )
+        if adapt_from == "calib_end":
+            a, b = _calib_bounds(calib_indices, emg_np.shape[0])
 
         # Set config
         cbss_config = copy(cbss_config) if cbss_config is not None else CBSSConfig()
@@ -221,21 +228,37 @@ class AdaptDecomp:
                 "Try relaxing sil_th or increasing search_iter and ica_iter in CBSSConfig."
             )
 
-        # Build the model, then run adaptation over the recording.
+        # Build the model
         instance = cls.from_calibration(
             calibration,
             cbss_config=cbss_config,
             adapt_config=adapt_config,
             save_path=save_path,
         )
-        if adapt_from == "calib_end":
-            outputs = instance.process_from_calib_end(
-                emg, calib_indices, backward, preprocess, processing_mode
-            )
-        else:
+
+        # Adapt over the entire recording
+        if adapt_from == "emg_start":
             outputs = instance.process_data(
                 emg, preprocess=preprocess, processing_mode=processing_mode
             )
+            return outputs, calibration
+
+        # Adapt from the end of the calibration window, seeding the source FIFO from its tail
+        instance.decomp.seed_source_fifo(instance.decomp.sources_calib)
+        outputs = instance.process_data(
+            emg_np[b:], preprocess=preprocess, processing_mode=processing_mode
+        )
+
+        # CBSS's output over [0, b): the calibration's own, or re-applied from the first sample
+        head = (
+            calibration if a == 0 else CBSS(cbss_config).apply(emg_np[:b], calibration, ts_np[:b])
+        )
+        outputs.spikes = torch.cat(
+            [torch.as_tensor(head.spikes, dtype=outputs.spikes.dtype), outputs.spikes]
+        )
+        outputs.sources = torch.cat(
+            [torch.as_tensor(head.sources, dtype=outputs.sources.dtype), outputs.sources]
+        )
         return outputs, calibration
 
     def __init__(
@@ -368,7 +391,6 @@ class AdaptDecomp:
         emg: Union[torch.Tensor, np.ndarray],
         preprocess: bool = True,
         processing_mode: Literal["offline", "online"] = "offline",
-        reverse: bool = False,
     ) -> None:
         """Prepare emg for process_data(), building Data or RawData.
 
@@ -386,23 +408,10 @@ class AdaptDecomp:
                 "offline" preprocesses the whole recording upfront (the
                 default); "online" defers preprocessing to process_batch,
                 per batch. Defaults to "offline".
-            reverse (bool, optional): Serve the extended samples last to
-                first (see _reverse_rows). Filtering and extension still run
-                forwards, so every row is the same extended sample as in a
-                forward pass; only the order they are adapted on changes.
-                Defaults to False.
-
-        Raises:
-            ValueError: If reverse is True with processing_mode "online".
 
         Returns:
             None
         """
-        if reverse and processing_mode == "online":
-            raise ValueError(
-                "reverse=True requires processing_mode='offline': online mode "
-                "filters and extends each batch causally as it arrives."
-            )
         self.processing_mode = processing_mode
         emg_t = torch.as_tensor(emg, dtype=torch.float32)
         if processing_mode == "online":
@@ -411,25 +420,6 @@ class AdaptDecomp:
         else:
             self.data = Data(emg_t, preprocess, self.config)
             self.data_preprocessed = True
-            if reverse:
-                self.data.emg_ext = self._reverse_rows(self.data.emg_ext)
-
-    def _reverse_rows(self, x: torch.Tensor) -> torch.Tensor:
-        """Reverse x's rows in time, keeping the leading ext_fact edge rows first.
-
-        The leading ext_fact rows are the zero-padded extension edge that
-        process_batch trims from the first batch, so they stay first. Its own
-        inverse: it also maps a reverse pass's outputs back to sample order.
-
-        Args:
-            x (torch.Tensor): Rows in sample order, with shape (samples, ...).
-
-        Returns:
-            torch.Tensor: x[:ext_fact] followed by x[ext_fact:] reversed, with
-            x's shape.
-        """
-        ext = self.config.ext_fact
-        return torch.cat([x[:ext], x[ext:].flip(0)], dim=0)
 
     # ------------------------------------------------------------------
     # Main entry points
@@ -440,19 +430,17 @@ class AdaptDecomp:
         emg: Union[torch.Tensor, np.ndarray],
         preprocess: bool = True,
         processing_mode: Literal["offline", "online"] = "offline",
-        reverse: bool = False,
     ) -> AdaptationResult:
         """Run the full online decomposition over emg, batch by batch.
 
-        Always calls init_data(emg, preprocess, processing_mode, reverse)
-        first; this is the one place emg ever enters an AdaptDecomp (besides
-        run()'s deprecated v1-compatible path and process_from_calib_end).
+        Always calls init_data(emg, preprocess, processing_mode) first; this
+        is the one place emg ever enters an AdaptDecomp (besides run()'s
+        deprecated v1-compatible path).
 
-        Adapts over all of emg, as given. To adapt only outside a
-        calibration window [a, b) of a longer recording, pass emg[b:] for a
-        forward pass from its end (with config.source_fifo_from_calib), and
-        emg[:a] with reverse=True for a backward pass from its start; or use
-        process_from_calib_end, which also filters the recording only once.
+        Adapts over all of emg, as given, from its first sample. To adapt
+        from the end of a calibration window [a, b) of a longer recording,
+        pass emg[b:] with config.source_fifo_from_calib set, and prepend the
+        calibration's own output to score the whole recording.
 
         Args:
             emg (Union[torch.Tensor, np.ndarray]): Online EMG to decompose,
@@ -462,193 +450,6 @@ class AdaptDecomp:
             processing_mode (Literal["offline", "online"], optional):
                 Forwarded to init_data(); see its docstring/the class
                 docstring's mode table. Defaults to "offline".
-            reverse (bool, optional): Adapt backwards in time, from the last
-                sample of emg to the first; see init_data(). spikes and
-                sources are returned in emg's sample order; per-batch arrays
-                (losses, timings, diagnostics, saved params) stay in
-                processing order, i.e. last batch of emg first. Offline
-                only. Defaults to False.
-
-        Raises:
-            ValueError: If config.save_params is True with save_path unset,
-                or reverse is True with processing_mode "online".
-
-        Returns:
-            AdaptationResult: This run's typed output.
-        """
-        self.init_data(emg, preprocess, processing_mode, reverse)
-        return self._run_batches(self.data, reverse)
-
-    def process_from_calib_end(
-        self,
-        emg: Union[torch.Tensor, np.ndarray],
-        calib_indices: Union[slice, np.ndarray],
-        backward: bool = False,
-        preprocess: bool = True,
-        processing_mode: Literal["offline", "online"] = "offline",
-    ) -> AdaptationResult:
-        """Adapt forwards from the end of the calibration window, keeping its CBSS output.
-
-        Over a calibration window [a, b) of emg, the result joins:
-          [0, a)   a backward pass from a to the start of emg (backward=True),
-                   else zeros;
-          [a, b)   the calibration's own sources/spikes (decomp.sources_calib/
-                   spikes_calib), unadapted;
-          [b, end) a forward pass from b to the end of emg.
-
-        Offline, emg is preprocessed once (one Data) and both passes read its
-        extended rows. The forward pass starts with the source FIFO seeded
-        from the calibration's tail (the whitening FIFO already is). The
-        backward pass runs on a copy of this model taken before the forward
-        pass, with its FIFOs seeded per config.backward_fifo_seed; it covers
-        [0, b) but only [0, a) is kept. This model ends in the forward pass's
-        state, ready to continue online.
-
-        Args:
-            emg (Union[torch.Tensor, np.ndarray]): Full EMG recording the
-                calibration window belongs to, with shape (samples, channels).
-            calib_indices (Union[slice, np.ndarray]): Calibration window as a
-                slice, an integer index array, or a boolean mask; must be
-                contiguous and match this model's calibration length.
-            backward (bool, optional): Also adapt backwards over [0, a).
-                Offline only. Defaults to False.
-            preprocess (bool, optional): Forwarded to Data (offline) as in
-                init_data(). Defaults to True.
-            processing_mode (Literal["offline", "online"], optional):
-                "online" runs the forward pass on raw emg[b:] batch by batch;
-                see init_data(). Defaults to "offline".
-
-        Raises:
-            ValueError: If calib_indices is not contiguous or its length does
-                not match the calibration, or backward is True with
-                processing_mode "online".
-
-        Returns:
-            AdaptationResult: Spikes/sources over all of emg. Per-batch arrays
-            in time order (backward batches, reversed, then forward batches),
-            with run-level losses over all of them. Per-batch parameters
-            (config.save_params) and diagnostics cover the forward pass only.
-        """
-        a, b = _calib_bounds(calib_indices, len(emg))
-        if b - a != self.decomp.sources_calib.shape[0]:
-            raise ValueError(
-                f"calib_indices covers {b - a} samples but the calibration has "
-                f"{self.decomp.sources_calib.shape[0]}."
-            )
-        if backward and processing_mode == "online":
-            raise ValueError("backward=True requires processing_mode='offline'.")
-
-        backward_model = deepcopy(self) if backward else None
-        self.decomp.seed_fifos(sources=self.decomp.sources_calib)
-
-        if processing_mode == "online":
-            return self._join_passes(
-                self.process_data(emg[b:], processing_mode="online"), None, a, 0
-            )
-
-        ext = self.config.ext_fact
-        emg_ext = Data(torch.as_tensor(emg, dtype=torch.float32), preprocess, self.config).emg_ext
-        # Start ext_fact rows early: process_batch trims them as the first batch's edge
-        forward = self._process_rows(emg_ext[b - ext :])
-        if backward_model is None:
-            return self._join_passes(forward, None, a, ext)
-
-        n_src = self.config.source_fifo_batches * self.config.batch_size
-        decomp = backward_model.decomp
-        if self.config.backward_fifo_seed == "forward_head":
-            # [b, b + n) from the same rows/forward sources, farthest from b first
-            emg_seed = emg_ext[b : b + decomp.fifo_samples].flip(0)
-            sources_seed = forward.sources[ext : ext + n_src].flip(0)
-        else:  # calib_tail
-            emg_calib_ext = extend_data(decomp.emg_calib, ext, ext_mode=self.config.ext_mode)
-            emg_seed = emg_calib_ext[-decomp.fifo_samples :].flip(0)
-            sources_seed = decomp.sources_calib[-n_src:].flip(0)
-        decomp.seed_fifos(emg_seed, sources_seed)
-        backward_model.config.save_params = False  # the forward pass owns save_path
-        backward_out = backward_model._process_rows(
-            backward_model._reverse_rows(emg_ext[:b]), reverse=True
-        )
-        return self._join_passes(forward, backward_out, a, ext)
-
-    def _process_rows(self, rows: torch.Tensor, reverse: bool = False) -> AdaptationResult:
-        """Run the batch loop over already-extended rows (offline).
-
-        Args:
-            rows (torch.Tensor): Extended, centred EMG rows (e.g. a slice of
-                Data.emg_ext), with shape (samples, D), in processing order.
-            reverse (bool, optional): rows were reversed with _reverse_rows;
-                see _run_batches. Defaults to False.
-
-        Returns:
-            AdaptationResult: See _run_batches.
-        """
-        self.processing_mode = "offline"
-        self.data_preprocessed = True
-        return self._run_batches(TensorDataset(rows), reverse)
-
-    def _join_passes(
-        self,
-        forward: AdaptationResult,
-        backward: Optional[AdaptationResult],
-        a: int,
-        skip: int,
-    ) -> AdaptationResult:
-        """Join process_from_calib_end's passes and the calibration into one result.
-
-        Args:
-            forward (AdaptationResult): Forward pass from the calibration's
-                end, whose first skip rows precede it.
-            backward (Optional[AdaptationResult]): Backward pass over [0, b),
-                in sample order, or None.
-            a (int): First calibration sample.
-            skip (int): Leading forward rows to drop.
-
-        Returns:
-            AdaptationResult: See process_from_calib_end.
-        """
-        n_units = forward.spikes.shape[1]
-        if backward is not None:
-            spikes_head, sources_head = backward.spikes[:a], backward.sources[:a]
-        else:
-            spikes_head = torch.zeros(a, n_units, dtype=forward.spikes.dtype)
-            sources_head = torch.zeros(a, n_units, dtype=forward.sources.dtype)
-        per_batch = {}
-        for key in AdaptationResult.PER_BATCH_FIELDS:
-            values = [getattr(r, key) for r in (backward, forward) if r is not None]
-            if all(v is not None for v in values):
-                per_batch[key] = (
-                    torch.cat([values[0].flip(0), *values[1:]]) if backward else values[0]
-                )
-        result = AdaptationResult(
-            spikes=torch.cat([spikes_head, self.decomp.spikes_calib.cpu(), forward.spikes[skip:]]),
-            sources=torch.cat(
-                [sources_head, self.decomp.sources_calib.cpu(), forward.sources[skip:]]
-            ),
-            diagnostics=forward.diagnostics,
-            gt_matched_indices=forward.gt_matched_indices,
-            **per_batch,
-        )
-        if self.config.compute_loss:
-            if backward is not None:
-                self.wh_loss, self.sv_loss, self.wh_trace = (
-                    per_batch[key].to(self.config.device)
-                    for key in ("wh_loss", "sv_loss", "wh_trace")
-                )
-                self.wh_loss_total, self.sv_loss_total, self.total_loss = self._compute_losses()
-            result.wh_loss_total = self.wh_loss_total.detach().cpu().clone()
-            result.sv_loss_total = self.sv_loss_total.detach().cpu().clone()
-            result.total_loss = self.total_loss.detach().cpu().clone()
-        return result
-
-    def _run_batches(self, data: Dataset, reverse: bool = False) -> AdaptationResult:
-        """Adapt over data batch by batch and collect the run's typed output.
-
-        Args:
-            data (Dataset): Batches to process, serving (rows, ...) items:
-                extended rows when self.data_preprocessed, else raw rows.
-            reverse (bool, optional): data's rows were reversed with
-                _reverse_rows; spikes/sources are mapped back to sample
-                order before losses are computed. Defaults to False.
 
         Raises:
             ValueError: If config.save_params is True with save_path unset.
@@ -659,8 +460,9 @@ class AdaptDecomp:
         if self.config.save_params and self.save_path is None:
             raise ValueError("config.save_params=True requires save_path to be set.")
 
+        self.init_data(emg, preprocess, processing_mode)
         dataset = DataLoader(
-            data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
+            self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
         )
 
         self._init_outputs(units=self.decomp.sep_vectors.shape[0])
@@ -670,7 +472,7 @@ class AdaptDecomp:
         if self.config.debug:
             self.diagnostics.clear()
 
-        if self.config.save_params and self.save_path is not None:
+        if self.config.save_params:
             self.saver = H5ParamsBatchWriter(
                 path=self.save_path,
                 wh_shape=self.decomp.whitening.shape,
@@ -698,9 +500,6 @@ class AdaptDecomp:
             self._sources_accum.append(sources)
 
         self._finalize_accumulators()
-        if reverse:
-            self.spikes = self._reverse_rows(self.spikes)
-            self.sources = self._reverse_rows(self.sources)
         if self.config.compute_loss:
             self.wh_loss_total, self.sv_loss_total, self.total_loss = self._compute_losses()
 

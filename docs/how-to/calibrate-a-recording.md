@@ -35,7 +35,7 @@ With ground truth (simulations), keep the units that match a simulated motor uni
 
 Both return a new `CBSSResult` and leave the original as it is. To have `decompose()` apply
 either filter itself, set `CBSSConfig.selection` (see
-[Calibration](../calibration.md#unit-selection)).
+[Keeping the reliable units](../guide/calibration.md#keeping-the-reliable-units)).
 
 ## Save it
 

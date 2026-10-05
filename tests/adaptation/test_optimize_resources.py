@@ -20,6 +20,7 @@ from adapt_decomp.adaptation.optimize import (
     workers,
 )
 from adapt_decomp.adaptation.optimize.resources import (
+    _dataset_shape,
     _predict_peak_bytes,
     _shard,
     plan_search_resources,
@@ -81,6 +82,16 @@ def test_emg_shape_reads_the_npz_header(tmp_path):
     assert emg_shape(path) == (1234, 7)
     with pytest.raises(ValueError, match="emg_loader"):
         emg_shape(path, "mat")
+
+
+def test_disk_entry_shape_counts_only_its_start_stop_samples(tmp_path):
+    """The memory check sizes a disk entry's run by the samples it adapts."""
+    from dataclasses import replace
+
+    entry = _make_pooled_disk_dataset(tmp_path, "a")
+    n_samples, *rest = _dataset_shape(entry)
+    window = replace(entry, start=10, stop=n_samples - 5)
+    assert _dataset_shape(window) == (n_samples - 15, *rest)
 
 
 def test_disk_and_memory_pools_plan_the_same_runs(tmp_path, make_optimize_kwargs, allow_cores):

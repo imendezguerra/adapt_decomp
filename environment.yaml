@@ -7,6 +7,7 @@
 # torch afterwards (https://pytorch.org/get-started/locally/).
 #
 # Keep in sync with pyproject.toml's lower bounds and extras (checked by ci/check_deps_sync.py).
+# CONTRIBUTING.md explains the development setup and what these pins guarantee across OSes.
 name: adapt_decomp
 channels:
   - conda-forge
@@ -44,5 +45,5 @@ dependencies:
       - mkdocstrings==1.0.6
       - mkdocstrings-python==2.0.9
       - mkdocs-jupyter==0.26.3
-      # The package itself (dependencies above already satisfy pyproject.toml).
-      - -e .
+      # The package itself, with its dev and docs extras (the pins above already satisfy them).
+      - "-e .[dev,docs]"

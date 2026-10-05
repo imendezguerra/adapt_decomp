@@ -1,72 +1,52 @@
 # adapt_decomp
 
-Adaptive decomposition of high-density electromyography (EMG) into motor-unit firings during
-dynamic contractions, in real time (about 22 ms per 100 ms batch on a CPU), based on online
-learning metrics with tunable hyperparameters, as described in
-[Mendez Guerra et al., J. Neural Eng., 2024](https://dx.doi.org/10.1088/1741-2552/ad5ebf).
-It is implemented in Python with PyTorch.
+--8<-- "README.md:overview"
 
 ```mermaid
 flowchart LR
     EMG["Raw EMG\n(samples, channels)"]
 
-    subgraph CAL["Calibration: cbss/"]
-        CBSSC["CBSS(config)\n.decompose()"]
+    subgraph CAL["Calibration"]
+        CBSS["CBSS(config).decompose()"]
         RES["CBSSResult"]
-        CBSSC --> RES
+        CBSS --> RES
     end
 
-    subgraph ADAPT["Online adaptation: adaptation/"]
+    subgraph ADAPT["Adaptation"]
         AD["AdaptDecomp"]
         OUT["AdaptationResult\n(spikes, sources, losses)"]
-        AD -->|".process_data(emg, ...)"| OUT
+        AD -->|"process_data(emg)"| OUT
     end
 
-    subgraph OPT["Optimisation: adaptation/optimize/"]
-        O["optimize_adapt_decomp\n(pool of recordings,\none objective or several)"]
+    subgraph OPT["Hyperparameter optimisation"]
+        O["optimize_adapt_decomp\n(a pool of recordings)"]
         BEST["best AdaptConfig"]
         O --> BEST
     end
 
-    EMG --> CBSSC
-    RES -->|".from_calibration()"| AD
+    EMG --> CBSS
+    RES -->|"from_calibration()"| AD
     RES -->|"pool of CBSSResults"| O
     BEST --> AD
 ```
 
 ## Where to start
 
-- **New here:** [Getting started](getting-started.md) installs the package and runs the whole
-  pipeline on one recording.
-- **Have raw EMG, need motor units:** [Calibration](calibration.md), or the
-  [Calibrate a recording](how-to/calibrate-a-recording.md) recipe.
-- **Have a calibration, need an online decomposition:** [Adaptation](adaptation.md).
-- **Need hyperparameters for your data:** [Optimisation](optimisation.md) and
-  [Tune hyperparameters](how-to/tune-hyperparameters.md).
-- **Want the map of the code first:** [Architecture](architecture.md).
-- **Want to know what to expect:** the [FDSI benchmark](benchmarks/fdsi.md) and its
-  [results](benchmarks/fdsi/report.ipynb).
-- **Looking for a function:** the [API reference](reference/index.md).
+- **[Installation](getting-started/installation.md)** and the
+  **[Quickstart](getting-started/quickstart.md)**: install the package, download a 70 MB
+  example recording and run the whole pipeline on it in a few minutes.
+- **[Tutorial](notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb)**: adaptation in
+  depth on the simulated contraction of the paper, with and without adaptation, online and
+  offline.
+- **[User guide](guide/overview.md)**: how calibration, adaptation and hyperparameter
+  optimisation work, and which parameters to set.
+- **[How-to guides](how-to/index.md)**: short recipes for one task each.
+- **[FDSI benchmark](benchmarks/fdsi.md)**: what to expect, on 100 recordings with ground truth.
+- **[API reference](reference/index.md)**: every public class and function, with all its
+  parameters.
 
 ## Citation
 
-If you use this code in your research, please cite:
+--8<-- "README.md:citation"
 
-```bibtex
-@article{MendezGuerra2024,
-  author    = {Mendez Guerra, Irene and Barsakcioglu, Deren Y. and Farina, Dario},
-  title     = {Adaptive EMG decomposition in dynamic conditions based on online learning
-               metrics with tunable hyperparameters},
-  journal   = {Journal of Neural Engineering},
-  publisher = {IOP Publishing},
-  volume    = {21},
-  number    = {4},
-  year      = {2024},
-  issn      = {1741-2552},
-  doi       = {10.1088/1741-2552/ad5ebf},
-  url       = {https://dx.doi.org/10.1088/1741-2552/ad5ebf}
-}
-```
-
-Released under the MIT licence. Contact: Irene Mendez Guerra
-(irene.mendez17@imperial.ac.uk).
+Released under the MIT licence. Contact: Irene Mendez Guerra (irene.mendez17@imperial.ac.uk).

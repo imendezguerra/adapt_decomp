@@ -1,7 +1,7 @@
 """Run the scripts the how-to guides include (docs/snippets/), so their code keeps working.
 
-workflow.py calibrates, adapts and scores one FDSI recording, saving its calibration;
-tune.py then runs tiny searches on it. Both need the FDSI data.
+workflow.py calibrates, adapts and scores the example recording, saving its calibration;
+tune.py then runs tiny searches on it. Both need the fdsi_example-data archive.
 """
 
 import runpy
@@ -13,13 +13,13 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SNIPPETS = REPO_ROOT / "docs" / "snippets"
-OUTPUTS = REPO_ROOT / "data" / "fdsi_benchmark" / "outputs" / "docs-example"
+OUTPUTS = REPO_ROOT / "data" / "fdsi_example" / "outputs" / "docs-example"
 
 pytestmark = [
     pytest.mark.slow,
     pytest.mark.skipif(
-        not (REPO_ROOT / "data" / "fdsi_benchmark" / "data").exists(),
-        reason="FDSI data not downloaded",
+        not (REPO_ROOT / "data" / "fdsi_example" / "data").exists(),
+        reason="Example data not downloaded (adapt-decomp-data get fdsi_example-data)",
     ),
 ]
 

@@ -30,7 +30,7 @@ THREADS_PER_RUN = 1  # torch threads of every run, so results don't depend on th
 # Version of each stage's outputs, hashed into its cache keys: bump it when a stage's code
 # changes what it writes, so the outputs written before become stale (and so does every
 # output downstream of them). calibrate 2 / apply 2: per-unit ground-truth match and RoA.
-STAGE_VERSIONS: Dict[str, int] = {"calibrate": 2, "search": 1, "apply": 2}
+STAGE_VERSIONS: Dict[str, int] = {"calibrate": 2, "search": 1, "apply": 3}
 
 # Array-index environment variables, in lookup order: PBS Pro, Torque, SLURM
 ARRAY_INDEX_VARS: Tuple[str, ...] = ("PBS_ARRAY_INDEX", "PBS_ARRAYID", "SLURM_ARRAY_TASK_ID")
@@ -195,7 +195,7 @@ def file_sha256(path: Path) -> str:
     if not path.exists():
         raise FileNotFoundError(
             f"Input file not found: {path}. Download the data with "
-            "'python scripts/download_data.py get fdsi_benchmark-data'."
+            "'adapt-decomp-data get fdsi_benchmark-data'."
         )
     stat = path.stat()
     return _file_sha256(str(path), stat.st_size, stat.st_mtime_ns)

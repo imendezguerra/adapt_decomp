@@ -7,6 +7,14 @@
       show_root_heading: false
       heading_level: 3
 
+## Data download
+
+::: adapt_decomp.utils.download
+    options:
+      show_root_heading: false
+      heading_level: 3
+      members: [ARCHIVES, download_data, select_archives]
+
 ## System
 
 ::: adapt_decomp.utils.system

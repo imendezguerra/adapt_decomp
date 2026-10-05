@@ -59,7 +59,6 @@ ema_alpha: 0.95                   # EMA momentum used for update scaling by grad
 fifo_length: null                 # FIFO samples for covariance (null = auto: 2×D)
 source_fifo_batches: 2            # Past batches of Y prepended for left-edge NMS context
 source_fifo_from_calib: false     # Seed the source FIFO with the calibration's tail (online EMG starting at its end)
-backward_fifo_seed: forward_head  # process_from_calib_end backward-pass FIFO seed: "forward_head" or "calib_tail"
 max_sigma_batches: 300            # Max calibration windows for sigma_K estimation (0 = all)
 
 # Debug

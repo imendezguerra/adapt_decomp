@@ -10,6 +10,7 @@ from adapt_decomp.utils.loaders import (
     load_emg,
     load_gt,
 )
+from adapt_decomp.utils.download import ARCHIVES, download_data
 from adapt_decomp.utils.system import (
     available_cores,
     available_memory,
@@ -42,6 +43,8 @@ __all__ = [
     "load_calib",
     "load_emg",
     "load_gt",
+    "ARCHIVES",
+    "download_data",
     "available_cores",
     "available_memory",
     "cgroup_memory_limit",
