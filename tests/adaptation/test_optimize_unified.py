@@ -11,11 +11,13 @@ import pytest
 
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize import (
+    DEFAULT_PARAM_SPACE,
     OptimisationResult,
     optimize_adapt_decomp,
     optimize_adapt_decomp_pooled_memory,
 )
 from adapt_decomp.adaptation.optimize.pareto import _select_knee
+from adapt_decomp.adaptation.optimize.scoring import suggest_overrides
 from adapt_decomp.adaptation.optimize.search import _make_study
 from adapt_decomp.adaptation.optimize.units import select_pool_units
 from adapt_decomp.utils.loaders import PooledDatasetMemory
@@ -48,6 +50,10 @@ def _memory_pool(make_optimize_kwargs, names=("dataset_a",), cov_isi=None, gt=Fa
     return pool, common["base_config"]
 
 
+# A parameter set on DEFAULT_PARAM_SPACE's grid
+V10_WINNER = {"wh_learning_rate": 0.036, "sv_learning_rate": 0.0053, "centroid_momentum": 0.9}
+
+
 def _front(points):
     """FrozenTrials with the given (wh_loss, sv_loss) values, sv_loss logged as a user_attr."""
     return [
@@ -72,6 +78,23 @@ def test_select_knee_falls_back_to_min_sv_loss_on_tiny_fronts_and_rejects_three_
     assert _select_knee(_front([(0.0, 1.0), (1.0, 0.0)])).values == [1.0, 0.0]
     with pytest.raises(ValueError, match="exactly 2"):
         _select_knee(_front([(0.0, 1.0, 2.0), (1.0, 0.0, 2.0), (0.5, 0.5, 2.0)]))
+
+
+def test_a_stepped_range_draws_only_its_grid():
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    momenta = [
+        suggest_overrides(study.ask(), DEFAULT_PARAM_SPACE)["centroid_momentum"] for _ in range(50)
+    ]
+    grid = np.round(np.arange(0.1, 1.0, 0.1), 10)
+    assert set(np.round(momenta, 10)) <= set(grid)
+    assert len(set(np.round(momenta, 10))) > 5  # and spreads over it
+    int_space = {"batch_ms": ("int", 50, 200, 50)}
+    assert {suggest_overrides(study.ask(), int_space)["batch_ms"] for _ in range(30)} <= {
+        50,
+        100,
+        150,
+        200,
+    }
 
 
 def test_default_sampler_is_multivariate_tpe_with_constant_liar_only_when_concurrent():
@@ -110,6 +133,9 @@ def test_unsupervised_unit_selection_subsets_calibration_and_gt_and_drops_empty_
         (dict(selection="bogus", objectives=("wh_loss", "sv_loss")), ValueError, "selection"),
         (dict(unit_selection="bogus"), ValueError, "unit_selection"),
         (dict(objectives=("sv_loss", "sv_loss")), ValueError, "duplicates"),
+        (dict(initial_params=[{"wh_learning_rate": 1e-3}]), ValueError, "exactly the param_space"),
+        (dict(initial_params=[{**V10_WINNER, "centroid_momentum": 0.95}]), ValueError, "outside"),
+        (dict(initial_params=[{**V10_WINNER, "centroid_momentum": 0.25}]), ValueError, "outside"),
     ],
 )
 def test_invalid_search_inputs_raise_before_any_trial(make_optimize_kwargs, kwargs, error, match):
@@ -187,6 +213,24 @@ def test_unit_selection_runs_the_search_on_the_selected_units(
         **kwargs,
     )
     assert result.outputs["dataset_a"].spikes.shape[1] == n_units
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("n_jobs", [1, 2])
+def test_initial_params_run_first_and_the_rest_is_sampled(make_optimize_kwargs, n_jobs):
+    pool, base_config = _memory_pool(make_optimize_kwargs)
+    second = {**V10_WINNER, "centroid_momentum": 0.5}
+    result = optimize_adapt_decomp(
+        pool=pool,
+        base_config=base_config,
+        n_trials=3,
+        n_jobs=n_jobs,
+        initial_params=[V10_WINNER, second],
+    )
+    trials = result.study.trials
+    assert trials[0].params == pytest.approx(V10_WINNER)
+    assert trials[1].params == pytest.approx(second)
+    assert trials[2].params != trials[0].params
 
 
 @pytest.mark.slow

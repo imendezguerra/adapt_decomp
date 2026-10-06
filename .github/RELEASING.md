@@ -93,9 +93,8 @@ The [Results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/repor
 rendered from the report notebook's stored outputs, which come from the full benchmark run:
 
 1. Commit everything: every output records its commit and whether the tree was dirty.
-2. On the cluster: `bash benchmarks/fdsi/pbs/submit.sh`. When it finishes, run
-   `python -m benchmarks.fdsi import-v10` and `verify` a few tasks of each stage, e.g.
-   `python -m benchmarks.fdsi verify apply --tasks 0,250,599`.
+2. On the cluster: `bash benchmarks/fdsi/pbs/submit.sh`. When it finishes, `verify` a few
+   tasks of each stage, e.g. `python -m benchmarks.fdsi verify apply --tasks 0,250,599`.
 3. Execute the report against the full tables and keep its outputs:
    `jupyter nbconvert --to notebook --execute --inplace benchmarks/fdsi/report.ipynb`.
    Remove its "Results pending" note, then commit it.

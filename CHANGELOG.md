@@ -40,7 +40,11 @@ and this project follows [Semantic Versioning](https://semver.org/).
     sampler's random start-up trials always run as one batch;
   - a memory check before any worker starts: predicted from each dataset's shape, raising
     over the machine's or job's limit and warning over the memory currently free, with
-    guidance on what to change. Results are not bit-identical to one-thread runs.
+    guidance on what to change. Results are not bit-identical to one-thread runs;
+  - `initial_params`: parameter sets run first, in order (e.g. a preset's or a previous
+    search's values), taking the first of the sampler's random start-up trials;
+  - `param_space` ranges take an optional step, `("float"|"int", low, high, step)`, to search
+    a grid of values.
 - `CBSSResult.unsupervised_mask()`: the quality-threshold mask behind `select_unsupervised()`.
 - `scripts/run.py run_optuna` reads `objectives` (Pareto search from the CLI), `selection`,
   `unit_selection`/`unit_selection_kwargs`, `sampler` and `n_cores` from `--optim_config`.
@@ -53,8 +57,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
   diff patch, the command, and the lines that reproduce it), plus `git_state()`.
 - `benchmarks/fdsi/`: the FDSI benchmark as a spec (`benchmark.yaml`) and a CLI
   (`python -m benchmarks.fdsi`) with one command per stage (`calibrate`, `search`, `apply`,
-  `collect`, `import-v10`, `verify`), content-hashed caching, a metadata file next to every
-  output, and PBS Pro array-job scripts. Its tables include `calibration_units.csv` (one row per
+  `collect`, `verify`), content-hashed caching, a metadata file next to every output, and PBS
+  Pro array-job scripts (job logs in `.job_outputs/`). Each search is seeded with the
+  `neuromotion` preset's values and runs its trials one at a time, with `threads_per_run`
+  torch threads per run for speed. Its tables include `calibration_units.csv` (one row per
   calibrated unit: the simulated motor unit it matches, `gt_unit`, and its calibration RoA, SIL
   and CoV-ISI), and every per-unit table carries `gt_unit`, so runs with different calibrations
   can be paired unit by unit. Stage code versions are part of the cache keys.
@@ -109,7 +115,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
   searches no longer favour recordings with more units. Not comparable with 1.0.0 values;
   set `"sum"` to reproduce them.
 - The default Optuna sampler is a multivariate `TPESampler` (with `constant_liar` when
-  `n_jobs > 1`), and `DEFAULT_PARAM_SPACE` includes `centroid_momentum` (0–0.95).
+  `n_jobs > 1`), and `DEFAULT_PARAM_SPACE` includes `centroid_momentum` (0.1 to 0.9 in steps
+  of 0.1).
 - Search results are staged through `<best_result_path>_temp`, and `study.pkl` is
   snapshotted after every trial in single-objective searches too.
 - `adaptation/optimize.py` is now the subpackage `adaptation/optimize/`, one file per purpose
@@ -144,6 +151,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `AdaptConfig.from_preset(name)`, or by path from there.
 - `scripts/download_data.py`: replaced by the `adapt-decomp-data` command, with the same `list`
   and `get` subcommands.
+- `notebooks/fdsi_benchmark/` (the 1.0.0 benchmark notebooks and `fdsi_common.py`) and their
+  configs (`configs/data_configs/fdsi_benchmark_grid.yaml`, `fdsi_pool_{memory,disk}_example.yaml`,
+  `configs/adapt_configs/optim_muniverse_fdsi_*.yaml`): replaced by `benchmarks/fdsi/`; they
+  stay at the `v1.0.0` tag.
 
 ### Fixed
 

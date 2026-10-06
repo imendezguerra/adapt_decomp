@@ -157,16 +157,6 @@ def collect(spec: str = typer.Option(DEFAULT_SPEC, "--spec", help=SPEC_HELP)) ->
     typer.echo(f"Tables written to {benchmark.tables_dir}: {sorted(paths)}")
 
 
-@app.command("import-v10")
-def import_v10(
-    spec: str = typer.Option(DEFAULT_SPEC, "--spec", help=SPEC_HELP),
-    n_workers: int = typer.Option(1, "--n-workers", help="Worker processes"),
-) -> None:
-    """Compute the same per-unit metrics from the cached v1.0 results."""
-    path = stages.import_v10(load_spec(spec), command=_command(), n_workers=n_workers)
-    typer.echo(f"v1.0 per-unit metrics written to {path}")
-
-
 @app.command()
 def verify(
     stage: str = typer.Argument(..., help="calibrate, search or apply"),

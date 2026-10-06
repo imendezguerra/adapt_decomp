@@ -35,7 +35,7 @@ From a clone of the repository, with the `adapt_decomp` environment active:
 adapt-decomp-data get fdsi_benchmark-data          # inputs, about 10 GB
 
 python -m benchmarks.fdsi calibrate --all --n-workers 8
-python -m benchmarks.fdsi search --all             # each search uses 12 cores
+python -m benchmarks.fdsi search --all             # each search uses 12 cores (see the spec)
 python -m benchmarks.fdsi apply --all --n-workers 8
 python -m benchmarks.fdsi collect                  # the tables the results read
 ```
@@ -46,3 +46,10 @@ Outputs are cached, so an interrupted run resumes where it stopped, and on the p
 environment they reproduce bit for bit.
 [Running the benchmark](fdsi/running.md) covers the commands, caching, outputs and running on a
 PBS cluster.
+
+## Relation to v1.0
+
+v1.0's benchmark (notebooks at the `v1.0.0` tag) adapted each recording from its first sample,
+searched only the two learning rates with `centroid_momentum` fixed at 0.95, and ran its 50
+trials one at a time. Given those settings, this version's code reproduces v1.0's spike trains
+(bit for bit on two of the three pool recordings, 99.99 % of samples on the third).

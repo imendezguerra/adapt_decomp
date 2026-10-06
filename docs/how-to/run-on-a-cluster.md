@@ -13,8 +13,8 @@ limit (SLURM's, or the cgroup's on PBS). Request the cores and memory the search
 ```
 
 `n_jobs` (trials suggested together) is part of the search's definition, while `n_cores` only
-sets its speed. With `n_cores = n_jobs x pool size`, every run gets exactly one thread, so the
-results don't depend on the machine. See
+sets its speed. With `n_cores = n_jobs x pool size`, every run gets exactly one thread; extra
+cores become torch threads per run (on FDSI, with identical spikes). See
 [Speed and resources](../guide/optimisation.md#speed-and-resources).
 
 ## Many recordings: array jobs

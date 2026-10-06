@@ -7,7 +7,7 @@ import threading
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import optuna
 import torch
@@ -127,6 +127,39 @@ def _prepare_search(
 DEFAULT_N_STARTUP_TRIALS: int = 15
 
 
+def validate_initial_params(initial_params: Sequence[Dict[str, Any]], param_space: dict) -> None:
+    """Check that each initial parameter set gives every param_space value, inside its range.
+
+    Args:
+        initial_params (Sequence[Dict[str, Any]]): Parameter sets to enqueue.
+        param_space (dict): The search space, see suggest_overrides.
+
+    Raises:
+        ValueError: If a set misses or adds a parameter, or a value falls outside
+            its range, off its step grid or outside its choices.
+    """
+    for i, params in enumerate(initial_params):
+        if set(params) != set(param_space):
+            raise ValueError(
+                f"initial_params[{i}] must give exactly the param_space parameters "
+                f"{sorted(param_space)}, got {sorted(params)}."
+            )
+        for name, spec in param_space.items():
+            value, kind = params[name], spec[0]
+            if kind == "categorical":
+                ok = value in spec[1]
+            else:
+                low, high, step = spec[1], spec[2], spec[3] if len(spec) > 3 else None
+                ok = low <= value <= high
+                if ok and step is not None:
+                    ok = abs((value - low) / step - round((value - low) / step)) < 1e-6
+            if not ok:
+                raise ValueError(
+                    f"initial_params[{i}][{name!r}] = {value!r} is outside its param_space "
+                    f"entry {tuple(spec)}."
+                )
+
+
 def _make_study(
     objectives: Tuple[ObjectiveName, ...],
     sampler: Optional[optuna.samplers.BaseSampler],
@@ -176,6 +209,7 @@ def optimize_adapt_decomp(
     n_cores: Optional[int] = None,
     sampler: Optional[optuna.samplers.BaseSampler] = None,
     random_seed: Optional[int] = 1909,
+    initial_params: Optional[Sequence[Dict[str, Any]]] = None,
     best_result_path: Optional[str] = None,
     on_trial: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> OptimisationResult:
@@ -200,7 +234,9 @@ def optimize_adapt_decomp(
             Defaults to "sv_loss".
         param_space (Optional[dict], optional): Maps parameter name to a
             (kind, low, high) tuple, where kind is "log_float", "float", or
-            "int" (or (kind, choices) for "categorical"). To also search
+            "int"; "float" and "int" take an optional step, (kind, low, high,
+            step), to draw only low, low + step, ..., high
+            (("categorical", choices) picks from a list). To also search
             batch_ms, extend it: {**DEFAULT_PARAM_SPACE, "batch_ms": ("int",
             50, 200)}. Defaults to None, which uses DEFAULT_PARAM_SPACE.
         base_config (Optional[AdaptConfig], optional): Resolved base config
@@ -248,6 +284,11 @@ def optimize_adapt_decomp(
             sampler's start-up trials are not batched.
         random_seed (Optional[int], optional): Seed for the default sampler.
             Defaults to 1909.
+        initial_params (Optional[Sequence[Dict[str, Any]]], optional):
+            Parameter sets to run first, in order (e.g. a previous search's
+            winner), each giving every param_space parameter. They take the
+            first start-up trials, so the default sampler draws that many
+            fewer random ones. Defaults to None.
         best_result_path (Optional[str], optional): If set, each trial's
             per-dataset AdaptationResults are staged in
             "<best_result_path>_temp" (deleted at the end) and promoted when
@@ -277,6 +318,8 @@ def optimize_adapt_decomp(
     """
     objectives = (objectives,) if isinstance(objectives, str) else tuple(objectives)
     param_space = param_space if param_space is not None else DEFAULT_PARAM_SPACE
+    initial_params = list(initial_params or [])
+    validate_initial_params(initial_params, param_space)
     unit_selection_kwargs = (
         unit_selection_kwargs
         if unit_selection_kwargs is not None
@@ -355,6 +398,8 @@ def optimize_adapt_decomp(
     )
 
     study = _make_study(objectives, sampler, random_seed, n_jobs)
+    for params in initial_params:
+        study.enqueue_trial(params)
     callbacks = (
         [lambda study, trial: save_study_snapshot(best_dir, study, save_lock)]
         if best_dir is not None

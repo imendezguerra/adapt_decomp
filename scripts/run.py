@@ -285,6 +285,7 @@ def _run_optuna(
         if sampler_kwargs
         else None,
         random_seed=random_seed,
+        initial_params=optim_settings.get("initial_params"),
         best_result_path=best_result_path,
         on_trial=_log_trial_to_wandb,
     )

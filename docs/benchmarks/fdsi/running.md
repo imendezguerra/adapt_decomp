@@ -12,10 +12,9 @@ your dataset's, and edit the spec.
 |---|---|
 | `tasks STAGE [--count \| --status \| --ncpus]` | Lists a stage's tasks (index, id), or prints their number, whether each is current, or the cores one task uses. |
 | `calibrate` | One task per recording: `CBSS(...).decompose()` on the first 5 s, then `select_supervised(roa_th=0.9)`. A recording with no matched unit is recorded as `skipped`. |
-| `search` | One task per search: `optimize_adapt_decomp` on the pool, loaded from the end of the calibration window (`start` in its data config). |
+| `search` | One task per search: `optimize_adapt_decomp` on the pool, its recordings' saved calibrations with the EMG and ground truth after the calibration window (`PooledDatasetMemory`). |
 | `apply` | One task per (config, recording): `AdaptDecomp.from_calibration(...).process_data()` on the samples after the calibration window, with CBSS's own output prepended over it, then SIL and per-unit RoA. The configs are the fixed baseline and each search's winner. |
 | `collect` | Gathers every current output into `tables/*.csv`. It is read-only and works on a partial run. |
-| `import-v10` | Computes the same per-unit metrics from the cached v1.0 results (needs `fdsi_benchmark-outputs`). |
 | `verify STAGE --tasks 0,17` | Re-runs tasks into a scratch root and checks they reproduce: spike trains bit for bit, search trials within 1e-6. |
 
 `calibrate`, `search` and `apply` take one of:
@@ -65,7 +64,7 @@ searches/<name>/study.pkl, trials.csv, best_config.yaml, base_config.yaml, searc
 searches/<name>.meta.yaml
 results/<config>/<sub>/<stub>.pkl, _config.yaml, _metrics.csv, .meta.yaml
 tables/calibrations.csv, calibration_units.csv, searches.csv, best_configs.csv,
-       recordings.csv, units.csv, provenance.csv, v1_0_units.csv, collect.meta.yaml
+       recordings.csv, units.csv, provenance.csv, collect.meta.yaml
 provenance/patches/<hash>.patch
 ```
 
@@ -76,7 +75,7 @@ provenance/patches/<hash>.patch
 | `searches.csv` | search trial | parameters, objective values, pooled losses and RoA |
 | `best_configs.csv` | search | the chosen trial and its parameters |
 | `recordings.csv` | (config, recording) | status, units, mean RoA, losses, time per batch |
-| `units.csv`, `v1_0_units.csv` | (config, recording, unit) | `gt_unit`, `roa_calib`, RoA over the whole recording, after calibration and per triangular phase, SIL, spike counts |
+| `units.csv` | (config, recording, unit) | `gt_unit`, `roa_calib`, RoA over the whole recording, after calibration and per triangular phase, SIL, spike counts |
 | `provenance.csv` | task | status, run time, host, CPU, commit, dirty |
 
 ## Run metadata
@@ -103,10 +102,12 @@ Untracked files are listed but not saved, so commit them before a run that matte
 
 ## Reproducibility
 
-Every run uses one torch/BLAS thread: `python -m benchmarks.fdsi` sets `OMP_NUM_THREADS`,
-`MKL_NUM_THREADS` and `OPENBLAS_NUM_THREADS` to 1. A search uses
-`n_cores = n_jobs × pool size`, so each of its runs also gets one thread. Results therefore
-don't depend on the machine's core count.
+Every calibration and application uses one torch/BLAS thread: `python -m benchmarks.fdsi` sets
+`OMP_NUM_THREADS`, `MKL_NUM_THREADS` and `OPENBLAS_NUM_THREADS` to 1. A search uses
+`n_cores = n_jobs × pool size × threads_per_run`: each run of a guided trial gets
+`threads_per_run` torch threads, and the random start-up trials run that many more at once on a
+thread each. Neither changes the suggested settings, and on FDSI the spikes of a run are
+identical on 1, 2, 4 or 8 threads, so results don't depend on the machine's core count.
 
 On the same environment (`environment.yaml`), CPU outputs reproduce bit for bit, which `verify`
 checks. Across BLAS libraries (MKL vs OpenBLAS) single runs differ in the last digits, which can

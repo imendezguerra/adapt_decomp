@@ -32,8 +32,8 @@ def _units(spec, n_units: int = 3, seed: int = 0) -> pd.DataFrame:
                         "unit": unit,
                         "gt_unit": 10 + unit,
                         "roa_calib": 0.95,
-                        "roa_full": rng.uniform(0.3, 1),
-                        "roa_after_cal": 0.5 if branch == FIXED_BRANCH else 0.9,
+                        "roa_full": 0.5 if branch == FIXED_BRANCH else 0.9,
+                        "roa_after_cal": rng.uniform(0.3, 1),
                         "roa_first_iso": rng.uniform(0.3, 1)
                         if "triangular" in rec.cond
                         else np.nan,
@@ -47,7 +47,7 @@ def _units(spec, n_units: int = 3, seed: int = 0) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _write_tables(spec, with_v10: bool = True) -> None:
+def _write_tables(spec) -> None:
     """Every collected table, small and synthetic."""
     units = _units(spec)
     recs = spec.recordings()
@@ -96,9 +96,6 @@ def _write_tables(spec, with_v10: bool = True) -> None:
             }
         ),
     }
-    if with_v10:
-        v10 = units[units["branch"] == FIXED_BRANCH].assign(roa_after_cal=0.4)
-        tables[report.V10_TABLE] = v10
     spec.tables_dir.mkdir(parents=True)
     for name, table in tables.items():
         table.to_csv(spec.tables_dir / f"{name}.csv", index=False)
@@ -127,22 +124,19 @@ def test_load_tables_adds_labels_and_derived_columns(spec):
     _write_tables(spec)
     tables = report.load_tables(spec)
 
-    assert set(tables) == {*report.TABLES, report.V10_TABLE}
+    assert set(tables) == set(report.TABLES)
     units = tables["units"]
     assert set(units["config"]) == set(report.config_order(spec))
     assert set(units["split"]) <= set(report.SPLITS)
     assert set(units["contraction"]) == {"staircase", "triangular"}
-    np.testing.assert_allclose(units["roa_after_cal_pct"], units["roa_after_cal"] * 100)
-    assert set(tables[report.V10_TABLE]["config"]) == {"v1.0 no adaptation"}
+    np.testing.assert_allclose(units[report.ROA_PCT], units[report.ROA_METRIC] * 100)
     assert set(tables["searches"]["config"]) == {"Pareto min-sv, sum"}
 
 
-def test_load_tables_without_v10_and_with_an_empty_table(spec):
-    _write_tables(spec, with_v10=False)
+def test_load_tables_with_an_empty_table(spec):
+    _write_tables(spec)
     pd.DataFrame().to_csv(spec.tables_dir / "searches.csv", index=False)
-    tables = report.load_tables(spec)
-    assert report.V10_TABLE not in tables
-    assert tables["searches"].empty
+    assert report.load_tables(spec)["searches"].empty
 
 
 def test_load_tables_names_the_collect_command_when_missing(spec):
@@ -171,7 +165,7 @@ def test_summary_and_units_per_recording(spec):
     assert (calib["n_roa_ge"] == 3).all()
 
 
-def test_paired_summary_within_the_run_and_across_versions_by_ground_truth_unit(spec):
+def test_paired_summary_pairs_each_unit_across_configs(spec):
     _write_tables(spec)
     tables = report.load_tables(spec)
     units = tables["units"]
@@ -179,13 +173,9 @@ def test_paired_summary_within_the_run_and_across_versions_by_ground_truth_unit(
     within = report.paired_summary(units, [("No adaptation", "sv_loss, mean")])
     row = within.loc[("No adaptation", "sv_loss, mean")]
     assert row["mean_delta"] == pytest.approx(40.0)
+    assert row["mean_after"] - row["mean_before"] == pytest.approx(row["mean_delta"])
+    assert row["median_before"] <= row["median_after"]
     assert row["pct_improved"] == pytest.approx(100.0)
-
-    both = pd.concat([units, tables[report.V10_TABLE]])
-    across = report.paired_summary(
-        both, [("v1.0 no adaptation", "No adaptation")], keys=report.GT_UNIT_KEYS
-    )
-    assert across.iloc[0]["mean_delta"] == pytest.approx(10.0)  # 50 % vs 40 %
 
 
 def test_phase_long_and_heatmap_delta(spec):

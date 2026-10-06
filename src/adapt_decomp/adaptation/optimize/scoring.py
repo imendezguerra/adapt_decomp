@@ -26,7 +26,7 @@ from adapt_decomp.utils.loaders import PooledDataset
 DEFAULT_PARAM_SPACE: dict = {
     "wh_learning_rate": ("log_float", 1e-4, 5e-2),
     "sv_learning_rate": ("log_float", 1e-4, 1e-1),
-    "centroid_momentum": ("float", 0.0, 0.95),
+    "centroid_momentum": ("float", 0.1, 0.9, 0.1),  # 0.1, 0.2, ..., 0.9
 }
 
 
@@ -99,9 +99,11 @@ def suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
     Args:
         trial (optuna.trial.Trial): Current Optuna trial.
         param_space (dict): Maps parameter name to a (kind, low, high)
-            tuple, where kind is "log_float", "float", or "int" (or
-            (kind, choices) for "categorical"). See optimize_adapt_decomp's
-            docstring for the full format and DEFAULT_PARAM_SPACE.
+            tuple, where kind is "log_float", "float", or "int", with an
+            optional step for "float" and "int": (kind, low, high, step)
+            draws only low, low + step, ..., high. ("categorical", choices)
+            picks from a list. See optimize_adapt_decomp's docstring for
+            the full format and DEFAULT_PARAM_SPACE.
 
     Returns:
         dict: Parameter name -> suggested value, one entry per param_space
@@ -110,12 +112,13 @@ def suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
     overrides = {}
     for name, spec in param_space.items():
         kind = spec[0]
+        step = spec[3] if len(spec) > 3 else None
         if kind == "log_float":
             overrides[name] = trial.suggest_float(name, spec[1], spec[2], log=True)
         elif kind == "float":
-            overrides[name] = trial.suggest_float(name, spec[1], spec[2])
+            overrides[name] = trial.suggest_float(name, spec[1], spec[2], step=step)
         elif kind == "int":
-            overrides[name] = trial.suggest_int(name, spec[1], spec[2])
+            overrides[name] = trial.suggest_int(name, spec[1], spec[2], step=step or 1)
         elif kind == "categorical":
             overrides[name] = trial.suggest_categorical(name, spec[1])
         else:

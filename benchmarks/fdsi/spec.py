@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import MISSING, asdict, dataclass, field, fields, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -16,98 +16,133 @@ from adapt_decomp.adaptation import AdaptConfig
 from adapt_decomp.adaptation.optimize import DEFAULT_PARAM_SPACE
 from adapt_decomp.adaptation.optimize.pareto import validate_selection
 from adapt_decomp.adaptation.optimize.scoring import validate_objectives
+from adapt_decomp.adaptation.optimize.search import validate_initial_params
 from adapt_decomp.adaptation.optimize.units import validate_unit_selection
 from adapt_decomp.utils import read_metadata
 from benchmarks.fdsi import fdsi
+from benchmarks.fdsi.fdsi import Recording
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SPEC = "benchmarks/fdsi/benchmark.yaml"
 
 STAGES: Tuple[str, ...] = ("calibrate", "search", "apply")
 FIXED_BRANCH = "fixed"  # the no-adaptation baseline, applied next to every search's winner
-THREADS_PER_RUN = 1  # torch threads of every run, so results don't depend on the machine
+# Torch threads of a calibrate or apply run; a search sets its own (threads_per_run)
+TORCH_THREADS = 1
 
 # Version of each stage's outputs, hashed into its cache keys: bump it when a stage's code
 # changes what it writes, so the outputs written before become stale (and so does every
-# output downstream of them). calibrate 2 / apply 2: per-unit ground-truth match and RoA.
-STAGE_VERSIONS: Dict[str, int] = {"calibrate": 2, "search": 1, "apply": 3}
+# output downstream of them). apply 4: its metadata reports roa_full_mean.
+STAGE_VERSIONS: Dict[str, int] = {"calibrate": 2, "search": 1, "apply": 4}
+
+# The tables collect writes to <outputs_root>/tables/, in order
+TABLES: Tuple[str, ...] = (
+    "calibrations",
+    "calibration_units",
+    "searches",
+    "best_configs",
+    "recordings",
+    "units",
+    "provenance",
+)
 
 # Array-index environment variables, in lookup order: PBS Pro, Torque, SLURM
 ARRAY_INDEX_VARS: Tuple[str, ...] = ("PBS_ARRAY_INDEX", "PBS_ARRAYID", "SLURM_ARRAY_TASK_ID")
 
-# Allowed (and required) keys of each spec section
-TOP_KEYS: Set[str] = {
-    "name",
-    "data_root",
-    "outputs_root",
-    "v10_outputs_root",
-    "grid",
-    "calibration",
-    "pool",
-    "search",
-    "searches",
-    "apply",
-}
-GRID_KEYS: Set[str] = {
-    "subjects",
-    "conditions",
-    "snr_levels",
-    "fs",
-    "cal_duration_s",
-    "iso_duration_s",
-    "tol_spike_ms",
-}
-CALIBRATION_KEYS: Set[str] = {"cbss_config", "supervised_roa_th"}
-POOL_KEYS: Set[str] = {"subject", "snr", "conditions"}
-# The keys of configs/sweep_configs/sweep_optuna.yaml, plus the base config, its overrides
-# and sv_loss_reduction (an AdaptConfig override, set per search)
-SEARCH_KEYS: Set[str] = {
-    "base_config",
-    "overrides",
-    "param_space",
-    "objectives",
-    "selection",
-    "unit_selection",
-    "unit_selection_kwargs",
-    "n_trials",
-    "n_jobs",
-    "random_seed",
-    "compute_roa",
-    "sv_loss_reduction",
-}
-SEARCH_DEFAULTS: Dict[str, Any] = {
-    "overrides": {},
-    "param_space": None,
-    "selection": "min_sv_loss",
-    "unit_selection": None,
-    "unit_selection_kwargs": None,
-    "n_trials": 50,
-    "n_jobs": 1,
-    "random_seed": 1909,
-    "compute_roa": True,
-}
-APPLY_KEYS: Set[str] = {"fixed_config"}
-_SEARCH_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+# Spec sections: each field is a key of the section, those without a default are required, and
+# load_spec rejects any other key.
 
 
 @dataclass(frozen=True)
-class Recording:
-    """One FDSI recording.
+class Grid:
+    """The recordings and the signal settings every stage shares.
 
     Attributes:
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
+        subjects (List[str]): Subject ids.
+        conditions (List[str]): Condition names.
+        snr_levels (List[int]): SNR levels in dB.
+        fs (int): Sampling frequency in Hz.
+        cal_duration_s (float): Calibration window, from the start of each recording, in s.
+        iso_duration_s (float): Isometric bookends of the triangular contractions, in s.
+        tol_spike_ms (float): Spike-alignment tolerance of every RoA, in ms.
     """
 
-    sub: str
-    cond: str
-    snr: int
+    subjects: List[str]
+    conditions: List[str]
+    snr_levels: List[int]
+    fs: int
+    cal_duration_s: float
+    iso_duration_s: float
+    tol_spike_ms: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fs", int(self.fs))
+        object.__setattr__(self, "tol_spike_ms", float(self.tol_spike_ms))
 
     @property
-    def stub(self) -> str:
-        """Canonical "<sub>_FDSI_<cond>_snr<N>dB" stub."""
-        return fdsi.recording_stub(self.sub, self.cond, self.snr)
+    def cal_end(self) -> int:
+        """Calibration window length in samples; adaptation starts here."""
+        return int(self.cal_duration_s * self.fs)
+
+    @property
+    def iso_dur(self) -> int:
+        """Isometric bookend length of a triangular contraction, in samples."""
+        return int(self.iso_duration_s * self.fs)
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """CBSS's settings (CBSSConfig fields) and the supervised selection's RoA threshold."""
+
+    cbss_config: Dict[str, Any]
+    supervised_roa_th: float
+
+
+@dataclass(frozen=True)
+class Pool:
+    """The recordings every search runs on: one subject and SNR level, several conditions."""
+
+    subject: str
+    snr: int
+    conditions: List[str]
+
+
+@dataclass(frozen=True)
+class Search:
+    """One search: optimize_adapt_decomp's settings and the AdaptConfig its trials start from.
+
+    The spec's search section sets them for every search, and each entry of searches
+    overrides some (not base_config or threads_per_run, shared by all). load_spec resolves
+    each search's objectives (a tuple), param_space (None -> DEFAULT_PARAM_SPACE),
+    initial_params ({param: value} dicts; a config file gives its values of the searched
+    parameters) and overrides (the shared ones, then the search's, then sv_loss_reduction).
+    """
+
+    base_config: str
+    objectives: Tuple[str, ...] = ()
+    overrides: Dict[str, Any] = field(default_factory=dict)
+    sv_loss_reduction: Optional[str] = None
+    param_space: Optional[Dict[str, Any]] = None
+    initial_params: Optional[List[Any]] = None
+    selection: str = "min_sv_loss"
+    unit_selection: Optional[str] = None
+    unit_selection_kwargs: Optional[Dict[str, Any]] = None
+    n_trials: int = 50
+    n_jobs: int = 1
+    threads_per_run: int = 1  # speed only: outside the cache key
+    random_seed: int = 1909
+    compute_roa: bool = True
+
+
+@dataclass(frozen=True)
+class Apply:
+    """The no-adaptation baseline's AdaptConfig file, applied next to every search's winner."""
+
+    fixed_config: str
+
+
+SHARED_ONLY = {"base_config", "threads_per_run"}  # Search fields a search can't override
+_SEARCH_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -152,6 +187,27 @@ def _check_keys(section: Any, allowed: Set[str], required: Set[str], where: str)
     missing = required - set(section)
     if missing:
         raise ValueError(f"Missing key(s) {sorted(missing)} in spec section {where!r}")
+
+
+def _section(cls: type, raw: Any, where: str) -> Any:
+    """Build a section's dataclass from its parsed YAML.
+
+    Args:
+        cls (type): The section's dataclass.
+        raw (Any): The parsed section.
+        where (str): Section name for error messages.
+
+    Raises:
+        ValueError: As _check_keys, for keys outside cls's fields or required ones missing.
+
+    Returns:
+        Any: The cls instance.
+    """
+    required = {
+        f.name for f in fields(cls) if f.default is MISSING and f.default_factory is MISSING
+    }
+    _check_keys(raw, {f.name for f in fields(cls)}, required, where)
+    return cls(**raw)
 
 
 def _resolve_path(value: Union[str, Path]) -> Path:
@@ -300,49 +356,25 @@ class BenchmarkSpec:
         name (str): Run name, used in branch names and metadata.
         data_root (Path): Raw data root (<dataset>/data).
         outputs_root (Path): Where every output of this run goes.
-        v10_outputs_root (Optional[Path]): Cached v1.0 outputs, read by import-v10.
-        grid (Dict[str, Any]): Recordings and the shared signal settings.
-        calibration (Dict[str, Any]): CBSSConfig fields and the supervised RoA threshold.
-        pool (Dict[str, Any]): The recordings every search is run on.
-        search (Dict[str, Any]): Settings shared by every search.
-        searches (Dict[str, Dict[str, Any]]): Search name -> its own settings.
-        apply (Dict[str, Any]): The fixed baseline's config file.
+        grid (Grid): The recordings and the shared signal settings.
+        calibration (Calibration): CBSS's settings and the supervised RoA threshold.
+        pool (Pool): The recordings every search is run on.
+        searches (Dict[str, Search]): Search name -> its resolved settings.
+        apply (Apply): The fixed baseline's config file.
     """
 
     path: Path
     name: str
     data_root: Path
     outputs_root: Path
-    v10_outputs_root: Optional[Path]
-    grid: Dict[str, Any]
-    calibration: Dict[str, Any]
-    pool: Dict[str, Any]
-    search: Dict[str, Any]
-    searches: Dict[str, Dict[str, Any]]
-    apply: Dict[str, Any]
+    grid: Grid
+    calibration: Calibration
+    pool: Pool
+    searches: Dict[str, Search]
+    apply: Apply
     _keys: Dict[Tuple[str, str], str] = field(default_factory=dict, init=False, repr=False)
 
-    # Grid
-
-    @property
-    def fs(self) -> int:
-        """Sampling frequency in Hz."""
-        return int(self.grid["fs"])
-
-    @property
-    def cal_end(self) -> int:
-        """Calibration window length in samples; adaptation starts here."""
-        return int(self.grid["cal_duration_s"] * self.fs)
-
-    @property
-    def iso_dur(self) -> int:
-        """Isometric bookend length of a triangular contraction, in samples."""
-        return int(self.grid["iso_duration_s"] * self.fs)
-
-    @property
-    def tol_spike_ms(self) -> float:
-        """Spike-alignment tolerance of every RoA, in ms."""
-        return float(self.grid["tol_spike_ms"])
+    # Recordings and tasks
 
     def recordings(self) -> List[Recording]:
         """Every recording of the grid, subject-major.
@@ -352,9 +384,9 @@ class BenchmarkSpec:
         """
         return [
             Recording(sub, cond, int(snr))
-            for sub in self.grid["subjects"]
-            for cond in self.grid["conditions"]
-            for snr in self.grid["snr_levels"]
+            for sub in self.grid.subjects
+            for cond in self.grid.conditions
+            for snr in self.grid.snr_levels
         ]
 
     def pool_recordings(self) -> List[Recording]:
@@ -364,8 +396,7 @@ class BenchmarkSpec:
             List[Recording]: One per pool condition.
         """
         return [
-            Recording(self.pool["subject"], cond, int(self.pool["snr"]))
-            for cond in self.pool["conditions"]
+            Recording(self.pool.subject, cond, int(self.pool.snr)) for cond in self.pool.conditions
         ]
 
     @property
@@ -375,8 +406,14 @@ class BenchmarkSpec:
 
     @property
     def search_n_cores(self) -> int:
-        """Cores of every search: n_jobs x pool size, so each run gets one thread."""
-        return int(self.search["n_jobs"]) * len(self.pool["conditions"])
+        """Cores of every search job: n_jobs x pool size x threads_per_run (the largest n_jobs).
+
+        Each run of a guided trial gets threads_per_run torch threads; the random start-up
+        trials, suggested together, run that many more at once on a thread each instead.
+        """
+        return len(self.pool.conditions) * max(
+            s.n_jobs * s.threads_per_run for s in self.searches.values()
+        )
 
     def tasks(self, stage: str) -> List[Task]:
         """A stage's tasks, in a fixed order.
@@ -432,41 +469,13 @@ class BenchmarkSpec:
         Returns:
             CBSSConfig: Built from calibration.cbss_config.
         """
-        values = self.calibration["cbss_config"]
+        values = self.calibration.cbss_config
         unknown = set(values) - {f.name for f in fields(CBSSConfig) if f.init}
         if unknown:
             raise ValueError(
                 f"Unknown CBSSConfig field(s) {sorted(unknown)} in calibration.cbss_config"
             )
         return CBSSConfig(**values)
-
-    def search_settings(self, name: str) -> Dict[str, Any]:
-        """One search's settings: the shared ones, overridden by its own.
-
-        Args:
-            name (str): Search name.
-
-        Returns:
-            Dict[str, Any]: Every SEARCH_KEYS setting (defaults filled in), with
-            param_space resolved (None -> DEFAULT_PARAM_SPACE, as tuples),
-            objectives as a tuple, overrides merged (shared, then the search's,
-            then its sv_loss_reduction) and n_cores added.
-        """
-        entry = self.searches[name]
-        settings = {**SEARCH_DEFAULTS, **self.search, **entry}
-        overrides = {**self.search.get("overrides", {}), **entry.get("overrides", {})}
-        if "sv_loss_reduction" in settings:
-            overrides["sv_loss_reduction"] = settings.pop("sv_loss_reduction")
-        param_space = settings["param_space"]
-        settings.update(
-            overrides=overrides,
-            objectives=tuple(settings["objectives"]),
-            param_space=DEFAULT_PARAM_SPACE
-            if param_space is None
-            else {k: tuple(v) for k, v in param_space.items()},
-            n_cores=self.search_n_cores,
-        )
-        return settings
 
     def search_base_config(self, name: str) -> AdaptConfig:
         """The AdaptConfig every trial of a search starts from.
@@ -480,8 +489,8 @@ class BenchmarkSpec:
         Returns:
             AdaptConfig: The base config file with the search's overrides applied.
         """
-        settings = self.search_settings(name)
-        return _adapt_config(settings["base_config"], settings["overrides"], f"searches.{name}")
+        search = self.searches[name]
+        return _adapt_config(search.base_config, search.overrides, f"searches.{name}")
 
     def fixed_config(self) -> AdaptConfig:
         """The fixed (no-adaptation) baseline's AdaptConfig, on the CPU.
@@ -489,7 +498,7 @@ class BenchmarkSpec:
         Returns:
             AdaptConfig: apply.fixed_config with device="cpu".
         """
-        return _adapt_config(self.apply["fixed_config"], {"device": "cpu"}, "apply")
+        return _adapt_config(self.apply.fixed_config, {"device": "cpu"}, "apply")
 
     # Output paths
 
@@ -500,12 +509,12 @@ class BenchmarkSpec:
 
     @property
     def tables_dir(self) -> Path:
-        """Where collect and import-v10 write their tables."""
+        """Where collect writes its tables."""
         return self.outputs_root / "tables"
 
     def emg_path(self, rec: Recording) -> Path:
         """A recording's noisy EMG file."""
-        return fdsi.emg_path(self.data_root, rec.sub, rec.cond, rec.snr)
+        return fdsi.emg_path(self.data_root, rec)
 
     def gt_path(self, rec: Recording) -> Path:
         """A recording's ground-truth spikes file."""
@@ -637,10 +646,10 @@ class BenchmarkSpec:
                     "version": STAGE_VERSIONS["calibrate"],
                     "id": rec.stub,
                     "cbss_config": self.cbss_config().to_dict(),
-                    "supervised_roa_th": self.calibration["supervised_roa_th"],
-                    "tol_spike_ms": self.tol_spike_ms,
-                    "fs": self.fs,
-                    "cal_end": self.cal_end,
+                    "supervised_roa_th": self.calibration.supervised_roa_th,
+                    "tol_spike_ms": self.grid.tol_spike_ms,
+                    "fs": self.grid.fs,
+                    "cal_end": self.grid.cal_end,
                     "inputs": {
                         "emg": file_sha256(self.emg_path(rec)),
                         "gt": file_sha256(self.gt_path(rec)),
@@ -653,16 +662,16 @@ class BenchmarkSpec:
         """Cache key of a search."""
         cache = ("search", name)
         if cache not in self._keys:
-            settings = self.search_settings(name)
+            settings = asdict(self.searches[name])
             self._keys[cache] = _digest(
                 {
                     "stage": "search",
                     "version": STAGE_VERSIONS["search"],
                     "id": name,
-                    "settings": {k: v for k, v in settings.items() if k != "base_config"},
+                    "settings": {k: v for k, v in settings.items() if k not in SHARED_ONLY},
                     "base_config": self.search_base_config(name).to_dict(),
-                    "tol_spike_ms": self.tol_spike_ms,
-                    "cal_end": self.cal_end,
+                    "tol_spike_ms": self.grid.tol_spike_ms,
+                    "cal_end": self.grid.cal_end,
                     "pool": {rec.cond: self.calibration_key(rec) for rec in self.pool_recordings()},
                 }
             )
@@ -684,10 +693,10 @@ class BenchmarkSpec:
                     "id": f"{branch}/{rec.stub}",
                     "config": config,
                     "calibration": self.calibration_key(rec),
-                    "fs": self.fs,
-                    "cal_end": self.cal_end,
-                    "iso_dur": self.iso_dur,
-                    "tol_spike_ms": self.tol_spike_ms,
+                    "fs": self.grid.fs,
+                    "cal_end": self.grid.cal_end,
+                    "iso_dur": self.grid.iso_dur,
+                    "tol_spike_ms": self.grid.tol_spike_ms,
                 }
             )
         return self._keys[cache]
@@ -738,6 +747,50 @@ def _adapt_config(path: Union[str, Path], overrides: Dict[str, Any], where: str)
     return AdaptConfig(**{**AdaptConfig.from_yaml(config_path).to_dict(), **overrides})
 
 
+def _resolve_search(shared: Search, name: str, entry: Dict[str, Any]) -> Search:
+    """One search's settings: the shared ones overridden by its own, resolved (see Search).
+
+    Args:
+        shared (Search): The spec's search section.
+        name (str): The search's name.
+        entry (Dict[str, Any]): Its own settings.
+
+    Raises:
+        ValueError: If an initial_params config file is missing.
+
+    Returns:
+        Search: The resolved settings.
+    """
+    merged = replace(
+        shared, **{**entry, "overrides": {**shared.overrides, **entry.get("overrides", {})}}
+    )
+    param_space = (
+        DEFAULT_PARAM_SPACE
+        if merged.param_space is None
+        else {k: tuple(v) for k, v in merged.param_space.items()}
+    )
+    initial_params = [
+        dict(p)
+        if isinstance(p, dict)
+        else {  # a config file: its values of the searched parameters
+            k: getattr(_adapt_config(p, {}, f"searches.{name}.initial_params"), k)
+            for k in param_space
+        }
+        for p in merged.initial_params or []
+    ]
+    overrides = dict(merged.overrides)
+    if merged.sv_loss_reduction is not None:
+        overrides["sv_loss_reduction"] = merged.sv_loss_reduction
+    return replace(
+        merged,
+        objectives=tuple(merged.objectives),
+        overrides=overrides,
+        sv_loss_reduction=None,
+        param_space=param_space,
+        initial_params=initial_params,
+    )
+
+
 def load_spec(
     path: Union[str, Path] = DEFAULT_SPEC, outputs_root: Optional[Union[str, Path]] = None
 ) -> BenchmarkSpec:
@@ -752,7 +805,8 @@ def load_spec(
     Raises:
         ValueError: If the file is missing, a section has unknown or missing
             keys, the pool is outside the grid, a search name is invalid, or a
-            search's objectives, selection or unit selection is invalid.
+            search's objectives, selection, unit selection or initial
+            parameters are invalid.
 
     Returns:
         BenchmarkSpec: The validated spec.
@@ -764,29 +818,40 @@ def load_spec(
         raw = yaml.safe_load(f)
 
     # Sections
-    _check_keys(raw, TOP_KEYS, TOP_KEYS - {"v10_outputs_root"}, "spec")
-    _check_keys(raw["grid"], GRID_KEYS, GRID_KEYS, "grid")
-    _check_keys(raw["calibration"], CALIBRATION_KEYS, CALIBRATION_KEYS, "calibration")
-    _check_keys(raw["pool"], POOL_KEYS, POOL_KEYS, "pool")
-    _check_keys(raw["search"], SEARCH_KEYS, {"base_config"}, "search")
-    _check_keys(raw["apply"], APPLY_KEYS, APPLY_KEYS, "apply")
+    top = {
+        "name",
+        "data_root",
+        "outputs_root",
+        "grid",
+        "calibration",
+        "pool",
+        "search",
+        "searches",
+        "apply",
+    }
+    _check_keys(raw, top, top, "spec")
+    grid = _section(Grid, raw["grid"], "grid")
+    pool = _section(Pool, raw["pool"], "pool")
+    shared = _section(Search, raw["search"], "search")
     if not isinstance(raw["searches"], dict) or not raw["searches"]:
         raise ValueError(
             "Spec section 'searches' must map at least one search name to its settings"
         )
+    searches = {}
     for name, entry in raw["searches"].items():
         if not _SEARCH_NAME.match(str(name)) or name == FIXED_BRANCH:
             raise ValueError(
                 f"Invalid search name {name!r}: use letters, digits, '_' or '-', not "
                 f"{FIXED_BRANCH!r}"
             )
-        _check_keys(entry or {}, SEARCH_KEYS - {"base_config"}, set(), f"searches.{name}")
+        own = {f.name for f in fields(Search)} - SHARED_ONLY
+        _check_keys(entry or {}, own, set(), f"searches.{name}")
+        searches[name] = _resolve_search(shared, name, entry or {})
 
     # The pool must be part of the grid
-    grid, pool = raw["grid"], raw["pool"]
-    if pool["subject"] not in grid["subjects"] or pool["snr"] not in grid["snr_levels"]:
-        raise ValueError(f"Pool subject/snr {pool['subject']!r}/{pool['snr']!r} is not in the grid")
-    outside = set(pool["conditions"]) - set(grid["conditions"])
+    if pool.subject not in grid.subjects or pool.snr not in grid.snr_levels:
+        raise ValueError(f"Pool subject/snr {pool.subject!r}/{pool.snr!r} is not in the grid")
+    outside = set(pool.conditions) - set(grid.conditions)
     if outside:
         raise ValueError(f"Pool condition(s) {sorted(outside)} are not in the grid")
 
@@ -797,30 +862,26 @@ def load_spec(
         outputs_root=_resolve_path(
             outputs_root if outputs_root is not None else raw["outputs_root"]
         ),
-        v10_outputs_root=_resolve_path(raw["v10_outputs_root"])
-        if raw.get("v10_outputs_root")
-        else None,
         grid=grid,
-        calibration=raw["calibration"],
+        calibration=_section(Calibration, raw["calibration"], "calibration"),
         pool=pool,
-        search=raw["search"],
-        searches={name: entry or {} for name, entry in raw["searches"].items()},
-        apply=raw["apply"],
+        searches=searches,
+        apply=_section(Apply, raw["apply"], "apply"),
     )
 
     # Every config builds and every search is well-formed
     spec.cbss_config()
     spec.fixed_config()
-    for name in spec.searches:
-        settings = spec.search_settings(name)
-        if "objectives" not in settings:
+    for name, search in spec.searches.items():
+        if not search.objectives:
             raise ValueError(f"Search {name!r} has no objectives")
-        validate_objectives(settings["objectives"])
-        if len(settings["objectives"]) > 1:
-            validate_selection(settings["selection"], settings["objectives"])
-        validate_unit_selection(settings["unit_selection"])
-        for key in ("n_trials", "n_jobs"):
-            if int(settings[key]) < 1:
+        validate_objectives(search.objectives)
+        if len(search.objectives) > 1:
+            validate_selection(search.selection, search.objectives)
+        validate_unit_selection(search.unit_selection)
+        validate_initial_params(search.initial_params, search.param_space)
+        for key in ("n_trials", "n_jobs", "threads_per_run"):
+            if int(getattr(search, key)) < 1:
                 raise ValueError(f"Search {name!r}: {key} must be at least 1")
         spec.search_base_config(name)
     return spec

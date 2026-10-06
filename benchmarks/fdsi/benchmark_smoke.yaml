@@ -5,7 +5,6 @@
 name: benchmark_smoke
 data_root: data/fdsi_benchmark/data
 outputs_root: data/fdsi_benchmark/outputs/benchmark_smoke
-v10_outputs_root: data/fdsi_benchmark/outputs
 
 grid:
   subjects: [sub-01]
@@ -29,6 +28,7 @@ search:
   base_config: src/adapt_decomp/adaptation/presets/muniverse.yaml
   overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
   param_space: null
+  initial_params: [src/adapt_decomp/adaptation/presets/neuromotion.yaml]
   n_trials: 4
   n_jobs: 2
   random_seed: 42

@@ -8,9 +8,10 @@ import json
 import os
 import pickle
 import shutil
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -19,24 +20,20 @@ import yaml
 from joblib import Parallel, delayed
 from loguru import logger
 
-from adapt_decomp import CBSS, AdaptationResult, AdaptDecomp, CBSSConfig, CBSSResult
+from adapt_decomp import CBSS, AdaptDecomp, CBSSConfig, CBSSResult
 from adapt_decomp.adaptation import AdaptConfig
 from adapt_decomp.adaptation.optimize import SELECTION_RULES, optimize_adapt_decomp
 from adapt_decomp.spikes import get_sil
-from adapt_decomp.utils import (
-    build_metadata,
-    load_gt,
-    load_pooled_cbss_memory,
-    read_metadata,
-    write_metadata,
-)
+from adapt_decomp.utils import build_metadata, load_gt, read_metadata, write_metadata
+from adapt_decomp.utils.loaders import PooledDatasetMemory
 from benchmarks.fdsi import fdsi
+from benchmarks.fdsi.fdsi import Recording
 from benchmarks.fdsi.spec import (
     FIXED_BRANCH,
     REPO_ROOT,
-    THREADS_PER_RUN,
+    TABLES,
+    TORCH_THREADS,
     BenchmarkSpec,
-    Recording,
     Task,
     file_sha256,
 )
@@ -48,14 +45,6 @@ REPRODUCE_SETUP = (
     "pip install -e .",
     "adapt-decomp-data get fdsi_benchmark-data",
 )
-
-# v1.0's applied configs (lr_mode="fixed"): branch -> search dir, None for the fixed baseline
-V10_BRANCHES: Dict[str, Optional[str]] = {
-    "fixed": None,
-    "sv_loss": "tpe_sv_median",
-    "pareto": "tpe_pareto",
-    "roa": "tpe_roa",
-}
 
 # Relative tolerance of verify on search trial values when they are not bit-identical
 VERIFY_RTOL = 1e-6
@@ -136,6 +125,27 @@ def _float_or_none(value: Any) -> Optional[float]:
     return None if value is None else float(value)
 
 
+def _load_recording(
+    spec: BenchmarkSpec, rec: Recording
+) -> Tuple[np.ndarray, CBSSResult, CBSSConfig, Optional[np.ndarray]]:
+    """A calibrated recording: its EMG, its calibration and the ground truth matched to its units.
+
+    Args:
+        spec (BenchmarkSpec): The spec.
+        rec (Recording): The recording, already calibrated.
+
+    Returns:
+        Tuple[np.ndarray, CBSSResult, CBSSConfig, Optional[np.ndarray]]: The whole
+        recording's EMG (samples, channels), the calibration and its config, and the
+        binary ground truth (samples, units) in the calibration's unit order.
+    """
+    paths = spec.calibration_paths(rec)
+    cbss_result = CBSSResult.load(paths["result"])
+    emg = fdsi.load_raw_emg(spec.data_root, rec)
+    gt = fdsi.load_gt_full_bin(spec.data_root, rec, cbss_result, n_samples=emg.shape[0])
+    return emg, cbss_result, CBSSConfig.from_yaml(paths["config"]), gt
+
+
 # Task runner
 
 
@@ -167,11 +177,11 @@ def run_task(
             "Pass --force to recompute it."
         )
 
-    # Run the stage and record it on THREADS_PER_RUN threads, restoring the caller's afterwards
+    # Run the stage and record it on TORCH_THREADS threads, restoring the caller's afterwards
     key = spec.task_key(task)
     logger.info(f"{task.stage} {task.id}: running ({status})")
     torch_threads = torch.get_num_threads()
-    torch.set_num_threads(THREADS_PER_RUN)
+    torch.set_num_threads(TORCH_THREADS)
     try:
         started = _now()
         outcome = STAGE_RUNNERS[task.stage](spec, task)
@@ -296,9 +306,9 @@ def calibrate(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     }
 
     # Load the calibration window and its ground truth
-    emg_full = fdsi.load_raw_emg(spec.data_root, rec.sub, rec.cond, rec.snr)
-    emg_calib, ts_calib = emg_full[: spec.cal_end], np.arange(spec.cal_end) / spec.fs
-    gt_bin = load_gt(spec.gt_path(rec), n_samples=spec.cal_end)
+    emg_full = fdsi.load_raw_emg(spec.data_root, rec)
+    emg_calib, ts_calib = emg_full[: spec.grid.cal_end], np.arange(spec.grid.cal_end) / spec.grid.fs
+    gt_bin = load_gt(spec.gt_path(rec), n_samples=spec.grid.cal_end)
 
     # Calibrate
     cbss_config = spec.cbss_config()
@@ -309,9 +319,9 @@ def calibrate(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     try:
         result = result.select_supervised(
             gt_bin,
-            roa_th=spec.calibration["supervised_roa_th"],
-            tol_spike_ms=spec.tol_spike_ms,
-            fs=spec.fs,
+            roa_th=spec.calibration.supervised_roa_th,
+            tol_spike_ms=spec.grid.tol_spike_ms,
+            fs=spec.grid.fs,
         )
     except ValueError as exc:
         logger.warning(f"calibrate {task.id}: skipped, {exc}")
@@ -319,9 +329,7 @@ def calibrate(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         return {"status": "skipped", "reason": str(exc), "inputs": inputs}
 
     # Per-unit ground-truth match, RoA, SIL and CoV-ISI over the calibration window
-    units = fdsi.with_recording_labels(
-        fdsi.calibration_unit_metrics(result), rec.sub, rec.cond, rec.snr
-    )
+    units = fdsi.calibration_unit_metrics(result, rec)
 
     # Save
     _atomic(paths["result"], result.save)
@@ -357,27 +365,19 @@ def search(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     pool_tasks = [spec.task_for("calibrate", rec.stub) for rec in spec.pool_recordings()]
     if "skipped" in _require_upstream(spec, pool_tasks):
         raise ValueError(f"search {name}: a pool recording has no calibrated unit.")
-    settings = spec.search_settings(name)
+    settings = spec.searches[name]
     base_config = spec.search_base_config(name)
 
-    # Pool: this run's calibrations, from the end of their calibration window
-    data_config = {
-        "root": ".",
-        "preprocess": True,
-        "datasets": [
-            {
-                "name": rec.cond,
-                "path_emg": str(spec.emg_path(rec)),
-                "path_calib": str(spec.calibration_paths(rec)["result"]),
-                "path_calib_config": str(spec.calibration_paths(rec)["config"]),
-                "path_gt": str(spec.gt_path(rec)),
-                "fs": spec.fs,
-                "start": spec.cal_end,
-            }
-            for rec in spec.pool_recordings()
-        ],
-    }
-    pool = load_pooled_cbss_memory(data_config)
+    # Pool: this run's calibrations, adapted and scored from the end of their calibration window
+    pool = {}
+    for rec in spec.pool_recordings():
+        emg, cbss_result, cbss_config, gt = _load_recording(spec, rec)
+        pool[rec.cond] = PooledDatasetMemory(
+            emg=torch.from_numpy(emg[spec.grid.cal_end :].copy()),
+            calibration=cbss_result,
+            cbss_config=cbss_config,
+            gt_paired_bin=gt[spec.grid.cal_end :],
+        )
 
     # Search, writing into a temporary directory swapped in when complete
     out_dir = spec.search_paths(name)["dir"]
@@ -387,18 +387,19 @@ def search(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     started = _now()
     result = optimize_adapt_decomp(
         pool=pool,
-        objectives=settings["objectives"],
-        param_space=settings["param_space"],
+        objectives=settings.objectives,
+        param_space=settings.param_space,
         base_config=base_config,
-        compute_roa=settings["compute_roa"],
-        roa_kwargs={"tol_spike_ms": spec.tol_spike_ms},
-        unit_selection=settings["unit_selection"],
-        unit_selection_kwargs=settings["unit_selection_kwargs"],
-        selection=settings["selection"],
-        n_trials=settings["n_trials"],
-        n_jobs=settings["n_jobs"],
-        n_cores=settings["n_cores"],
-        random_seed=settings["random_seed"],
+        compute_roa=settings.compute_roa,
+        roa_kwargs={"tol_spike_ms": spec.grid.tol_spike_ms},
+        unit_selection=settings.unit_selection,
+        unit_selection_kwargs=settings.unit_selection_kwargs,
+        selection=settings.selection,
+        n_trials=settings.n_trials,
+        n_jobs=settings.n_jobs,
+        n_cores=spec.search_n_cores,
+        random_seed=settings.random_seed,
+        initial_params=settings.initial_params,
         best_result_path=str(tmp_dir / "best"),
     )
     study = result.study
@@ -406,7 +407,7 @@ def search(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     chosen = (
         study.best_trial
         if result.pareto_front is None
-        else SELECTION_RULES[settings["selection"]](result.pareto_front)
+        else SELECTION_RULES[settings.selection](result.pareto_front)
     )
 
     # Save the study, its trials, the chosen config and the settings that produced them
@@ -416,15 +417,8 @@ def search(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     result.best_config.to_yaml(tmp_dir / "best_config.yaml")
     base_config.to_yaml(tmp_dir / "base_config.yaml")
     sweep = {
-        "param_space": {k: list(v) for k, v in settings["param_space"].items()},
-        "objectives": list(settings["objectives"]),
-        "selection": settings["selection"],
-        "unit_selection": settings["unit_selection"],
-        "unit_selection_kwargs": settings["unit_selection_kwargs"],
-        "n_trials": settings["n_trials"],
-        "n_jobs": settings["n_jobs"],
-        "n_cores": settings["n_cores"],
-        "random_seed": settings["random_seed"],
+        **json.loads(json.dumps(asdict(settings))),  # tuples as lists, for YAML
+        "n_cores": spec.search_n_cores,
     }
     with open(tmp_dir / "search.yaml", "w", encoding="utf-8") as f:
         yaml.safe_dump(sweep, f, sort_keys=False)
@@ -474,10 +468,8 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         _remove([paths["result"], paths["config"], paths["metrics"]])
         return {"status": "skipped", "reason": "its calibration was skipped", "inputs": inputs}
 
-    # The calibration and the config to apply
-    cal_paths = spec.calibration_paths(rec)
-    cbss_result = CBSSResult.load(cal_paths["result"])
-    cbss_config = CBSSConfig.from_yaml(cal_paths["config"])
+    # The recording, its calibration and the config to apply
+    emg_full, cbss_result, cbss_config, gt_full_bin = _load_recording(spec, rec)
     adapt_config = (
         spec.fixed_config()
         if branch == FIXED_BRANCH
@@ -485,12 +477,11 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
     )
 
     # Adapt from the end of the calibration window, the source FIFO seeded from its tail
-    emg_full = fdsi.load_raw_emg(spec.data_root, rec.sub, rec.cond, rec.snr)
     adapt_config.source_fifo_from_calib = True
     adapter = AdaptDecomp.from_calibration(
         calibration=cbss_result, cbss_config=cbss_config, adapt_config=adapt_config
     )
-    outputs = adapter.process_data(emg_full[spec.cal_end :])
+    outputs = adapter.process_data(emg_full[spec.grid.cal_end :])
 
     # Prepend CBSS's own output over the calibration window, so the whole recording is scored
     outputs.spikes = torch.cat(
@@ -507,26 +498,18 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
         adapt_config.spike_min_dist,
         peak_power=adapt_config.spike_det_exp,
     ).numpy()
-    gt_full_bin = fdsi.load_gt_full_bin(
-        spec.data_root, rec.sub, rec.cond, cbss_result, n_samples=outputs.spikes.shape[0]
+    metrics = fdsi.unit_metrics(
+        outputs,
+        gt_full_bin,
+        cbss_result,
+        rec,
+        branch,
+        cal_end=spec.grid.cal_end,
+        iso_dur=spec.grid.iso_dur,
+        fs=spec.grid.fs,
+        tol_spike_ms=spec.grid.tol_spike_ms,
     )
-    outputs.roa = fdsi.compute_roa_for_result(outputs, gt_full_bin, spec.fs, spec.tol_spike_ms)
-    metrics = fdsi.with_recording_labels(
-        fdsi.unit_metrics(
-            outputs,
-            gt_full_bin,
-            cbss_result,
-            rec.cond,
-            spec.cal_end,
-            spec.iso_dur,
-            spec.fs,
-            spec.tol_spike_ms,
-        ),
-        rec.sub,
-        rec.cond,
-        rec.snr,
-        branch=branch,
-    )
+    outputs.roa = None if gt_full_bin is None else metrics["roa_full"].to_numpy()
 
     # Save
     _atomic(paths["result"], outputs.save)
@@ -543,7 +526,7 @@ def apply(spec: BenchmarkSpec, task: Task) -> Dict[str, Any]:
             "spikes_sha256": fdsi.spikes_digest(spikes),
         },
         "results": {
-            "roa_after_cal_mean": _float_or_none(np.nanmean(metrics["roa_after_cal"]))
+            "roa_full_mean": _float_or_none(np.nanmean(metrics["roa_full"]))
             if len(metrics)
             else None,
             "wh_loss_total": _float_or_none(outputs.wh_loss_total),
@@ -612,30 +595,19 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
         provenance (one row per task).
     """
     started = _now()
-    rows: Dict[str, List[Any]] = {
-        name: []
-        for name in (
-            "calibrations",
-            "calibration_units",
-            "searches",
-            "best_configs",
-            "recordings",
-            "units",
-        )
-    }
-    provenance = []
+    rows: Dict[str, list] = {name: [] for name in TABLES}  # dicts, or frames to concat
+
+    def status_of(task: Task) -> Tuple[str, Dict[str, Any]]:
+        status, meta = spec.task_status(task)
+        rows["provenance"].append(_meta_row(task, status, meta))
+        return status, meta or {}
 
     # Calibrations: one row per recording, and their per-unit metrics
     for task in spec.tasks("calibrate"):
-        status, meta = spec.task_status(task)
-        provenance.append(_meta_row(task, status, meta))
+        status, meta = status_of(task)
         rec = task.recording
-        units = (
-            pd.read_csv(spec.calibration_paths(rec)["units"])
-            if status == "done"
-            else pd.DataFrame()
-        )
-        if len(units):
+        units = pd.read_csv(spec.calibration_paths(rec)["units"]) if status == "done" else None
+        if units is not None:
             rows["calibration_units"].append(units)
         rows["calibrations"].append(
             {
@@ -644,44 +616,41 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
                 "condition": rec.cond,
                 "snr": rec.snr,
                 "status": status,
-                "n_units": len(units) if status == "done" else None,
-                "roa_calib_mean": units["roa_calib"].mean() if len(units) else None,
-                "n_units_sil_ge_0.9": int((units["sil_calib"] >= 0.9).sum())
-                if len(units)
-                else None,
-                "run_time_s": (meta or {}).get("run_time_s"),
+                "n_units": None if units is None else len(units),
+                "roa_calib_mean": None if units is None else units["roa_calib"].mean(),
+                "n_units_sil_ge_0.9": None
+                if units is None
+                else int((units["sil_calib"] >= 0.9).sum()),
+                "run_time_s": meta.get("run_time_s"),
             }
         )
 
     # Searches: every trial, and the chosen config of each
     for task in spec.tasks("search"):
-        status, meta = spec.task_status(task)
-        provenance.append(_meta_row(task, status, meta))
+        status, meta = status_of(task)
         if status != "done":
             continue
         out_dir = spec.search_paths(task.branch)["dir"]
         trials = pd.read_csv(out_dir / "trials.csv")
         trials.insert(0, "search", task.branch)
         rows["searches"].append(trials)
-        settings = spec.search_settings(task.branch)
+        settings = spec.searches[task.branch]
         best = AdaptConfig.from_yaml(out_dir / "best_config.yaml")
         rows["best_configs"].append(
             {
                 "search": task.branch,
-                "objectives": ",".join(settings["objectives"]),
-                "selection": settings["selection"] if len(settings["objectives"]) > 1 else None,
+                "objectives": ",".join(settings.objectives),
+                "selection": settings.selection if len(settings.objectives) > 1 else None,
                 "sv_loss_reduction": best.sv_loss_reduction,
                 "chosen_trial": meta["results"]["chosen_trial"],
-                **{p: getattr(best, p) for p in settings["param_space"]},
+                **{p: getattr(best, p) for p in settings.param_space},
             }
         )
 
     # Applied configs: one row per recording, and their per-unit metrics
     for task in spec.tasks("apply"):
-        status, meta = spec.task_status(task)
-        provenance.append(_meta_row(task, status, meta))
+        status, meta = status_of(task)
         rec = task.recording
-        results = (meta or {}).get("results", {}) if status == "done" else {}
         rows["recordings"].append(
             {
                 "branch": task.branch,
@@ -690,155 +659,46 @@ def collect(spec: BenchmarkSpec, *, command: Sequence[str]) -> Dict[str, Path]:
                 "condition": rec.cond,
                 "snr": rec.snr,
                 "status": status,
-                "n_units": (meta or {}).get("digest", {}).get("n_units"),
-                **results,
-                "run_time_s": (meta or {}).get("run_time_s"),
+                "n_units": meta.get("digest", {}).get("n_units"),
+                **(meta.get("results", {}) if status == "done" else {}),
+                "run_time_s": meta.get("run_time_s"),
             }
         )
         if status == "done":
             rows["units"].append(pd.read_csv(spec.result_paths(task.branch, rec)["metrics"]))
 
-    # Write the tables
-    tables = {
-        "calibrations": pd.DataFrame(rows["calibrations"]),
-        "calibration_units": pd.concat(rows["calibration_units"], ignore_index=True)
-        if rows["calibration_units"]
-        else pd.DataFrame(),
-        "searches": pd.concat(rows["searches"], ignore_index=True)
-        if rows["searches"]
-        else pd.DataFrame(),
-        "best_configs": pd.DataFrame(rows["best_configs"]),
-        "recordings": pd.DataFrame(rows["recordings"]),
-        "units": pd.concat(rows["units"], ignore_index=True) if rows["units"] else pd.DataFrame(),
-        "provenance": pd.DataFrame(provenance),
-    }
-    for name, table in tables.items():
-        _atomic(
-            spec.tables_dir / f"{name}.csv", lambda p, table=table: table.to_csv(p, index=False)
-        )
-    counts = tables["provenance"].groupby(["stage", "status"]).size()
-    for (stage, status), n in counts.items():
+    # Write the tables, then their metadata
+    paths = {}
+    digest = {}
+    for name, items in rows.items():
+        frames = [item for item in items if isinstance(item, pd.DataFrame)]
+        table = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(items)
+        paths[name] = spec.tables_dir / f"{name}.csv"
+        _atomic(paths[name], lambda p, table=table: table.to_csv(p, index=False))
+        digest[paths[name].name] = {
+            "rows": len(table),
+            "sha256": _sha256_bytes(paths[name].read_bytes()),
+        }
+    for (stage, status), n in (
+        pd.DataFrame(rows["provenance"]).groupby(["stage", "status"]).size().items()
+    ):
         logger.info(f"collect: {stage} {status}: {n}")
-
-    _write_table_metadata(spec, "collect", tables, started, command)
-    return {name: spec.tables_dir / f"{name}.csv" for name in tables}
-
-
-def _write_table_metadata(
-    spec: BenchmarkSpec,
-    name: str,
-    tables: Dict[str, pd.DataFrame],
-    started: datetime,
-    command: Sequence[str],
-) -> None:
-    """Write the metadata of the tables collect or import-v10 wrote to spec.tables_dir.
-
-    Args:
-        spec (BenchmarkSpec): The spec.
-        name (str): "collect" or "import-v10".
-        tables (Dict[str, pd.DataFrame]): Table name -> the table written as "<name>.csv".
-        started (datetime): When the command started.
-        command (Sequence[str]): The command as invoked.
-
-    Returns:
-        None
-    """
     metadata = build_metadata(
         command=command,
         started=started,
         finished=_now(),
-        run_name=f"{spec.name}-{name}",
+        run_name=f"{spec.name}-collect",
         reproduce=[
             *REPRODUCE_SETUP,
             f"# the run's outputs must exist under {spec.outputs_root.name}/",
-            f"python -m benchmarks.fdsi {name} --spec {spec.spec_ref}",
+            f"python -m benchmarks.fdsi collect --spec {spec.spec_ref}",
         ],
         repo_dir=REPO_ROOT,
         patch_dir=spec.patch_dir,
-        extra={
-            "task": {"stage": name, "spec": spec.spec_ref},
-            "digest": {
-                f"{table_name}.csv": {
-                    "rows": len(table),
-                    "sha256": _sha256_bytes((spec.tables_dir / f"{table_name}.csv").read_bytes()),
-                }
-                for table_name, table in tables.items()
-            },
-        },
+        extra={"task": {"stage": "collect", "spec": spec.spec_ref}, "digest": digest},
     )
-    write_metadata(spec.tables_dir / f"{name}.meta.yaml", metadata)
-
-
-def _v10_unit_metrics(
-    spec: BenchmarkSpec, branch: str, sampler: Optional[str], rec: Recording
-) -> Optional[pd.DataFrame]:
-    """Per-unit metrics of one cached v1.0 result, None if it isn't cached.
-
-    Args:
-        spec (BenchmarkSpec): The spec.
-        branch (str): Key of V10_BRANCHES.
-        sampler (Optional[str]): Its v1.0 search dir.
-        rec (Recording): The recording.
-
-    Returns:
-        Optional[pd.DataFrame]: As fdsi.unit_metrics, with branch, recording, sub,
-        condition and snr; gt_unit pairs its units with this run's.
-    """
-    root = spec.v10_outputs_root
-    result_path = fdsi.v10_result_path(root, rec.sub, rec.cond, rec.snr, sampler)
-    cal_path = fdsi.v10_calibration_path(root, rec.sub, rec.cond, rec.snr)
-    if not (result_path.exists() and cal_path.exists()):
-        return None
-    outputs = AdaptationResult.load(result_path)
-    cbss_result = CBSSResult.load(cal_path)
-    gt_full_bin = fdsi.load_gt_full_bin(
-        spec.data_root, rec.sub, rec.cond, cbss_result, n_samples=outputs.spikes.shape[0]
-    )
-    metrics = fdsi.unit_metrics(
-        outputs,
-        gt_full_bin,
-        cbss_result,
-        rec.cond,
-        spec.cal_end,
-        spec.iso_dur,
-        spec.fs,
-        spec.tol_spike_ms,
-    )
-    return fdsi.with_recording_labels(metrics, rec.sub, rec.cond, rec.snr, branch=branch)
-
-
-def import_v10(spec: BenchmarkSpec, *, command: Sequence[str], n_workers: int = 1) -> Path:
-    """Compute the same per-unit metrics from the cached v1.0 results, for comparison.
-
-    Args:
-        spec (BenchmarkSpec): The spec (needs v10_outputs_root).
-        command (Sequence[str]): The command as invoked.
-        n_workers (int, optional): Worker processes. Defaults to 1.
-
-    Raises:
-        ValueError: If the spec has no v10_outputs_root.
-
-    Returns:
-        Path: spec.tables_dir / "v1_0_units.csv".
-    """
-    if spec.v10_outputs_root is None:
-        raise ValueError("The spec has no v10_outputs_root to import v1.0 results from.")
-    started = _now()
-    jobs = [
-        (branch, sampler, rec)
-        for branch, sampler in V10_BRANCHES.items()
-        for rec in spec.recordings()
-    ]
-    tables = Parallel(n_jobs=n_workers)(
-        delayed(_v10_unit_metrics)(spec, branch, sampler, rec) for branch, sampler, rec in jobs
-    )
-    found = [table for table in tables if table is not None]
-    logger.info(f"import-v10: {len(found)}/{len(jobs)} v1.0 results found")
-    path = spec.tables_dir / "v1_0_units.csv"
-    units = pd.concat(found, ignore_index=True) if found else pd.DataFrame()
-    _atomic(path, lambda p: units.to_csv(p, index=False))
-    _write_table_metadata(spec, "import-v10", {"v1_0_units": units}, started, command)
-    return path
+    write_metadata(spec.tables_dir / "collect.meta.yaml", metadata)
+    return paths
 
 
 # Verification

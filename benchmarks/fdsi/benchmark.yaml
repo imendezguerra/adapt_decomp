@@ -5,7 +5,6 @@
 name: benchmark_v1_1
 data_root: data/fdsi_benchmark/data                        # Raw recordings (Zenodo: fdsi_benchmark-data)
 outputs_root: data/fdsi_benchmark/outputs/benchmark_v1_1   # Every output of this run
-v10_outputs_root: data/fdsi_benchmark/outputs              # Cached v1.0 results, read by import-v10 only
 
 grid:
   subjects: [sub-01, sub-02, sub-03, sub-04, sub-05]
@@ -36,9 +35,12 @@ pool:                      # The recordings every search is run on
 search:                    # Shared by every search; the keys of configs/sweep_configs/sweep_optuna.yaml
   base_config: src/adapt_decomp/adaptation/presets/muniverse.yaml
   overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
-  param_space: null        # DEFAULT_PARAM_SPACE: wh_learning_rate, sv_learning_rate, centroid_momentum
+  param_space: null        # DEFAULT_PARAM_SPACE: wh_learning_rate, sv_learning_rate (log), centroid_momentum (0.1-0.9, step 0.1)
+  initial_params:          # Run first: a config file (its searched values) or {param: value} sets
+    - src/adapt_decomp/adaptation/presets/neuromotion.yaml   # wh 7e-3, sv 3e-3, momentum 0.8
   n_trials: 50
-  n_jobs: 4                # Trials suggested together; cores per search = n_jobs x pool size
+  n_jobs: 1                # Trials suggested together; 1 updates the sampler after every trial
+  threads_per_run: 4       # Torch threads per run (same results, ~2.5x faster); cores per search = n_jobs x pool size x this
   random_seed: 42
   unit_selection: null     # The calibrations already keep only ground-truth-matched units
   compute_roa: true

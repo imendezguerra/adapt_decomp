@@ -10,18 +10,7 @@ import pandas as pd
 from scipy.stats import wilcoxon
 
 from adapt_decomp.adaptation.optimize import front_mask
-from benchmarks.fdsi.spec import FIXED_BRANCH, BenchmarkSpec
-
-TABLES: Tuple[str, ...] = (
-    "calibrations",
-    "calibration_units",
-    "searches",
-    "best_configs",
-    "recordings",
-    "units",
-    "provenance",
-)
-V10_TABLE = "v1_0_units"  # written by import-v10, optional
+from benchmarks.fdsi.spec import FIXED_BRANCH, TABLES, BenchmarkSpec
 
 ROA_COLUMNS: Tuple[str, ...] = (
     "roa_calib",
@@ -31,6 +20,10 @@ ROA_COLUMNS: Tuple[str, ...] = (
     "roa_ramp",
     "roa_last_iso",
 )
+# The headline RoA of every unit: the whole recording, the calibration window included
+# (roa_after_cal leaves out the window CBSS fitted itself)
+ROA_METRIC = "roa_full"
+ROA_PCT = f"{ROA_METRIC}_pct"
 PHASES: Dict[str, str] = {
     "roa_first_iso_pct": "First isometric",
     "roa_ramp_pct": "Ramp",
@@ -42,24 +35,9 @@ SPLITS: Tuple[str, ...] = (
     "held-out conditions",
 )
 UNIT_KEYS: Tuple[str, ...] = ("sub", "condition", "snr", "unit")  # one unit, within this run
-GT_UNIT_KEYS: Tuple[str, ...] = ("sub", "condition", "snr", "gt_unit")  # one simulated motor unit
 
 FIXED_LABEL = "No adaptation"
 SELECTION_LABELS = {"min_sv_loss": "min-sv", "knee": "knee", "max_roa_mean": "max-RoA"}
-# v1.0's applied configs (branches of v1_0_units.csv), and the v1.1 branch each compares with:
-# v1.0 summed sv_loss over units, so its loss-based searches pair with the "sum" ones
-V10_LABELS = {
-    "fixed": "v1.0 no adaptation",
-    "sv_loss": "v1.0 sv_loss",
-    "pareto": "v1.0 Pareto min-sv",
-    "roa": "v1.0 RoA (oracle)",
-}
-V10_COUNTERPARTS = {
-    "fixed": FIXED_BRANCH,
-    "sv_loss": "sv_sum",
-    "pareto": "pareto_sum",
-    "roa": "roa",
-}
 
 
 # Labels
@@ -79,15 +57,15 @@ def config_label(spec: BenchmarkSpec, branch: str) -> str:
     """
     if branch == FIXED_BRANCH:
         return FIXED_LABEL
-    settings = spec.search_settings(branch)
-    objectives = tuple(settings["objectives"])
+    search = spec.searches[branch]
+    objectives = search.objectives
     if objectives == ("roa",):
         return "RoA (oracle)"
     if len(objectives) > 1:
-        name = f"Pareto {SELECTION_LABELS.get(settings['selection'], settings['selection'])}"
+        name = f"Pareto {SELECTION_LABELS.get(search.selection, search.selection)}"
     else:
         name = objectives[0]
-    reduction = settings["overrides"].get("sv_loss_reduction")
+    reduction = search.overrides.get("sv_loss_reduction")
     return f"{name}, {reduction}" if reduction else name
 
 
@@ -117,9 +95,9 @@ def split_of(spec: BenchmarkSpec, sub: str, cond: str, snr: int) -> str:
         or SNR, or a condition no search saw.
     """
     pool = spec.pool
-    if cond not in pool["conditions"]:
+    if cond not in pool.conditions:
         return SPLITS[2]
-    if sub == pool["subject"] and int(snr) == int(pool["snr"]):
+    if sub == pool.subject and int(snr) == int(pool.snr):
         return SPLITS[0]
     return SPLITS[1]
 
@@ -163,8 +141,7 @@ def load_tables(spec: BenchmarkSpec) -> Dict[str, pd.DataFrame]:
             to produce them.
 
     Returns:
-        Dict[str, pd.DataFrame]: Every table of TABLES, plus V10_TABLE when
-        import-v10 wrote it. Tables with a branch or search column gain
+        Dict[str, pd.DataFrame]: Every table of TABLES. Tables with a branch or search column gain
         "config" (config_label); per-recording and per-unit tables gain "split",
         "contraction" and a "<roa column>_pct" (0-100) per RoA column.
     """
@@ -175,12 +152,7 @@ def load_tables(spec: BenchmarkSpec) -> Dict[str, pd.DataFrame]:
             f"stages and then 'python -m benchmarks.fdsi collect --spec {spec.spec_ref}', or "
             "download the published results tables."
         )
-    names = [*TABLES, V10_TABLE]
-    tables = {
-        name: _read_table(spec.tables_dir / f"{name}.csv")
-        for name in names
-        if (spec.tables_dir / f"{name}.csv").exists()
-    }
+    tables = {name: _read_table(spec.tables_dir / f"{name}.csv") for name in TABLES}
     labels = {branch: config_label(spec, branch) for branch in spec.branches}
 
     for name in ("recordings", "units"):
@@ -189,11 +161,8 @@ def load_tables(spec: BenchmarkSpec) -> Dict[str, pd.DataFrame]:
     for name in ("searches", "best_configs"):
         if len(tables[name]):
             tables[name]["config"] = tables[name]["search"].map(labels)
-    if V10_TABLE in tables and len(tables[V10_TABLE]):
-        tables[V10_TABLE]["config"] = tables[V10_TABLE]["branch"].map(V10_LABELS)
-    for name in ("calibrations", "calibration_units", "recordings", "units", V10_TABLE):
-        if name in tables:
-            tables[name] = _add_recording_columns(spec, tables[name])
+    for name in ("calibrations", "calibration_units", "recordings", "units"):
+        tables[name] = _add_recording_columns(spec, tables[name])
     return tables
 
 
@@ -202,7 +171,7 @@ def load_tables(spec: BenchmarkSpec) -> Dict[str, pd.DataFrame]:
 
 def summary_by_config(
     units: pd.DataFrame,
-    value: str = "roa_after_cal_pct",
+    value: str = ROA_PCT,
     threshold: float = 90.0,
     by: Sequence[str] = ("config",),
 ) -> pd.DataFrame:
@@ -210,7 +179,7 @@ def summary_by_config(
 
     Args:
         units (pd.DataFrame): Per-unit table with the by columns and value.
-        value (str, optional): Column to summarise. Defaults to "roa_after_cal_pct".
+        value (str, optional): Column to summarise. Defaults to ROA_PCT.
         threshold (float, optional): Threshold of the "pct_ge_threshold" column.
             Defaults to 90.0.
         by (Sequence[str], optional): Grouping columns. Defaults to ("config",).
@@ -234,7 +203,7 @@ def summary_by_config(
 def units_per_recording(
     units: pd.DataFrame,
     sil_col: str = "sil",
-    roa_col: str = "roa_after_cal",
+    roa_col: str = ROA_METRIC,
     sil_th: float = 0.9,
     roa_th: float = 0.9,
     by: Sequence[str] = ("config", "recording"),
@@ -245,7 +214,7 @@ def units_per_recording(
         units (pd.DataFrame): Per-unit table (units or calibration_units).
         sil_col (str, optional): SIL column. Defaults to "sil" ("sil_calib" for
             calibration_units).
-        roa_col (str, optional): RoA column, 0-1. Defaults to "roa_after_cal"
+        roa_col (str, optional): RoA column, 0-1. Defaults to ROA_METRIC
             ("roa_calib" for calibration_units).
         sil_th (float, optional): SIL threshold. Defaults to 0.9.
         roa_th (float, optional): RoA threshold, 0-1. Defaults to 0.9.
@@ -270,25 +239,21 @@ def paired_delta(
     table: pd.DataFrame,
     before: str,
     after: str,
-    value: str = "roa_after_cal_pct",
-    keys: Sequence[str] = UNIT_KEYS,
+    value: str = ROA_PCT,
 ) -> pd.DataFrame:
     """Pair two configs' per-unit values and difference them.
 
     Args:
-        table (pd.DataFrame): Per-unit table with "config", the keys and value.
+        table (pd.DataFrame): Per-unit table with "config", the UNIT_KEYS and value.
         before (str): Config label of the reference.
         after (str): Config label compared with it.
-        value (str, optional): Column to compare. Defaults to "roa_after_cal_pct".
-        keys (Sequence[str], optional): Columns identifying a unit in both: UNIT_KEYS
-            within one run, GT_UNIT_KEYS across runs with different calibrations.
-            Defaults to UNIT_KEYS.
+        value (str, optional): Column to compare. Defaults to ROA_PCT.
 
     Returns:
-        pd.DataFrame: The keys, "before", "after" and "delta" (after - before), for
+        pd.DataFrame: The UNIT_KEYS, "before", "after" and "delta" (after - before), for
         the units present in both.
     """
-    keys = list(keys)
+    keys = list(UNIT_KEYS)
     left = table[table["config"] == before][[*keys, value]].rename(columns={value: "before"})
     right = table[table["config"] == after][[*keys, value]].rename(columns={value: "after"})
     paired = left.merge(right, on=keys)
@@ -298,37 +263,40 @@ def paired_delta(
 def paired_summary(
     table: pd.DataFrame,
     pairs: Sequence[Tuple[str, str]],
-    value: str = "roa_after_cal_pct",
-    keys: Sequence[str] = UNIT_KEYS,
+    value: str = ROA_PCT,
     tol: float = 0.5,
 ) -> pd.DataFrame:
     """Paired per-unit comparison of each (before, after) config pair.
 
     Args:
-        table (pd.DataFrame): Per-unit table with "config", the keys and value.
+        table (pd.DataFrame): Per-unit table with "config", the UNIT_KEYS and value.
         pairs (Sequence[Tuple[str, str]]): (before, after) config labels.
-        value (str, optional): Column to compare. Defaults to "roa_after_cal_pct".
-        keys (Sequence[str], optional): See paired_delta. Defaults to UNIT_KEYS.
+        value (str, optional): Column to compare. Defaults to ROA_PCT.
         tol (float, optional): |delta| at or below this counts as unchanged.
             Defaults to 0.5 (percentage points of RoA).
 
     Returns:
         pd.DataFrame: One row per pair present in table, indexed by (before,
-        after): n_units, mean_delta, median_delta, pct_improved, pct_unchanged,
-        pct_worse and the two-sided Wilcoxon signed-rank p-value (NaN when every
-        delta is zero).
+        after): n_units, the mean and median of before, after and their delta over
+        the paired units, pct_improved, pct_unchanged, pct_worse and the two-sided
+        Wilcoxon signed-rank p-value (NaN when every delta is zero).
     """
     rows = []
     for before, after in pairs:
-        delta = paired_delta(table, before, after, value, keys)["delta"].dropna().to_numpy()
-        if not len(delta):
+        paired = paired_delta(table, before, after, value).dropna(subset=["delta"])
+        if paired.empty:
             continue
+        delta = paired["delta"].to_numpy()
         rows.append(
             {
                 "before": before,
                 "after": after,
                 "n_units": len(delta),
+                "mean_before": paired["before"].mean(),
+                "mean_after": paired["after"].mean(),
                 "mean_delta": delta.mean(),
+                "median_before": paired["before"].median(),
+                "median_after": paired["after"].median(),
                 "median_delta": np.median(delta),
                 "pct_improved": (delta > tol).mean() * 100,
                 "pct_unchanged": (np.abs(delta) <= tol).mean() * 100,
@@ -361,15 +329,13 @@ def phase_long(units: pd.DataFrame) -> pd.DataFrame:
     return long.dropna(subset=["roa_pct"])
 
 
-def heatmap_delta(
-    units: pd.DataFrame, before: str, value: str = "roa_after_cal_pct"
-) -> pd.DataFrame:
+def heatmap_delta(units: pd.DataFrame, before: str, value: str = ROA_PCT) -> pd.DataFrame:
     """Each config's per-unit gain over a reference config, for plot_metric_heatmap.
 
     Args:
         units (pd.DataFrame): Per-unit table with config, the UNIT_KEYS and value.
         before (str): The reference config's label (e.g. FIXED_LABEL).
-        value (str, optional): Column to compare. Defaults to "roa_after_cal_pct".
+        value (str, optional): Column to compare. Defaults to ROA_PCT.
 
     Returns:
         pd.DataFrame: One row per (config, unit), configs other than before:

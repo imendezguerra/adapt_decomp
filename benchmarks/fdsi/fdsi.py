@@ -1,12 +1,9 @@
-"""FDSI-only glue: raw-data paths and loaders, triangular phases and per-unit metrics.
-
-Ported from notebooks/fdsi_benchmark/fdsi_common.py (which the v1.0/v1.1 notebooks keep
-using until they are retired): what the benchmark CLI and the dataset tour need, plus the
-v1.0 result paths read by import-v10.
-"""
+"""The FDSI dataset: raw-data paths and loaders, triangular phases and per-unit metrics, for the
+benchmark stages and the dataset tour."""
 
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -20,36 +17,32 @@ from adapt_decomp.utils import load_emg, load_gt
 PHASES = ("first_iso", "ramp", "last_iso")
 
 
-# Paths
+@dataclass(frozen=True)
+class Recording:
+    """One noisy FDSI recording.
 
-
-def recording_stub(sub: str, cond: str, snr: int) -> str:
-    """Canonical "<sub>_FDSI_<cond>_snr<N>dB" stub shared by data, calibration and results.
-
-    Args:
+    Attributes:
         sub (str): Subject id, e.g. "sub-01".
         cond (str): Condition name, e.g. "triangular-ramp40s".
         snr (int): SNR level in dB.
-
-    Returns:
-        str: The recording stub.
     """
-    return f"{sub}_FDSI_{cond}_snr{snr}dB"
+
+    sub: str
+    cond: str
+    snr: int
+
+    @property
+    def stub(self) -> str:
+        """Canonical "<sub>_FDSI_<cond>_snr<N>dB" stub shared by data, calibration and results."""
+        return f"{self.sub}_FDSI_{self.cond}_snr{self.snr}dB"
 
 
-def emg_path(data_root: Path, sub: str, cond: str, snr: int) -> Path:
-    """Path to one recording's noisy EMG .npz.
+# Paths
 
-    Args:
-        data_root (Path): Raw data root (<dataset>/data).
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
 
-    Returns:
-        Path: The EMG .npz path (adapt_decomp.utils.load_emg's format).
-    """
-    return data_root / sub / "noisy" / f"{recording_stub(sub, cond, snr)}_emg.npz"
+def emg_path(data_root: Path, rec: Recording) -> Path:
+    """Path to one recording's noisy EMG .npz (adapt_decomp.utils.load_emg's format)."""
+    return data_root / rec.sub / "noisy" / f"{rec.stub}_emg.npz"
 
 
 def gt_spikes_path(data_root: Path, sub: str, cond: str) -> Path:
@@ -66,60 +59,12 @@ def gt_spikes_path(data_root: Path, sub: str, cond: str) -> Path:
     return data_root / sub / "clean" / f"{sub}_FDSI_{cond}_spikes.npz"
 
 
-def v10_calibration_path(outputs_root: Path, sub: str, cond: str, snr: int) -> Path:
-    """Path to one recording's cached v1.0 calibration.
-
-    Args:
-        outputs_root (Path): v1.0 outputs root (<dataset>/outputs).
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-
-    Returns:
-        Path: The CBSSResult pickle.
-    """
-    return outputs_root / "calibration" / sub / f"{recording_stub(sub, cond, snr)}_cbss.pkl"
-
-
-def v10_result_path(
-    outputs_root: Path, sub: str, cond: str, snr: int, sampler: Optional[str]
-) -> Path:
-    """Path to one recording's cached v1.0 adaptation result (lr_mode="fixed" branches).
-
-    Args:
-        outputs_root (Path): v1.0 outputs root (<dataset>/outputs).
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-        sampler (Optional[str]): v1.0 search dir (e.g. "tpe_pareto"), or None for
-            the fixed (no-adaptation) baseline.
-
-    Returns:
-        Path: The AdaptationResult pickle.
-    """
-    stub = recording_stub(sub, cond, snr)
-    adapt_dir = outputs_root / "adaptation" / sub
-    if sampler is None:
-        return adapt_dir / "fixed" / f"{stub}_adapt_fixed.pkl"
-    return adapt_dir / "lr_fixed" / sampler / f"{stub}_adapt_lr_fixed_{sampler}.pkl"
-
-
 # Loaders
 
 
-def load_raw_emg(data_root: Path, sub: str, cond: str, snr: int) -> np.ndarray:
-    """Load one recording's noisy EMG.
-
-    Args:
-        data_root (Path): Raw data root (<dataset>/data).
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-
-    Returns:
-        np.ndarray: EMG with shape (samples, channels).
-    """
-    return load_emg(emg_path(data_root, sub, cond, snr))
+def load_raw_emg(data_root: Path, rec: Recording) -> np.ndarray:
+    """Load one recording's noisy EMG, with shape (samples, channels)."""
+    return load_emg(emg_path(data_root, rec))
 
 
 def load_clean_emg(data_root: Path, sub: str, cond: str) -> np.ndarray:
@@ -182,32 +127,20 @@ def load_recording_metadata(data_root: Path, sub: str, cond: str) -> Dict:
         return json.load(f)
 
 
-def load_noise_metadata(data_root: Path, sub: str, cond: str, snr: int) -> Dict:
-    """Load one noisy recording's noise metadata (target and realised SNR, seed).
-
-    Args:
-        data_root (Path): Raw data root (<dataset>/data).
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-
-    Returns:
-        Dict: The parsed noise_metadata.json.
-    """
-    path = data_root / sub / "noisy" / f"{recording_stub(sub, cond, snr)}_noise_metadata.json"
-    with path.open() as f:
+def load_noise_metadata(data_root: Path, rec: Recording) -> Dict:
+    """Load one noisy recording's noise metadata (target and realised SNR, seed)."""
+    with (data_root / rec.sub / "noisy" / f"{rec.stub}_noise_metadata.json").open() as f:
         return json.load(f)
 
 
 def load_gt_full_bin(
-    data_root: Path, sub: str, cond: str, cbss_result: CBSSResult, n_samples: int
+    data_root: Path, rec: Recording, cbss_result: CBSSResult, n_samples: int
 ) -> Optional[np.ndarray]:
     """Ground-truth spikes for one recording, matched and ordered to its calibration's units.
 
     Args:
         data_root (Path): Raw data root (<dataset>/data).
-        sub (str): Subject id.
-        cond (str): Condition name.
+        rec (Recording): The recording.
         cbss_result (CBSSResult): This recording's calibration.
         n_samples (int): Number of samples to densify the ground truth to.
 
@@ -217,7 +150,7 @@ def load_gt_full_bin(
     """
     if cbss_result.gt_matched_indices is None:
         return None
-    gt_full_bin = load_gt(gt_spikes_path(data_root, sub, cond), n_samples=n_samples)
+    gt_full_bin = load_gt(gt_spikes_path(data_root, rec.sub, rec.cond), n_samples=n_samples)
     return gt_full_bin[:, cbss_result.gt_matched_indices]
 
 
@@ -265,29 +198,6 @@ def compute_roa_subset(
     return roa
 
 
-def compute_roa_for_result(
-    outputs: AdaptationResult, gt_full_bin: Optional[np.ndarray], fs: int, tol_spike_ms: float
-) -> Optional[np.ndarray]:
-    """Per-unit RoA of one result over the whole recording against its matched ground truth.
-
-    Args:
-        outputs (AdaptationResult): The adaptation result.
-        gt_full_bin (Optional[np.ndarray]): Binary ground truth with shape
-            (samples, units), or None without a supervised match.
-        fs (int): Sampling frequency in Hz.
-        tol_spike_ms (float): Spike-alignment tolerance in ms.
-
-    Returns:
-        Optional[np.ndarray]: Per-unit RoA with shape (units,), or None if
-        gt_full_bin is None.
-    """
-    if gt_full_bin is None:
-        return None
-    pred_spikes = outputs.spikes.numpy().astype(np.float32)
-    roa, _, _ = rate_of_agreement_paired(gt_full_bin, pred_spikes, fs=fs, tol_spike_ms=tol_spike_ms)
-    return roa
-
-
 def _calibration_unit_columns(calibration: CBSSResult) -> Dict[str, np.ndarray]:
     """The calibration's per-unit ground-truth match and its RoA over the calibration window.
 
@@ -308,21 +218,32 @@ def _calibration_unit_columns(calibration: CBSSResult) -> Dict[str, np.ndarray]:
     }
 
 
-def calibration_unit_metrics(calibration: CBSSResult) -> pd.DataFrame:
+def _labels(rec: Recording, n_units: int, branch: Optional[str] = None) -> Dict[str, list]:
+    """The columns that identify a per-unit table's recording (and applied config)."""
+    labels = {"recording": rec.stub, "sub": rec.sub, "condition": rec.cond, "snr": rec.snr}
+    if branch is not None:
+        labels = {"branch": branch, **labels}
+    return {k: [v] * n_units for k, v in labels.items()}
+
+
+def calibration_unit_metrics(calibration: CBSSResult, rec: Recording) -> pd.DataFrame:
     """Per-unit metrics of one calibration: its ground-truth match, RoA, SIL and CoV-ISI.
 
     Args:
         calibration (CBSSResult): The calibration, normally narrowed by select_supervised.
+        rec (Recording): Its recording.
 
     Returns:
-        pd.DataFrame: One row per calibrated unit: unit, gt_unit (the matched
-        simulation motor unit's index, its column in the ground-truth spike trains),
-        roa_calib (0-1, over the calibration window), sil_calib and cov_isi_calib.
+        pd.DataFrame: One row per calibrated unit: recording, sub, condition, snr,
+        unit, gt_unit (the matched simulation motor unit's index, its column in the
+        ground-truth spike trains), roa_calib (0-1, over the calibration window),
+        sil_calib and cov_isi_calib.
     """
     n_units = calibration.spikes.shape[1]
     nan = np.full(n_units, np.nan)
     return pd.DataFrame(
         {
+            **_labels(rec, n_units),
             "unit": np.arange(n_units),
             **_calibration_unit_columns(calibration),
             "sil_calib": nan
@@ -335,38 +256,13 @@ def calibration_unit_metrics(calibration: CBSSResult) -> pd.DataFrame:
     )
 
 
-def with_recording_labels(
-    table: pd.DataFrame, sub: str, cond: str, snr: int, branch: Optional[str] = None
-) -> pd.DataFrame:
-    """Prepend the columns that identify a per-unit table's recording (and config).
-
-    Args:
-        table (pd.DataFrame): One row per unit.
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-        branch (Optional[str], optional): The applied config, for an adaptation
-            result. Defaults to None (no branch column).
-
-    Returns:
-        pd.DataFrame: table with [branch,] recording, sub, condition and snr first.
-    """
-    labels = {
-        "recording": recording_stub(sub, cond, snr),
-        "sub": sub,
-        "condition": cond,
-        "snr": snr,
-    }
-    if branch is not None:
-        labels = {"branch": branch, **labels}
-    return pd.concat([pd.DataFrame(labels, index=table.index), table], axis=1)
-
-
 def unit_metrics(
     outputs: AdaptationResult,
     gt_full_bin: Optional[np.ndarray],
     calibration: CBSSResult,
-    cond: str,
+    rec: Recording,
+    branch: str,
+    *,
     cal_end: int,
     iso_dur: int,
     fs: int,
@@ -380,14 +276,17 @@ def unit_metrics(
             (samples, units), or None without a supervised match (RoA columns NaN).
         calibration (CBSSResult): The calibration the result started from (its
             units, in the same order).
-        cond (str): Condition name; phase RoA is computed for triangular ones only.
+        rec (Recording): The recording; phase RoA is computed for triangular
+            conditions only.
+        branch (str): The applied config.
         cal_end (int): Calibration window length in samples.
         iso_dur (int): Isometric bookend length in samples.
         fs (int): Sampling frequency in Hz.
         tol_spike_ms (float): Spike-alignment tolerance in ms.
 
     Returns:
-        pd.DataFrame: One row per unit: unit, gt_unit (the matched simulation motor
+        pd.DataFrame: One row per unit: branch, recording, sub, condition, snr,
+        unit, gt_unit (the matched simulation motor
         unit), roa_calib (the calibration's RoA), roa_full, roa_after_cal,
         roa_<phase> for each of PHASES (NaN for non-triangular conditions), sil,
         n_spikes and n_spikes_gt (RoA as a 0-1 fraction).
@@ -398,7 +297,7 @@ def unit_metrics(
 
     # RoA over the whole recording, after the calibration window and per phase
     windows = {"full": slice(0, n_samples), "after_cal": slice(cal_end, n_samples)}
-    if "triangular" in cond:
+    if "triangular" in rec.cond:
         windows.update(get_triangular_phases(n_samples, cal_end, iso_dur))
     roa = {
         name: compute_roa_subset(gt_full_bin, spikes, s, fs, tol_spike_ms)
@@ -409,6 +308,7 @@ def unit_metrics(
 
     return pd.DataFrame(
         {
+            **_labels(rec, n_units, branch),
             "unit": np.arange(n_units),
             **_calibration_unit_columns(calibration),
             "roa_full": roa["full"],

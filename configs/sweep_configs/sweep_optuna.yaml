@@ -6,7 +6,7 @@
 param_space:                       # omit to use adapt_decomp's DEFAULT_PARAM_SPACE
   wh_learning_rate: ["log_float", 1.0e-4, 5.0e-2]
   sv_learning_rate: ["log_float", 1.0e-4, 1.0e-1]
-  centroid_momentum: ["float", 0.0, 0.95]
+  centroid_momentum: ["float", 0.1, 0.9, 0.1]   # 0.1, 0.2, ..., 0.9
 
 objectives: ["sv_loss"]            # one = single-objective; two or more = Pareto front
                                    # ("sv_loss" | "wh_loss" | "total_loss" | "roa")

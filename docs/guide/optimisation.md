@@ -63,20 +63,22 @@ builds it from a list of files:
 ```python
 from adapt_decomp.utils import load_pooled_cbss_memory
 
-pool = load_pooled_cbss_memory({
-    "root": ".",
-    "datasets": [
-        {
-            "name": "recording-1",
-            "path_emg": "data/.../recording-1_emg.npz",
-            "path_calib": "outputs/recording-1_cbss.pkl",               # CBSSResult.save()
-            "path_calib_config": "outputs/recording-1_cbss_config.yaml",  # CBSSConfig.to_yaml()
-            "path_gt": "data/.../recording-1_spikes.npz",                # optional
-            "start": 10240,  # optional: adapt and score from this sample, e.g. the calibration's end
-        },
-        # one entry per recording
-    ],
-})
+pool = load_pooled_cbss_memory(
+    {
+        "root": ".",
+        "datasets": [
+            {
+                "name": "recording-1",
+                "path_emg": "data/.../recording-1_emg.npz",
+                "path_calib": "outputs/recording-1_cbss.pkl",  # CBSSResult.save()
+                "path_calib_config": "outputs/recording-1_cbss_config.yaml",  # CBSSConfig.to_yaml()
+                "path_gt": "data/.../recording-1_spikes.npz",  # optional
+                "start": 10240,  # optional: adapt and score from this sample, e.g. the calibration's end
+            },
+            # one entry per recording
+        ],
+    }
+)
 ```
 
 `start` and `stop` select the samples every trial adapts and scores, EMG and ground truth alike
@@ -97,11 +99,18 @@ By default, `DEFAULT_PARAM_SPACE`:
 |---|---|---|
 | `wh_learning_rate` | 1e-4 to 5e-2 | log |
 | `sv_learning_rate` | 1e-4 to 1e-1 | log |
-| `centroid_momentum` | 0 to 0.95 | linear |
+| `centroid_momentum` | 0.1 to 0.9 | linear, in steps of 0.1 |
 
 Every other field comes from `base_config`. To search more fields, extend the space, e.g.
 `param_space={**DEFAULT_PARAM_SPACE, "batch_ms": ("int", 50, 200)}`. Each entry is
 `(kind, low, high)` with kind `"log_float"`, `"float"` or `"int"`, or `("categorical", choices)`.
+`"float"` and `"int"` take an optional step, `(kind, low, high, step)`, to draw only `low`,
+`low + step`, ..., `high`.
+
+To start a search from known parameter sets (e.g. a previous search's winner), pass
+`initial_params=[{"wh_learning_rate": 0.036, "sv_learning_rate": 0.0053, "centroid_momentum": 0.9}]`.
+They run first, in order, as the first start-up trials, so the sampler draws that many fewer
+random ones. Each set gives every parameter of the space, inside its range.
 
 ## Objectives
 

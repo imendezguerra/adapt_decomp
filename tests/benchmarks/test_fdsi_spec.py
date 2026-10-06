@@ -92,13 +92,14 @@ def test_shipped_specs_load(name):
 def test_full_spec_is_the_planned_benchmark():
     spec = load_spec("benchmarks/fdsi/benchmark.yaml")
     assert len(spec.recordings()) == 100
-    assert spec.search_n_cores == 12  # n_jobs=4 x 3 pooled recordings, one thread per run
-    assert spec.cal_end == 5 * 2048
-    for name in spec.searches:
-        settings = spec.search_settings(name)
-        assert settings["unit_selection"] is None
-        assert settings["n_trials"] == 50 and settings["n_jobs"] == 4
-        assert "centroid_momentum" in settings["param_space"]
+    assert spec.search_n_cores == 12  # n_jobs=1 x 3 pooled recordings x 4 threads per run
+    assert spec.grid.cal_end == 5 * 2048
+    for search in spec.searches.values():
+        assert search.unit_selection is None
+        assert search.n_trials == 50 and search.n_jobs == 1
+        assert "centroid_momentum" in search.param_space
+        neuromotion = {"wh_learning_rate": 7e-3, "sv_learning_rate": 3e-3, "centroid_momentum": 0.8}
+        assert search.initial_params == [neuromotion]  # read from the preset file
 
 
 def _mutate(raw: dict, path: tuple, value) -> dict:
@@ -132,6 +133,15 @@ def _mutate(raw: dict, path: tuple, value) -> dict:
         (("calibration", "cbss_config", "not_a_field"), 1, "Unknown CBSSConfig field"),
         (("apply", "fixed_config"), "configs/missing.yaml", "not found"),
         (("search", "n_jobs"), 0, "at least 1"),
+        (("search", "threads_per_run"), 0, "at least 1"),
+        (("searches", "sv", "threads_per_run"), 2, "Unknown key"),
+        (("searches", "sv", "initial_params"), [{"wh_learning_rate": 1e-3}], "exactly the"),
+        (("searches", "sv", "initial_params"), ["configs/missing.yaml"], "not found"),
+        (
+            ("searches", "sv", "initial_params"),
+            [{"wh_learning_rate": 1e-3, "sv_learning_rate": 1e-3, "centroid_momentum": 0.95}],
+            "outside",
+        ),
     ],
 )
 def test_invalid_specs_raise_naming_the_problem(tmp_path, path, value, match):
@@ -149,12 +159,14 @@ def test_missing_spec_file_raises(tmp_path):
 
 
 def test_search_settings_merge_shared_and_own_settings(spec):
-    sv, pareto = spec.search_settings("sv"), spec.search_settings("pareto_sum")
+    sv, pareto = spec.searches["sv"], spec.searches["pareto_sum"]
 
-    assert sv["param_space"] == DEFAULT_PARAM_SPACE
-    assert sv["objectives"] == ("sv_loss",)
-    assert sv["n_cores"] == pareto["n_cores"] == 2  # n_jobs=2 x 1 pooled recording
-    assert pareto["selection"] == "min_sv_loss"
+    assert sv.param_space == DEFAULT_PARAM_SPACE
+    assert sv.objectives == ("sv_loss",)
+    assert sv.n_trials == pareto.n_trials == 5  # the shared setting
+    assert spec.search_n_cores == 2  # n_jobs=2 x 1 pooled recording
+    assert pareto.selection == "min_sv_loss"
+    assert pareto.overrides == {"lr_mode": "fixed", "device": "cpu", "sv_loss_reduction": "sum"}
     assert spec.search_base_config("sv").lr_mode == "fixed"
     assert spec.search_base_config("sv").sv_loss_reduction == "mean"  # the base file's
     assert spec.search_base_config("pareto_sum").sv_loss_reduction == "sum"
@@ -236,8 +248,20 @@ def test_keys_are_stable_and_ignore_where_outputs_go(tmp_path, spec):
     assert len(set(_keys(spec).values())) == len(_keys(spec))  # every task has its own key
 
 
-def test_changing_a_search_invalidates_only_that_search_and_its_applications(tmp_path, spec):
-    raw = _mutate(_raw_spec(tmp_path), ("searches", "sv", "n_trials"), 7)
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("n_trials", 7),
+        (
+            "initial_params",
+            [{"wh_learning_rate": 1e-3, "sv_learning_rate": 1e-3, "centroid_momentum": 0.9}],
+        ),
+    ],
+)
+def test_changing_a_search_invalidates_only_that_search_and_its_applications(
+    tmp_path, spec, key, value
+):
+    raw = _mutate(_raw_spec(tmp_path), ("searches", "sv", key), value)
     changed = {
         k
         for k, v in _keys(load_spec(_write(tmp_path, raw, "b.yaml"))).items()
@@ -247,6 +271,13 @@ def test_changing_a_search_invalidates_only_that_search_and_its_applications(tmp
     assert changed == {("search", "sv")} | {
         ("apply", t.id) for t in spec.tasks("apply") if t.branch == "sv"
     }
+
+
+def test_threads_per_run_only_sets_speed(tmp_path, spec):
+    raw = _mutate(_raw_spec(tmp_path), ("search", "threads_per_run"), 4)
+    faster = load_spec(_write(tmp_path, raw, "b.yaml"))
+    assert faster.search_n_cores == 4 * spec.search_n_cores
+    assert _keys(faster) == _keys(spec)
 
 
 def test_changing_the_calibration_invalidates_everything(tmp_path, spec):
@@ -385,4 +416,4 @@ def test_paths_and_command_of_a_task(spec):
     assert paths["result"] == spec.outputs_root / "results" / "sv" / "sub-01" / f"{rec.stub}.pkl"
     assert spec.meta_path(spec.task_for("apply", f"sv/{rec.stub}")) == paths["meta"]
     assert spec.search_paths("sv")["meta"] == spec.outputs_root / "searches" / "sv.meta.yaml"
-    assert fdsi.recording_stub(rec.sub, rec.cond, rec.snr) == rec.stub
+    assert spec.emg_path(rec) == fdsi.emg_path(spec.data_root, rec)
