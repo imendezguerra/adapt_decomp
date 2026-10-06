@@ -198,6 +198,7 @@ wandb/
 archive/
 .claude/
 .vscode/
+*.DS_Store
 
 # MkDocs build output (mkdocs build)
 site/
