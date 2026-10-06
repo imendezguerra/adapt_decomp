@@ -2,7 +2,7 @@
 
 Run it from the directory holding data/, with the example recording downloaded
 (adapt-decomp-data get fdsi_example-data); the quickstart and the how-to pages include its
-sections, and tests/docs/test_snippets.py runs it.
+sections.
 """
 
 # --8<-- [start:load]

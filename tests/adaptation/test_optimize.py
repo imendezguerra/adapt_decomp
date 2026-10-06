@@ -1,718 +1,364 @@
-"""Tests for adaptation/optimize/: optimize_adapt_decomp_pooled_memory / _pooled_disk.
-
-All marked slow -- each spins up a real (if tiny) Optuna study end to end.
+"""Tests for adaptation/optimize/'s search, optimize_adapt_decomp: Pareto-front logic,
+front selection, the sampler, unit selection, input validation and the deprecated entry
+points, then a few end-to-end searches (marked slow) that each cover one pool kind and
+objective count. Resource planning and worker processes are in test_optimize_resources.py;
+a search on a drifting synthetic recording is in tests/test_pipeline.py.
 """
 
-import numpy as np
-import pytest
-import torch
+from unittest.mock import patch
 
-from adapt_decomp.adaptation.config import AdaptConfig
+import numpy as np
+import optuna
+import pytest
+
 from adapt_decomp.adaptation.data_structures import AdaptationResult
-from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
 from adapt_decomp.adaptation.optimize import (
     DEFAULT_PARAM_SPACE,
-    optimize_adapt_decomp_pooled_disk,
-    optimize_adapt_decomp_pooled_memory,
+    OptimisationResult,
+    deprecated,
+    optimize_adapt_decomp,
 )
-from adapt_decomp.cbss.config import CBSSConfig
-from adapt_decomp.cbss.data_structure import CBSSResult
-from adapt_decomp.utils.loaders import PooledDatasetDisk, PooledDatasetMemory
+from adapt_decomp.adaptation.optimize.pareto import (
+    _dominates,
+    _select_knee,
+    front_mask,
+    update_front,
+)
+from adapt_decomp.adaptation.optimize.persistence import save_study_snapshot
+from adapt_decomp.adaptation.optimize.scoring import suggest_overrides
+from adapt_decomp.adaptation.optimize.search import _make_study
+from adapt_decomp.adaptation.optimize.units import select_pool_units
 
-pytestmark = pytest.mark.slow
+# A parameter set on DEFAULT_PARAM_SPACE's grid
+V10_WINNER = {"wh_learning_rate": 0.036, "sv_learning_rate": 0.0053, "centroid_momentum": 0.9}
 
 
-def test_optimize_adapt_decomp_pooled_memory_best_result_path_optional(
-    tmp_path, make_optimize_kwargs
-):
-    """best_result_path stays a fully optional opt-in: omitted -> (best_config,
-    study); set -> (best_outputs, best_config, study) with the winning trial's
-    per-dataset AdaptationResults and their files written to disk -- the
-    one-entry-pool case, since a single dataset is just a pool of one."""
-    common, _ = make_optimize_kwargs()
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common["emg"],
-            calibration=common["calibration"],
-            cbss_config=common["cbss_config"],
-            preprocess=common["preprocess"],
+def _front(points):
+    """FrozenTrials with the given (wh_loss, sv_loss) values, sv_loss logged as a user_attr."""
+    return [
+        optuna.trial.create_trial(
+            values=list(p), params={}, distributions={}, user_attrs={"sv_loss": p[-1]}
         )
+        for p in points
+    ]
+
+
+# ------------------------------------------------------------------
+# Pareto front: dominance, the running front and its selection rules
+# ------------------------------------------------------------------
+
+
+def test_dominates_needs_no_worse_everywhere_and_better_somewhere():
+    assert _dominates((1, 1), (2, 2)) and not _dominates((2, 2), (1, 1))
+    assert not _dominates((1, 1), (1, 1))  # a tie dominates neither
+    assert not _dominates((1, 5), (5, 1)) and not _dominates((5, 1), (1, 5))
+
+
+@pytest.mark.parametrize(
+    "front, point, joined, evicted, after",
+    [
+        ({0: (5.0, 5.0)}, (3.0, 3.0), True, [0], {1: (3.0, 3.0)}),
+        ({0: (1.0, 1.0)}, (2.0, 2.0), False, [], {0: (1.0, 1.0)}),
+        ({0: (1.0, 1.0)}, (1.0, 1.0), True, [], {0: (1.0, 1.0), 1: (1.0, 1.0)}),
+        ({0: (1.0, 5.0)}, (5.0, 1.0), True, [], {0: (1.0, 5.0), 1: (5.0, 1.0)}),
+        (
+            {0: (5.0, 5.0), 2: (5.0, 1.0), 3: (1.0, 5.0)},
+            (1.0, 1.0),
+            True,
+            [0, 2, 3],
+            {1: (1.0, 1.0)},
+        ),
+    ],
+    ids=[
+        "evicts_dominated",
+        "dominated_stays_out",
+        "tie_joins",
+        "non_dominated_joins",
+        "evicts_all",
+    ],
+)
+def test_update_front(front, point, joined, evicted, after):
+    got_joined, got_evicted = update_front(front, 1, point)
+    assert (got_joined, sorted(got_evicted)) == (joined, evicted)
+    assert front == after
+
+
+def test_front_mask_matches_the_running_front_and_drops_non_finite_rows():
+    rng = np.random.default_rng(0)
+    values = rng.random((40, 2))
+    values[7] = values[3]  # a tie stays on the front with its twin, as in update_front
+    front = {}
+    for number, row in enumerate(values):
+        update_front(front, number, tuple(row))
+    assert set(np.flatnonzero(front_mask(values))) == set(front)
+
+    values = np.array([[1.0, 1.0], [np.nan, 0.0], [0.5, np.inf], [2.0, 2.0]])
+    assert list(front_mask(values)) == [True, False, False, False]
+
+
+def test_select_knee_picks_the_point_farthest_from_the_extremes_chord():
+    front = _front([(0.0, 1.0), (0.1, 0.4), (0.3, 0.3), (1.0, 0.0)])
+    assert _select_knee(front).values == [0.1, 0.4]
+    # Too few points for a knee: the min-sv_loss end; and two objectives only
+    assert _select_knee(_front([(0.0, 1.0), (1.0, 0.0)])).values == [1.0, 0.0]
+    with pytest.raises(ValueError, match="exactly 2"):
+        _select_knee(_front([(0.0, 1.0, 2.0), (1.0, 0.0, 2.0), (0.5, 0.5, 2.0)]))
+
+
+# ------------------------------------------------------------------
+# Sampler, parameter space and unit selection -- no search run
+# ------------------------------------------------------------------
+
+
+def test_a_stepped_range_draws_only_its_grid():
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+    momenta = {
+        round(suggest_overrides(study.ask(), DEFAULT_PARAM_SPACE)["centroid_momentum"], 10)
+        for _ in range(50)
     }
-
-    result_no_path = optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        base_config=common["base_config"],
-    )
-    assert len(result_no_path) == 2
-    best_config, study = result_no_path
-    assert isinstance(best_config, AdaptConfig)
-    assert isinstance(study.best_value, float)
-
-    best_dir = tmp_path / "best_trial"
-    result_with_path = optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        base_config=common["base_config"],
-        best_result_path=str(best_dir),
-    )
-    assert len(result_with_path) == 3
-    outputs, _best_config2, _study2 = result_with_path
-    assert set(outputs.keys()) == {"dataset_a"}
-    assert isinstance(outputs["dataset_a"], AdaptationResult)
-    assert outputs["dataset_a"].wh_loss is not None
-    for fname in ("dataset_a.pkl", "config.yaml", "study.pkl"):
-        assert (best_dir / fname).exists()
+    assert momenta <= set(np.round(np.arange(0.1, 1.0, 0.1), 10)) and len(momenta) > 5
+    int_space = {"batch_ms": ("int", 50, 200, 50)}
+    drawn = {suggest_overrides(study.ask(), int_space)["batch_ms"] for _ in range(30)}
+    assert drawn <= {50, 100, 150, 200}
 
 
-def test_optimize_adapt_decomp_pooled_memory_compute_roa_writes_outputs_roa(
-    tmp_path, make_optimize_kwargs
+def test_default_sampler_is_multivariate_tpe_with_constant_liar_only_when_concurrent():
+    sequential = _make_study(("wh_loss", "sv_loss"), None, 0, n_jobs=1).sampler
+    concurrent = _make_study(("sv_loss",), None, 0, n_jobs=2).sampler
+    assert isinstance(sequential, optuna.samplers.TPESampler)
+    assert sequential._multivariate and not sequential._constant_liar
+    assert concurrent._multivariate and concurrent._constant_liar
+
+
+def test_unsupervised_unit_selection_subsets_calibration_and_gt_and_drops_empty_datasets(
+    make_memory_pool,
 ):
-    """compute_roa=True writes RoA onto the winning trial's per-dataset
-    AdaptationResult.roa when best_result_path is set."""
-    common, M = make_optimize_kwargs()
-    n_samples = common["emg"].shape[0]
-    gt_full_bin = np.zeros((n_samples, M), dtype=np.float32)
-    gt_full_bin[::30] = 1
-    # Default roa_kwargs tol_spike_ms=2 rounds to 0 samples at this fixture's low
-    # fs=200 (round(2 * 200 / 1000) == 0), which rate_of_agreement_paired can't
-    # convolve with -- widen it for this fs, same as a real low-fs caller would.
-    roa_kwargs = {"tol_spike_ms": 25}
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common["emg"],
-            calibration=common["calibration"],
-            cbss_config=common["cbss_config"],
-            preprocess=common["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        )
-    }
+    """Units over cov_th are dropped from the calibration (and their ground
+    truth columns with them); a dataset left with no unit leaves the pool."""
+    pool, _ = make_memory_pool(("keep",), cov_isi=[0.1, 0.5], gt=True)
+    empty, _ = make_memory_pool(("empty",), cov_isi=[0.6, 0.5], gt=True)
+    gt_before = pool["keep"].gt_paired_bin
 
-    best_dir = tmp_path / "best_trial_roa"
-    outputs, _, _ = optimize_adapt_decomp_pooled_memory(
+    selected = select_pool_units({**pool, **empty}, "unsupervised", {"cov_th": 0.3})
+
+    assert set(selected) == {"keep"}
+    assert selected["keep"].calibration.sources.shape[1] == 1
+    np.testing.assert_array_equal(selected["keep"].gt_paired_bin, gt_before[:, [0]])
+    with pytest.raises(ValueError, match="keeps any unit"):
+        select_pool_units(empty, "unsupervised", {"cov_th": 0.3})
+    assert select_pool_units(empty, None, {}) is empty  # ablation: every unit kept
+
+
+# ------------------------------------------------------------------
+# Input validation: every bad input raises before any trial runs
+# ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs, error, match",
+    [
+        (dict(objectives="bogus"), ValueError, "objective"),
+        (dict(objectives=("wh_loss", "bogus")), ValueError, "objective"),
+        (dict(objectives=("sv_loss", "sv_loss")), ValueError, "duplicates"),
+        (dict(objectives="roa"), ValueError, "Ground truth"),
+        (dict(compute_roa=True), ValueError, "Ground truth"),
+        (dict(unit_selection="supervised"), ValueError, "Ground truth"),
+        (dict(unit_selection="bogus"), ValueError, "unit_selection"),
+        (dict(selection="knee"), ValueError, "exactly 2"),
+        (dict(selection="bogus", objectives=("wh_loss", "sv_loss")), ValueError, "selection"),
+        (dict(initial_params=[{"wh_learning_rate": 1e-3}]), ValueError, "exactly the param_space"),
+        (dict(initial_params=[{**V10_WINNER, "centroid_momentum": 0.95}]), ValueError, "outside"),
+        (dict(initial_params=[{**V10_WINNER, "centroid_momentum": 0.25}]), ValueError, "outside"),
+    ],
+)
+def test_invalid_search_inputs_raise_before_any_trial(make_memory_pool, kwargs, error, match):
+    pool, base_config = make_memory_pool()
+    with pytest.raises(error, match=match):
+        optimize_adapt_decomp(pool=pool, base_config=base_config, n_trials=1, **kwargs)
+
+
+def test_empty_or_mixed_memory_and_disk_pools_raise(make_memory_pool, make_disk_dataset):
+    pool, base_config = make_memory_pool()
+    with pytest.raises(ValueError, match="empty"):
+        optimize_adapt_decomp(pool={}, base_config=base_config, n_trials=1)
+    pool["on_disk"] = make_disk_dataset("on_disk")
+    with pytest.raises(TypeError, match="all PooledDatasetMemory or all PooledDatasetDisk"):
+        optimize_adapt_decomp(pool=pool, base_config=base_config, n_trials=1)
+
+
+# ------------------------------------------------------------------
+# Deprecated entry points: thin wrappers over optimize_adapt_decomp
+# ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "name, kwargs, forwarded, returns",
+    [
+        ("optimize_adapt_decomp_pooled_memory", {}, {"objectives": "sv_loss"}, ("cfg", "study")),
+        (
+            "optimize_adapt_decomp_pooled_memory",
+            {"best_result_path": "best"},
+            {"objectives": "sv_loss", "best_result_path": "best"},
+            ("outputs", "cfg", "study"),
+        ),
+        (
+            "optimize_adapt_decomp_pooled_disk",
+            {"objective": "wh_loss", "best_result_path": "best"},
+            {"objectives": "wh_loss", "best_result_path": "best"},
+            ("cfg", "study"),
+        ),
+        (
+            "optimize_adapt_decomp_pooled_memory_pareto",
+            {},
+            {"objectives": ("wh_loss", "sv_loss"), "selection": "min_sv_loss"},
+            ("cfg", "front", "study"),
+        ),
+        (
+            "optimize_adapt_decomp_pooled_memory_pareto",
+            {"best_result_path": "best", "selection_rule": max},
+            {"best_result_path": "best", "selection": max},
+            ("outputs", "cfg", "front", "study"),
+        ),
+        (
+            "optimize_adapt_decomp_pooled_disk_pareto",
+            {"objectives": ("wh_loss", "roa")},
+            {"objectives": ("wh_loss", "roa")},
+            ("cfg", "front", "study"),
+        ),
+    ],
+)
+def test_deprecated_entry_points_warn_forward_and_keep_their_return_shapes(
+    monkeypatch, name, kwargs, forwarded, returns
+):
+    calls = []
+
+    def fake_search(**kw):
+        calls.append(kw)
+        return OptimisationResult("cfg", "study", pareto_front="front", outputs="outputs")
+
+    monkeypatch.setattr(deprecated, "optimize_adapt_decomp", fake_search)
+    with pytest.warns(FutureWarning, match="optimize_adapt_decomp"):
+        result = getattr(deprecated, name)(pool="pool", param_space="space", **kwargs)
+
+    assert result == returns
+    assert calls[0]["unit_selection"] is None  # the old entry points never selected units
+    assert calls[0]["pool"] == "pool" and calls[0]["param_space"] == "space"
+    assert {k: calls[0][k] for k in forwarded} == forwarded
+
+
+def test_deprecated_pareto_entry_points_need_two_objectives(monkeypatch):
+    monkeypatch.setattr(deprecated, "optimize_adapt_decomp", lambda **kw: pytest.fail("ran"))
+    for name in (
+        "optimize_adapt_decomp_pooled_memory_pareto",
+        "optimize_adapt_decomp_pooled_disk_pareto",
+    ):
+        with pytest.raises(ValueError, match="at least 2"):
+            getattr(deprecated, name)(pool={}, param_space={}, objectives=("wh_loss",))
+
+
+# ------------------------------------------------------------------
+# End-to-end searches
+# ------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_single_objective_search_over_a_memory_pool(make_memory_pool, tmp_path):
+    """Two datasets with ground truth, two trials at a time, the first one enqueued, and
+    unsupervised unit selection (which narrows the ground truth too): every trial's log
+    pools its datasets, and the best trial's results are promoted to best_result_path."""
+    pool, base_config = make_memory_pool(("dataset_a", "dataset_b"), cov_isi=[0.1, 0.5], gt=True)
+    best_dir = tmp_path / "best"
+    logs = []
+
+    result = optimize_adapt_decomp(
         pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        base_config=common["base_config"],
+        objectives="total_loss",
+        base_config=base_config,
         compute_roa=True,
-        roa_kwargs=roa_kwargs,
-        best_result_path=str(best_dir),
-    )
-    assert outputs["dataset_a"].roa is not None
-    assert outputs["dataset_a"].roa.shape == (M,)
-
-
-def test_optimize_adapt_decomp_pooled_memory_on_trial_log_vars(make_optimize_kwargs):
-    """optimize_adapt_decomp_pooled_memory's on_trial log dict carries the pooled SUM
-    as "loss" plus a "per_dataset" entry (with its own loss/RoA) for every
-    dataset in the pool -- the schema that fixed the original bug (an
-    external wandb callback assuming the single-dataset user_attrs keys,
-    which pooled never sets)."""
-    common_a, M = make_optimize_kwargs()
-    common_b, _ = make_optimize_kwargs()
-    n_samples = common_a["emg"].shape[0]
-    gt_full_bin = np.zeros((n_samples, M), dtype=np.float32)
-    gt_full_bin[::30] = 1
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common_a["emg"],
-            calibration=common_a["calibration"],
-            cbss_config=common_a["cbss_config"],
-            preprocess=common_a["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        ),
-        "dataset_b": PooledDatasetMemory(
-            emg=common_b["emg"],
-            calibration=common_b["calibration"],
-            cbss_config=common_b["cbss_config"],
-            preprocess=common_b["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        ),
-    }
-    seen = []
-
-    optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        base_config=common_a["base_config"],
-        compute_roa=True,
-        roa_kwargs={"tol_spike_ms": 25},
-        on_trial=seen.append,
-    )
-
-    assert len(seen) == 2
-    for v in seen:
-        assert set(v["per_dataset"]) == {"dataset_a", "dataset_b"}
-        assert v["loss"] == pytest.approx(sum(d["loss"] for d in v["per_dataset"].values()))
-        for dataset_vars in v["per_dataset"].values():
-            assert "roa_mean" in dataset_vars and "roa_per_unit" in dataset_vars
-        assert "roa_mean" in v  # pooled mean, present since compute_roa=True
-
-
-@pytest.mark.parametrize("objective", ["sv_loss", "wh_loss", "total_loss"])
-def test_optimize_adapt_decomp_pooled_memory_log_vars_carry_all_losses(
-    objective, make_optimize_kwargs
-):
-    """Pooled log dict carries sv_loss/wh_loss/total_loss (each the SUM across
-    datasets) alongside "loss" == the sum for objective, plus per-dataset
-    sv_loss/wh_loss/total_loss that sum to the same top-level values."""
-    common_a, _M = make_optimize_kwargs()
-    common_b, _ = make_optimize_kwargs()
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common_a["emg"],
-            calibration=common_a["calibration"],
-            cbss_config=common_a["cbss_config"],
-            preprocess=common_a["preprocess"],
-        ),
-        "dataset_b": PooledDatasetMemory(
-            emg=common_b["emg"],
-            calibration=common_b["calibration"],
-            cbss_config=common_b["cbss_config"],
-            preprocess=common_b["preprocess"],
-        ),
-    }
-    seen = []
-
-    optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        objective=objective,
-        base_config=common_a["base_config"],
-        on_trial=seen.append,
-    )
-
-    assert len(seen) == 2
-    for v in seen:
-        assert v["objective"] == objective
-        assert v["loss"] == pytest.approx(v[objective])
-        for key in ("sv_loss", "wh_loss", "total_loss"):
-            assert v[key] == pytest.approx(sum(d[key] for d in v["per_dataset"].values()))
-
-
-def test_optimize_adapt_decomp_pooled_memory_invalid_objective_raises(make_optimize_kwargs):
-    """An objective outside {"sv_loss", "wh_loss", "total_loss"} raises ValueError
-    up front, before any trial runs."""
-    common, _ = make_optimize_kwargs()
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common["emg"],
-            calibration=common["calibration"],
-            cbss_config=common["cbss_config"],
-            preprocess=common["preprocess"],
-        )
-    }
-    with pytest.raises(ValueError):
-        optimize_adapt_decomp_pooled_memory(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=1,
-            objective="bogus",
-            base_config=common["base_config"],
-        )
-
-
-def test_optimize_adapt_decomp_pooled_memory_objective_roa(make_optimize_kwargs):
-    """Pooled objective="roa" sums each dataset's guarded, inverted "roa" loss
-    (NOT the same convention as the roa_mean_pooled diagnostic, which is a mean)."""
-    common_a, M = make_optimize_kwargs()
-    common_b, _ = make_optimize_kwargs()
-    n_samples = common_a["emg"].shape[0]
-    gt_full_bin = np.zeros((n_samples, M), dtype=np.float32)
-    gt_full_bin[::30] = 1
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common_a["emg"],
-            calibration=common_a["calibration"],
-            cbss_config=common_a["cbss_config"],
-            preprocess=common_a["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        ),
-        "dataset_b": PooledDatasetMemory(
-            emg=common_b["emg"],
-            calibration=common_b["calibration"],
-            cbss_config=common_b["cbss_config"],
-            preprocess=common_b["preprocess"],
-            gt_paired_bin=gt_full_bin,
-        ),
-    }
-    seen = []
-
-    optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=2,
-        objective="roa",
-        roa_kwargs={"tol_spike_ms": 25},
-        base_config=common_a["base_config"],
-        on_trial=seen.append,
-    )
-
-    assert len(seen) == 2
-    for v in seen:
-        assert v["objective"] == "roa"
-        assert v["loss"] == pytest.approx(v["roa"])
-        assert v["roa"] == pytest.approx(sum(d["roa"] for d in v["per_dataset"].values()))
-        # roa_mean_pooled (mean diagnostic) is a different aggregation than the pooled
-        # "roa" sum -- they should not coincide in general.
-        assert "roa_mean" in v
-
-
-def test_optimize_adapt_decomp_pooled_memory_objective_roa_requires_gt_full_bin(
-    make_optimize_kwargs,
-):
-    """Pooled objective="roa" without every dataset's gt_paired_bin raises ValueError
-    up front, before any trial runs."""
-    common, _ = make_optimize_kwargs()
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common["emg"],
-            calibration=common["calibration"],
-            cbss_config=common["cbss_config"],
-            preprocess=common["preprocess"],
-        )
-    }
-    with pytest.raises(ValueError):
-        optimize_adapt_decomp_pooled_memory(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=1,
-            objective="roa",
-            base_config=common["base_config"],
-        )
-
-
-def test_optimize_adapt_decomp_pooled_memory_partial_gt_match(make_optimize_kwargs):
-    """A dataset whose calibration has an unmatched unit -- select_supervised
-    (what load_pooled_cbss_memory uses, exercised directly here) narrows both
-    the calibration and its ground truth to the matched subset, so the search
-    runs without rate_of_agreement_paired's shape-mismatch ValueError -- the
-    bug this session's GT-pairing fix targets."""
-    common, _M = make_optimize_kwargs()
-    calibration = common["calibration"]
-    calibration.spikes = calibration.spikes.copy()
-    calibration.spikes[:, 1] = 0  # unit 1 never fires in the calib window -- unmatchable
-
-    n_full = common["emg"].shape[0]
-    spikes_gt_full = np.zeros((n_full, 1), dtype=np.float32)  # only 1 GT unit, matching unit 0
-    spikes_gt_full[::20] = 1  # matches unit 0's own stride-20 calibration pattern
-    # select_supervised()'s own default tol_spike_ms=0.5 rounds to 0 samples at
-    # this fixture's low fs=200 -- widen it, same as this module's roa_kwargs convention.
-    matched = calibration.select_supervised(
-        spikes_gt_full[: calibration.sources.shape[0]],
-        fs=common["base_config"].fs,
-        tol_spike_ms=25,
-    )
-    gt_paired_bin = spikes_gt_full[:, matched.gt_matched_indices]
-    assert matched.spikes.shape[1] == 1  # confirms the partial match actually happened
-
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common["emg"],
-            calibration=matched,
-            cbss_config=common["cbss_config"],
-            preprocess=common["preprocess"],
-            gt_paired_bin=gt_paired_bin,
-        )
-    }
-
-    _best_config, study = optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=1,
-        base_config=common["base_config"],
-        compute_roa=True,
-        roa_kwargs={"tol_spike_ms": 25},
-    )
-    assert isinstance(study.best_value, float)
-
-
-def test_optimize_adapt_decomp_pooled_memory_n_jobs_completes_with_best_result_path(
-    tmp_path, make_optimize_kwargs
-):
-    """n_jobs>1 runs trials concurrently (Optuna's thread-based study.optimize
-    n_jobs) -- resolve()/_run_one_dataset() add no new shared state across
-    concurrent trials, so the search still completes every trial and
-    best_result_path still ends up holding a single, correctly-promoted best
-    trial, exercising the best_lock guarding best_loss/best_outputs."""
-    common_a, _ = make_optimize_kwargs()
-    common_b, _ = make_optimize_kwargs()
-    pool = {
-        "dataset_a": PooledDatasetMemory(
-            emg=common_a["emg"],
-            calibration=common_a["calibration"],
-            cbss_config=common_a["cbss_config"],
-            preprocess=common_a["preprocess"],
-        ),
-        "dataset_b": PooledDatasetMemory(
-            emg=common_b["emg"],
-            calibration=common_b["calibration"],
-            cbss_config=common_b["cbss_config"],
-            preprocess=common_b["preprocess"],
-        ),
-    }
-    best_dir = tmp_path / "best_trial"
-
-    outputs, _best_config, study = optimize_adapt_decomp_pooled_memory(
-        pool=pool,
-        param_space=DEFAULT_PARAM_SPACE,
-        n_trials=6,
+        roa_kwargs={"tol_spike_ms": 25},  # the default 2 ms rounds to 0 samples at fs=200
+        unit_selection="unsupervised",
+        n_trials=4,
         n_jobs=2,
-        base_config=common_a["base_config"],
+        initial_params=[V10_WINNER],
         best_result_path=str(best_dir),
+        on_trial=logs.append,
     )
 
-    assert len(study.trials) == 6
-    assert set(outputs.keys()) == {"dataset_a", "dataset_b"}
-    for name in pool:
+    study = result.study
+    assert len(study.trials) == 4 and result.pareto_front is None
+    assert study.trials[0].params == pytest.approx(V10_WINNER)
+    assert set(study.trials[0].params) == set(DEFAULT_PARAM_SPACE)
+    assert result.best_config.sv_learning_rate == pytest.approx(
+        study.best_params["sv_learning_rate"]
+    )
+
+    assert len(logs) == 4
+    for log in logs:
+        per_dataset = log["per_dataset"]
+        assert set(per_dataset) == set(pool) and isinstance(log["on_front"], bool)
+        assert log["objective"] == "total_loss" and log["loss"] == pytest.approx(log["total_loss"])
+        for key in ("loss", "sv_loss", "wh_loss", "total_loss", "roa"):
+            assert log[key] == pytest.approx(sum(d[key] for d in per_dataset.values()))
+        assert log["roa_mean"] == pytest.approx(
+            np.mean([d["roa_mean"] for d in per_dataset.values()])
+        )
+        assert all(len(d["roa_per_unit"]) == 1 for d in per_dataset.values())
+
+    # The best trial's results, reloaded for an in-memory pool, on the selected unit only
+    assert set(result.outputs) == set(pool)
+    for name, output in result.outputs.items():
+        assert isinstance(output, AdaptationResult)
+        assert output.spikes.shape[1] == 1 and output.roa.shape == (1,)
         assert (best_dir / f"{name}.pkl").exists()
+    assert (best_dir / "config.yaml").exists() and (best_dir / "study.pkl").exists()
+    assert not best_dir.with_name("best_temp").exists()
 
 
-# ------------------------------------------------------------------
-# optimize_adapt_decomp_pooled_disk -- same shapes as make_optimize_kwargs
-# (raw_chs=3, ext_fact=2, M=2, fs=200, n_cal=500, n_full=600), but written to
-# tmp_path as a CBSSResult pickle + CBSSConfig YAML + emg .npz per dataset,
-# since this function loads via AdaptDecomp.from_calibration() instead of
-# taking pre-unpacked tensors.
-# ------------------------------------------------------------------
+@pytest.mark.slow
+def test_pareto_search_over_a_disk_pool(make_disk_dataset, make_optimize_kwargs, tmp_path):
+    """Two on-disk datasets, two trials at a time: the front kept on disk is exactly the
+    study's, with one complete trial_<n>/ per member; the study is saved after every
+    trial; the knee member builds best_config; on-disk results are not reloaded."""
+    base_config = make_optimize_kwargs()[0]["base_config"]
+    pool = {name: make_disk_dataset(name, seed=i) for i, name in enumerate(("a", "b"))}
+    best_dir = tmp_path / "front"
+    logs = []
 
-
-def _make_pooled_disk_dataset(
-    tmp_path,
-    name,
-    raw_chs=3,
-    ext_fact=2,
-    M=2,
-    fs=200,
-    n_cal=500,
-    n_full=600,
-    spike_stride=20,
-    seed=0,
-    gt_dense=None,
-    spikes=None,
-):
-    """Write one dataset's CBSSResult pickle/CBSSConfig YAML/emg .npz (and,
-    if gt_dense is given, a ground-truth .npz) to tmp_path and return the
-    matching PooledDatasetDisk -- shapes/fs/ext_fact match
-    make_optimize_kwargs's base_config so from_calibration() reconciles
-    nothing here (that's test_from_calibration.py's job, not this module's).
-
-    Args:
-        spikes (Optional[np.ndarray]): Calibration spike train override,
-            with shape (n_cal, M). Defaults to None, which uses
-            spikes[::spike_stride] = 1 for every unit.
-        gt_dense (Optional[np.ndarray]): Full-recording ground-truth binary
-            spike train, with shape (n_full, n_gt) -- written to a
-            "<name>_gt.npz" file and set as path_gt. Defaults to None (no
-            ground truth).
-    """
-    rng = np.random.default_rng(seed)
-    D = raw_chs * ext_fact
-    if spikes is None:
-        spikes = np.zeros((n_cal, M), dtype=np.int32)
-        spikes[::spike_stride] = 1
-    sv = orthonormalize_rows_qr(
-        torch.from_numpy(rng.standard_normal((M, D)).astype(np.float32))
-    ).numpy()
-
-    result = CBSSResult(
-        sources=rng.standard_normal((n_cal, M)).astype(np.float32),
-        spikes=spikes,
-        spikes_dict={i: np.where(spikes[:, i])[0] for i in range(M)},
-        sep_vectors=sv.T,  # CBSSResult stores [dim, n_mu]; to_adapt_tensors() transposes back
-        whitening=np.eye(D, dtype=np.float32),
-        extension_mean=np.zeros((1, D), dtype=np.float32),
-        spikes_centr=(rng.random(M) + 2.0).astype(np.float32),
-        base_centr=(rng.random(M) * 0.5).astype(np.float32),
-        sil=np.full(M, 0.9, dtype=np.float32),
-        cov_isi=np.full(M, 0.1, dtype=np.float32),
-        ext_fact=ext_fact,
-        emg=rng.standard_normal((n_cal, raw_chs)).astype(np.float32),
-    )
-    calib_path = tmp_path / f"{name}_cbss.pkl"
-    result.save(calib_path)
-
-    cbss_config_path = tmp_path / f"{name}_cbss_config.yaml"
-    CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True).to_yaml(cbss_config_path)
-
-    emg_path = tmp_path / f"{name}_emg.npz"
-    np.savez(emg_path, emg=rng.standard_normal((n_full, raw_chs)).astype(np.float32))
-
-    path_gt = None
-    if gt_dense is not None:
-        path_gt = tmp_path / f"{name}_gt.npz"
-        np.savez(path_gt, spikes=gt_dense)
-
-    return PooledDatasetDisk(
-        path_calib=calib_path,
-        path_calib_config=cbss_config_path,
-        path_emg=emg_path,
-        preprocess=False,  # matches make_optimize_kwargs -- fs=200 is below AdaptConfig's default highcut
-        path_gt=path_gt,
-        fs=fs,  # calibration.timestamps is never set here, so calibration.fs would raise
-    )
-
-
-def _make_pooled_disk_base_config(fs=200):
-    """AdaptConfig matching _make_pooled_disk_dataset's shapes -- same
-    values as make_optimize_kwargs's base_config."""
-    cfg = AdaptConfig()
-    cfg.device = "cpu"
-    cfg.fs = fs
-    cfg.ext_fact = 2
-    cfg.batch_ms = 100
-    cfg.__post_init__()
-    return cfg
-
-
-class TestOptimizeAdaptDecompPooledDisk:
-    def test_on_trial_log_vars_match_optimize_adapt_decomp_pooled_memory_shape(self, tmp_path):
-        """Same canonical on_trial log dict shape as optimize_adapt_decomp_pooled_memory
-        (loss = pooled SUM, one per_dataset entry per pool key)."""
-        base_config = _make_pooled_disk_base_config()
-        pool = {
-            "dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a", seed=0),
-            "dataset_b": _make_pooled_disk_dataset(tmp_path, "dataset_b", seed=1),
-        }
-        seen = []
-
-        optimize_adapt_decomp_pooled_disk(
+    with patch(
+        "adapt_decomp.adaptation.optimize.search.save_study_snapshot",
+        side_effect=save_study_snapshot,
+    ) as snapshot:
+        result = optimize_adapt_decomp(
             pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=2,
+            objectives=("wh_loss", "sv_loss"),
+            selection="knee",
             base_config=base_config,
-            on_trial=seen.append,
-        )
-
-        assert len(seen) == 2
-        for v in seen:
-            assert set(v["per_dataset"]) == {"dataset_a", "dataset_b"}
-            assert v["loss"] == pytest.approx(sum(d["loss"] for d in v["per_dataset"].values()))
-
-    def test_best_result_path_optional_and_writes_reloadable_results(self, tmp_path):
-        """best_result_path stays fully optional, as in optimize_adapt_decomp_pooled_memory;
-        when set, best_result_path holds one reloadable AdaptationResult per
-        dataset plus config.yaml/study.pkl, and the scratch "_temp" directory
-        used to build them is removed once the search finishes."""
-        base_config = _make_pooled_disk_base_config()
-        pool = {
-            "dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a", seed=0),
-            "dataset_b": _make_pooled_disk_dataset(tmp_path, "dataset_b", seed=1),
-        }
-
-        result_no_path = optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=2,
-            base_config=base_config,
-        )
-        assert len(result_no_path) == 2
-        best_config, study = result_no_path
-        assert isinstance(best_config, AdaptConfig)
-        assert isinstance(study.best_value, float)
-
-        best_dir = tmp_path / "best_trial"
-        result_with_path = optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=2,
-            base_config=base_config,
+            n_trials=6,
+            n_jobs=2,
             best_result_path=str(best_dir),
+            on_trial=logs.append,
         )
-        # Unlike optimize_adapt_decomp_pooled_memory, the return shape never changes --
-        # results are on disk, not in memory (see docstring's Returns).
-        assert len(result_with_path) == 2
 
-        for name in pool:
-            assert (best_dir / f"{name}.pkl").exists()
-            reloaded = AdaptationResult.load(best_dir / f"{name}.pkl")
-            assert reloaded.wh_loss is not None
-        assert (best_dir / "config.yaml").exists()
-        assert (best_dir / "study.pkl").exists()
-        assert not best_dir.with_name(best_dir.name + "_temp").exists()
-
-    def test_n_jobs_promotes_correct_files_without_scratch_collisions(self, tmp_path):
-        """Under n_jobs>1, concurrent trials write trial-scoped scratch
-        filenames ("<trial.number>_<dataset>.pkl") instead of colliding on a
-        shared "<dataset>.pkl" -- best_result_path still ends up with exactly
-        one reloadable AdaptationResult per dataset, and the scratch "_temp"
-        directory is fully cleaned up (both each trial's own files, unlinked
-        right after its promote check, and the directory itself at the end)."""
-        base_config = _make_pooled_disk_base_config()
-        pool = {
-            "dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a", seed=0),
-            "dataset_b": _make_pooled_disk_dataset(tmp_path, "dataset_b", seed=1),
+    study = result.study
+    assert len(study.trials) == 6 and snapshot.call_count == 6
+    with pytest.raises(RuntimeError):
+        study.best_value  # genuinely multi-objective
+    on_disk = {int(p.name.removeprefix("trial_")) for p in best_dir.glob("trial_*")}
+    assert (
+        on_disk == {t.number for t in study.best_trials} == {t.number for t in result.pareto_front}
+    )
+    for n in on_disk:
+        assert {p.name for p in (best_dir / f"trial_{n}").iterdir()} == {
+            "a.pkl",
+            "b.pkl",
+            "config.yaml",
         }
-        best_dir = tmp_path / "best_trial"
+    assert AdaptationResult.load(best_dir / f"trial_{min(on_disk)}" / "a.pkl").wh_loss is not None
+    assert (best_dir / "study.pkl").exists() and not best_dir.with_name("front_temp").exists()
+    assert result.outputs is None
 
-        _best_config, study = optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=8,
-            n_jobs=4,
-            base_config=base_config,
-            best_result_path=str(best_dir),
-        )
-
-        assert len(study.trials) == 8
-        for name in pool:
-            assert (best_dir / f"{name}.pkl").exists()
-            reloaded = AdaptationResult.load(best_dir / f"{name}.pkl")
-            assert reloaded.wh_loss is not None
-        assert (best_dir / "config.yaml").exists()
-        assert (best_dir / "study.pkl").exists()
-        assert not best_dir.with_name(best_dir.name + "_temp").exists()
-
-    def test_compute_roa(self, tmp_path):
-        """compute_roa=True logs roa_mean/roa_per_unit as user_attrs on every
-        trial AND on on_trial's log_vars, matching optimize_adapt_decomp_pooled_memory."""
-        M, n_full = 2, 600
-        # select_supervised()'s own default tol_spike_ms=0.5 needs fs high enough
-        # that round(0.5 * fs / 1000) doesn't round to 0 samples (an empty
-        # convolution kernel) -- 200 (this module's usual fixture fs) is too low.
-        fs = 2000
-        gt_dense = np.zeros((n_full, M), dtype=np.float32)
-        # Matches _make_pooled_disk_dataset's own default spike_stride=20, so
-        # select_supervised finds a real correlated match for every unit.
-        gt_dense[::20] = 1
-        base_config = _make_pooled_disk_base_config(fs=fs)
-        pool = {
-            "dataset_a": _make_pooled_disk_dataset(
-                tmp_path, "dataset_a", fs=fs, seed=0, gt_dense=gt_dense
-            ),
-        }
-        # Widened for consistency with the optimize_adapt_decomp_pooled_memory
-        # tests' roa_kwargs -- rate_of_agreement_paired's own default (2ms) would
-        # work fine at this fs, but this keeps the convention uniform.
-        roa_kwargs = {"tol_spike_ms": 25}
-        seen = []
-
-        optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=2,
-            base_config=base_config,
-            compute_roa=True,
-            roa_kwargs=roa_kwargs,
-            on_trial=seen.append,
-        )
-
-        assert len(seen) == 2
-        for v in seen:
-            assert "roa_mean" in v
-            assert "roa_mean" in v["per_dataset"]["dataset_a"]
-            assert len(v["per_dataset"]["dataset_a"]["roa_per_unit"]) == M
-
-    def test_compute_roa_with_partial_gt_match(self, tmp_path):
-        """A calibration unit with no correlated ground truth is dropped by
-        select_supervised (called fresh every trial), not left to crash
-        rate_of_agreement_paired's shape check -- the bug this session's
-        GT-pairing fix targets."""
-        M, n_cal, n_full = 3, 500, 600
-        # See test_compute_roa's comment on why fs=200 (this module's usual
-        # fixture fs) is too low for select_supervised's default tol_spike_ms.
-        fs = 2000
-        spikes = np.zeros((n_cal, M), dtype=np.int32)
-        spikes[::20, :2] = 1  # units 0/1 fire; unit 2 never fires -- no GT will match it
-        gt_dense = np.zeros((n_full, 2), dtype=np.float32)  # only 2 GT units, matching units 0/1
-        gt_dense[::20] = 1
-
-        base_config = _make_pooled_disk_base_config(fs=fs)
-        pool = {
-            "dataset_a": _make_pooled_disk_dataset(
-                tmp_path,
-                "dataset_a",
-                M=M,
-                fs=fs,
-                seed=0,
-                spikes=spikes,
-                gt_dense=gt_dense,
-            )
-        }
-
-        _best_config, study = optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=1,
-            base_config=base_config,
-            compute_roa=True,
-            roa_kwargs={"tol_spike_ms": 25},
-        )
-        assert isinstance(study.best_value, float)
-
-    def test_compute_roa_requires_path_gt(self, tmp_path):
-        """compute_roa=True without every dataset's path_gt raises
-        ValueError up front, before any trial runs."""
-        base_config = _make_pooled_disk_base_config()
-        pool = {"dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a")}
-        with pytest.raises(ValueError):
-            optimize_adapt_decomp_pooled_disk(
-                pool=pool,
-                param_space=DEFAULT_PARAM_SPACE,
-                n_trials=1,
-                base_config=base_config,
-                compute_roa=True,
-            )
-
-    def test_invalid_objective_raises(self, tmp_path):
-        base_config = _make_pooled_disk_base_config()
-        pool = {"dataset_a": _make_pooled_disk_dataset(tmp_path, "dataset_a")}
-        with pytest.raises(ValueError):
-            optimize_adapt_decomp_pooled_disk(
-                pool=pool,
-                param_space=DEFAULT_PARAM_SPACE,
-                n_trials=1,
-                base_config=base_config,
-                objective="bogus",
-            )
-
-    def test_uses_emg_loader_not_hardcoded_np_load(self, tmp_path):
-        """The trial loop calls loaders.load_emg(spec.path_emg, spec.emg_loader)
-        rather than a hardcoded np.load(...)["emg"] -- proven by pointing
-        path_emg at a non-.npz (neuromotion HDF5) file via emg_loader="neuromotion"
-        and confirming the search still completes."""
-        import h5py
-
-        base_config = _make_pooled_disk_base_config()
-        dataset = _make_pooled_disk_dataset(tmp_path, "dataset_a", seed=0)
-
-        raw_chs, n_full = 3, 600
-        emg_h5 = np.random.default_rng(0).standard_normal((n_full, raw_chs)).astype(np.float32)
-        path_emg_h5 = tmp_path / "dataset_a_emg.h5"
-        with h5py.File(path_emg_h5, "w") as h5:
-            h5.create_dataset("emg", data=emg_h5)
-            h5.create_dataset("spikes", data=np.zeros((n_full, 2), dtype=np.float32))
-            h5.create_dataset("fs", data=200.0)
-            for key in (
-                "rms",
-                "ch_map",
-                "ch_cols",
-                "bad_ch",
-                "angle_profile",
-                "force_profile",
-                "muaps",
-                "muap_muscle_labels",
-                "muap_angle_labels",
-                "roa_0deg",
-                "lags_0deg",
-            ):
-                h5.create_dataset(key, data=np.zeros(1, dtype=np.float32))
-            h5.create_dataset("timestamps", data=np.zeros(1, dtype=np.float64))
-            h5.create_group("staircase_phases")
-            h5.create_group("paired_units")
-
-        dataset.path_emg = path_emg_h5
-        dataset.emg_loader = "neuromotion"
-        pool = {"dataset_a": dataset}
-
-        _best_config, study = optimize_adapt_decomp_pooled_disk(
-            pool=pool,
-            param_space=DEFAULT_PARAM_SPACE,
-            n_trials=1,
-            base_config=base_config,
-        )
-        assert isinstance(study.best_value, float)
+    knee = _select_knee(result.pareto_front)
+    assert result.best_config.wh_learning_rate == pytest.approx(knee.params["wh_learning_rate"])
+    for log in logs:
+        assert "loss" not in log and log["objectives"] == ("wh_loss", "sv_loss")
+        assert len(log["values"]) == 2 and isinstance(log["on_front"], bool)

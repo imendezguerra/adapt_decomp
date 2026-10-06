@@ -111,6 +111,6 @@ ignore = ["E741", "E501", "RUF001", "RUF002", "RUF003"]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
-    "slow: integration-style tests (Optuna studies, multi-batch adaptation loops) -- excluded by `pytest -m \"not slow\"`",
+    "slow: integration-style tests (Optuna searches, multi-batch adaptation loops, the FDSI benchmark stages) -- excluded by `pytest -m \"not slow\"`",
     "repro: cross-platform reproducibility test on the NeuroMotion tutorial data (needs `make data`) -- run with `pytest -m repro`",
 ]

@@ -19,8 +19,30 @@ import torch
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import Decomposition
 from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
+from adapt_decomp.cbss import CBSS
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
+from tests.synthetic import SyntheticRecording, make_synthetic_recording
+
+
+@pytest.fixture(scope="session")
+def synthetic_recording() -> SyntheticRecording:
+    """One drifting synthetic recording, shared by the whole session (read-only)."""
+    return make_synthetic_recording()
+
+
+@pytest.fixture(scope="session")
+def synthetic_cbss_config(synthetic_recording) -> CBSSConfig:
+    """A small, fast CBSSConfig for synthetic_recording (read-only)."""
+    return CBSSConfig(fs=synthetic_recording.fs, ext_fact=8, search_iter=15, random_seed=0)
+
+
+@pytest.fixture(scope="session")
+def synthetic_calibration(synthetic_recording, synthetic_cbss_config) -> CBSSResult:
+    """CBSS on synthetic_recording's calibration window, narrowed to its GT-matched units."""
+    rec = synthetic_recording
+    calibration = CBSS(synthetic_cbss_config).decompose(rec.emg[: rec.n_cal])
+    return calibration.select_supervised(rec.spikes[: rec.n_cal], fs=rec.fs, tol_spike_ms=1)
 
 
 @pytest.fixture
@@ -201,6 +223,102 @@ def make_optimize_kwargs():
             preprocess=False,
             base_config=cfg,
         ), M
+
+    return _make
+
+
+@pytest.fixture
+def make_memory_pool(make_optimize_kwargs):
+    """Factory fixture: an in-memory search pool of identical synthetic datasets.
+
+    Returns:
+        Callable[..., Tuple[Dict[str, PooledDatasetMemory], AdaptConfig]]: Call
+        with the dataset names (default ("dataset_a",)), optionally cov_isi (the
+        calibration's per-unit CoV-ISI) and gt (True attaches paired ground
+        truth). Returns (pool, base_config).
+    """
+    from adapt_decomp.utils.loaders import PooledDatasetMemory
+
+    def _make(names=("dataset_a",), cov_isi=None, gt=False):
+        pool = {}
+        for name in names:
+            common, n_units = make_optimize_kwargs()
+            calibration = common["calibration"]
+            if cov_isi is not None:
+                calibration.cov_isi = np.asarray(cov_isi, dtype=np.float32)
+            gt_paired_bin = None
+            if gt:
+                gt_paired_bin = np.zeros((common["emg"].shape[0], n_units), dtype=np.float32)
+                gt_paired_bin[::30] = 1
+            pool[name] = PooledDatasetMemory(
+                emg=common["emg"],
+                calibration=calibration,
+                cbss_config=common["cbss_config"],
+                preprocess=common["preprocess"],
+                gt_paired_bin=gt_paired_bin,
+            )
+        return pool, common["base_config"]
+
+    return _make
+
+
+@pytest.fixture
+def make_disk_dataset(tmp_path):
+    """Factory fixture: one on-disk search dataset, written to tmp_path.
+
+    Same shapes as make_optimize_kwargs (raw_chs=3, ext_fact=2, M=2, fs=200,
+    500 calibration and 600 online samples): a CBSSResult pickle, a CBSSConfig
+    YAML and an emg .npz, plus a "<name>_gt.npz" when gt_dense is given.
+
+    Returns:
+        Callable[..., PooledDatasetDisk]: Call with the dataset name, optionally
+        M, fs, seed, spikes (calibration spike trains, (500, M); default every
+        20th sample) and gt_dense (full-recording ground truth, (600, n_gt)).
+    """
+    from adapt_decomp.utils.loaders import PooledDatasetDisk
+
+    def _make(name, M=2, fs=200, seed=0, spikes=None, gt_dense=None):
+        raw_chs, ext_fact, n_cal, n_full = 3, 2, 500, 600
+        rng = np.random.default_rng(seed)
+        D = raw_chs * ext_fact
+        if spikes is None:
+            spikes = np.zeros((n_cal, M), dtype=np.int32)
+            spikes[::20] = 1
+        sv = orthonormalize_rows_qr(
+            torch.from_numpy(rng.standard_normal((M, D)).astype(np.float32))
+        ).numpy()
+        CBSSResult(
+            sources=rng.standard_normal((n_cal, M)).astype(np.float32),
+            spikes=spikes,
+            spikes_dict={i: np.where(spikes[:, i])[0] for i in range(M)},
+            sep_vectors=sv.T,  # CBSSResult stores [dim, n_mu]
+            whitening=np.eye(D, dtype=np.float32),
+            extension_mean=np.zeros((1, D), dtype=np.float32),
+            spikes_centr=(rng.random(M) + 2.0).astype(np.float32),
+            base_centr=(rng.random(M) * 0.5).astype(np.float32),
+            sil=np.full(M, 0.9, dtype=np.float32),
+            cov_isi=np.full(M, 0.1, dtype=np.float32),
+            ext_fact=ext_fact,
+            emg=rng.standard_normal((n_cal, raw_chs)).astype(np.float32),
+        ).save(tmp_path / f"{name}_cbss.pkl")
+        CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True).to_yaml(
+            tmp_path / f"{name}_cbss_config.yaml"
+        )
+        emg = rng.standard_normal((n_full, raw_chs)).astype(np.float32)
+        np.savez(tmp_path / f"{name}_emg.npz", emg=emg)
+        path_gt = None
+        if gt_dense is not None:
+            path_gt = tmp_path / f"{name}_gt.npz"
+            np.savez(path_gt, spikes=gt_dense)
+
+        return PooledDatasetDisk(
+            path_calib=tmp_path / f"{name}_cbss.pkl",
+            path_calib_config=tmp_path / f"{name}_cbss_config.yaml",
+            path_emg=tmp_path / f"{name}_emg.npz",
+            preprocess=False,  # fs=200 is below AdaptConfig's default highcut
+            path_gt=path_gt,
+            fs=fs,  # calibration.timestamps is never set, so calibration.fs would raise
+        )
 
     return _make
 

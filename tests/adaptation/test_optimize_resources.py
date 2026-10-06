@@ -27,20 +27,9 @@ from adapt_decomp.adaptation.optimize.resources import (
 )
 from adapt_decomp.adaptation.optimize.scoring import suggest_overrides
 from adapt_decomp.adaptation.optimize.search import _make_study
-from adapt_decomp.utils.loaders import PooledDatasetMemory, emg_shape
-from tests.adaptation.test_optimize import _make_pooled_disk_dataset
+from adapt_decomp.utils.loaders import emg_shape
 
 GB = 1024**3
-
-
-def _memory_pool(make_optimize_kwargs, names):
-    """In-memory pool of identical synthetic datasets, plus its base config."""
-    pool = {}
-    for name in names:
-        common, _ = make_optimize_kwargs()
-        base_config = common.pop("base_config")
-        pool[name] = PooledDatasetMemory(**common)
-    return pool, base_config
 
 
 @pytest.mark.parametrize(
@@ -61,8 +50,8 @@ def test_plan_resources_fills_cores_with_dataset_runs_first(
     assert plan_resources(n_datasets, n_trials_at_once, n_cores) == expected
 
 
-def test_shard_balances_datasets_longest_first(make_optimize_kwargs):
-    pool, _ = _memory_pool(make_optimize_kwargs, ("a", "b", "c"))
+def test_shard_balances_datasets_longest_first(make_memory_pool):
+    pool, _ = make_memory_pool(("a", "b", "c"))
     for name, n in (("a", 600), ("b", 400), ("c", 300)):
         pool[name].emg = pool[name].emg.repeat(n // 100 + 1, 1)[:n]
     assert _shard(pool, 2) == [["a"], ["b", "c"]]
@@ -84,27 +73,27 @@ def test_emg_shape_reads_the_npz_header(tmp_path):
         emg_shape(path, "mat")
 
 
-def test_disk_entry_shape_counts_only_its_start_stop_samples(tmp_path):
+def test_disk_entry_shape_counts_only_its_start_stop_samples(make_disk_dataset):
     """The memory check sizes a disk entry's run by the samples it adapts."""
     from dataclasses import replace
 
-    entry = _make_pooled_disk_dataset(tmp_path, "a")
+    entry = make_disk_dataset("a")
     n_samples, *rest = _dataset_shape(entry)
     window = replace(entry, start=10, stop=n_samples - 5)
     assert _dataset_shape(window) == (n_samples - 15, *rest)
 
 
-def test_disk_and_memory_pools_plan_the_same_runs(tmp_path, make_optimize_kwargs, allow_cores):
+def test_disk_and_memory_pools_plan_the_same_runs(make_disk_dataset, make_memory_pool, allow_cores):
     allow_cores(4)
-    disk = {"a": _make_pooled_disk_dataset(tmp_path, "a")}
-    memory, _ = _memory_pool(make_optimize_kwargs, ("a",))
+    disk = {"a": make_disk_dataset("a")}
+    memory, _ = make_memory_pool(("a",))
     plan_disk, _, _ = plan_search_resources(disk, 1, 1, 4)
     plan_memory, _, _ = plan_search_resources(memory, 1, 1, 4)
     assert plan_disk == plan_memory == ResourcePlan(1, 1)
 
 
-def testplan_search_resources_rejects_bad_counts_and_too_many_cores(make_optimize_kwargs):
-    pool, _ = _memory_pool(make_optimize_kwargs, ("a",))
+def testplan_search_resources_rejects_bad_counts_and_too_many_cores(make_memory_pool):
+    pool, _ = make_memory_pool(("a",))
     with pytest.raises(ValueError, match="at least 1"):
         plan_search_resources(pool, 1, 0, 1)
     with pytest.raises(ValueError, match="--cpus-per-task"):
@@ -112,18 +101,18 @@ def testplan_search_resources_rejects_bad_counts_and_too_many_cores(make_optimiz
 
 
 def test_plan_search_resources_resolves_default_cores_through_available_cores(
-    make_optimize_kwargs,
+    make_memory_pool,
 ):
-    pool, _ = _memory_pool(make_optimize_kwargs, ("a",))
+    pool, _ = make_memory_pool(("a",))
     # n_cores=None resolves to conftest's patched available_cores
     assert plan_search_resources(pool, 1, 1, None)[2] == 1
 
 
 def testplan_search_resources_guides_the_user_when_memory_does_not_fit(
-    make_optimize_kwargs, allow_cores, monkeypatch
+    make_memory_pool, allow_cores, monkeypatch
 ):
     allow_cores(8)
-    pool, _ = _memory_pool(make_optimize_kwargs, ("a", "b"))
+    pool, _ = make_memory_pool(("a", "b"))
     current = psutil.Process().memory_info().rss
     # Room for exactly one worker: n_cores=1 fits, more does not
     budget = current + PROCESS_BASELINE_BYTES + 10 * 1024**2
@@ -137,10 +126,10 @@ def testplan_search_resources_guides_the_user_when_memory_does_not_fit(
 
 
 def testplan_search_resources_warns_when_free_memory_is_short_or_batches_wait(
-    make_optimize_kwargs, allow_cores, monkeypatch
+    make_memory_pool, allow_cores, monkeypatch
 ):
     allow_cores(2)
-    pool, _ = _memory_pool(make_optimize_kwargs, ("a",))
+    pool, _ = make_memory_pool(("a",))
     monkeypatch.setattr(resources, "available_memory", lambda: (1000 * GB, 1))
     messages = []
     handler = logger.add(messages.append, level="WARNING")
@@ -155,8 +144,8 @@ def testplan_search_resources_warns_when_free_memory_is_short_or_batches_wait(
 
 
 @pytest.mark.slow
-def test_batched_start_up_trials_match_a_one_at_a_time_search(make_optimize_kwargs):
-    pool, base_config = _memory_pool(make_optimize_kwargs, ("a",))
+def test_batched_start_up_trials_match_a_one_at_a_time_search(make_memory_pool):
+    pool, base_config = make_memory_pool(("a",))
     seen = []
     optimize_adapt_decomp(
         pool=pool, base_config=base_config, n_trials=4, random_seed=7, on_trial=seen.append
@@ -172,10 +161,10 @@ def test_batched_start_up_trials_match_a_one_at_a_time_search(make_optimize_kwar
 
 
 @pytest.mark.slow
-def test_worker_processes_reproduce_the_in_process_search(make_optimize_kwargs, allow_cores):
+def test_worker_processes_reproduce_the_in_process_search(make_memory_pool, allow_cores):
     """n_cores changes only where trials run, not what the sampler suggests."""
     allow_cores(4)
-    pool, base_config = _memory_pool(make_optimize_kwargs, ("dataset_a", "dataset_b"))
+    pool, base_config = make_memory_pool(("dataset_a", "dataset_b"))
 
     def run(n_cores):
         seen = []
@@ -184,17 +173,17 @@ def test_worker_processes_reproduce_the_in_process_search(make_optimize_kwargs, 
         )
         return sorted(seen, key=lambda log: log["trial_number"])
 
-    for in_process, workers in zip(run(1), run(4)):
-        assert workers["params"] == in_process["params"]
+    for in_process, in_workers in zip(run(1), run(4)):
+        assert in_workers["params"] == in_process["params"]
         for name in pool:
-            assert workers["per_dataset"][name]["sv_loss"] == pytest.approx(
+            assert in_workers["per_dataset"][name]["sv_loss"] == pytest.approx(
                 in_process["per_dataset"][name]["sv_loss"], rel=1e-4
             )
 
 
 @pytest.mark.slow
-def test_failed_trial_is_marked_failed_and_raises(make_optimize_kwargs, monkeypatch):
-    pool, base_config = _memory_pool(make_optimize_kwargs, ("a",))
+def test_failed_trial_is_marked_failed_and_raises(make_memory_pool, monkeypatch):
+    pool, base_config = make_memory_pool(("a",))
 
     def boom(*args, **kwargs):
         raise RuntimeError("boom")

@@ -39,7 +39,7 @@ Maintainers: the release process is in [`.github/RELEASING.md`](.github/RELEASIN
     ```sh
     pre-commit install
     ```
-4. Download the data the slower tests and the docs examples use (see
+4. Download the data the reproducibility test, the tutorial and the docs examples use (see
    [Running tests](#running-tests)):
     ```sh
     adapt-decomp-data get fdsi_example-data   # 70 MB: the docs examples
@@ -64,7 +64,7 @@ Keep in mind:
   function's docstring when you change its arguments. Config fields are documented in their
   class's `Attributes:` section.
 - **Docs code.** The code on the quickstart and how-to pages comes from `docs/snippets/*.py`.
-  Edit the snippet, not the page; `tests/docs/test_snippets.py` runs it.
+  Edit the snippet, not the page, and run it to check it still works.
 - **The FDSI benchmark.** When a change alters what a stage of `benchmarks/fdsi/` writes, bump
   that stage in `STAGE_VERSIONS` (`benchmarks/fdsi/spec.py`), so cached outputs are recomputed.
 
@@ -78,8 +78,8 @@ make repro      # the reproducibility test: pytest tests/reproducibility -m repr
 
 | Marker | Tests | Needs |
 |---|---|---|
-| (none) | Unit tests of every subpackage | Nothing |
-| `slow` | Optuna searches, multi-batch adaptation loops, the docs snippets, the benchmark end to end | `fdsi_example-data` for the docs snippets; skipped without it |
+| (none) | Unit tests of every subpackage, and calibration, adaptation and a search end to end on a synthetic recording with ground truth (`tests/test_pipeline.py`) | Nothing |
+| `slow` | Optuna searches across worker processes, multi-batch adaptation loops, the FDSI benchmark stages end to end on synthetic recordings | Nothing |
 | `repro` | The tutorial's adaptation against a stored reference | `neuromotion-data` (`make data`); skipped without it |
 
 ## Documentation

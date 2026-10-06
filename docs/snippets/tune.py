@@ -1,7 +1,7 @@
 """How-to examples of hyperparameter searches, on the calibration docs/snippets/workflow.py saved.
 
-Run it after workflow.py, from the same directory; tests/docs/test_snippets.py runs both. The
-searches are kept tiny (2 trials) so they run in a few minutes; use 50 or more in practice.
+Run it after workflow.py, from the same directory. The searches are kept tiny (2 trials) so they
+run in a few minutes; use 50 or more in practice.
 """
 
 from pathlib import Path
