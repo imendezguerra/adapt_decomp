@@ -28,9 +28,10 @@ done
 # FDSI recordings (100 channels x ext_fact 10): a search runs its random start-up trials
 # threads_per_run at a time, 3 workers of ~2 GB each per trial (adapt_decomp predicts it and
 # stops early if the request is too small), and a calibration is one such process. With
-# n_jobs: 1 and 4 threads per run, a search takes ~3 h. An application adapts the whole recording, and heap fragmentation
-# makes its peak vary from run to run (measured 1.5-4.7 GB), so it gets twice the
-# calibration's. On Imperial's CX3 all of these route to small24.
+# n_jobs: 1 and 4 threads per run, a search of 100 trials takes ~2.5-3.5 h. An application
+# adapts the whole recording, and heap fragmentation makes its peak vary from run to run
+# (measured 1.5-4.7 GB), so it gets twice the calibration's. On Imperial's CX3 all of these
+# route to small24.
 CALIBRATE_MEM=4gb;  CALIBRATE_WALLTIME=06:00:00; CALIBRATE_CHUNK=1
 SEARCH_MEM=32gb;    SEARCH_WALLTIME=08:00:00
 APPLY_MEM=8gb;      APPLY_WALLTIME=02:00:00;     APPLY_CHUNK=4

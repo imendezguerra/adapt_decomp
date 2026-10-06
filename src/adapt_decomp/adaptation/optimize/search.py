@@ -32,6 +32,7 @@ from adapt_decomp.adaptation.optimize.scoring import (
     DEFAULT_PARAM_SPACE,
     ObjectiveName,
     build_trial_config,
+    param_distributions,
     pool_trial,
     suggest_overrides,
     validate_objectives,
@@ -411,7 +412,17 @@ def optimize_adapt_decomp(
     groups = [] if in_process else [start_workers(pool, shards) for _ in range(plan.n_groups)]
     torch_threads = torch.get_num_threads()
     try:
-        run_trials(study, _trial_objective, n_trials, n_jobs, n_startup, n_cores, plan, callbacks)
+        run_trials(
+            study,
+            _trial_objective,
+            n_trials,
+            n_jobs,
+            n_startup,
+            n_cores,
+            plan,
+            callbacks,
+            param_distributions(param_space),
+        )
     finally:
         for group in groups:
             for executor in set(group.values()):

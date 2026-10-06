@@ -12,6 +12,12 @@ from typing import Any, Dict, Literal, Optional, Tuple, Union
 import numpy as np
 import optuna
 import torch
+from optuna.distributions import (
+    BaseDistribution,
+    CategoricalDistribution,
+    FloatDistribution,
+    IntDistribution,
+)
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.core import AdaptDecomp
@@ -93,11 +99,10 @@ def _roa_loss(roa_mean: float, diverged: bool) -> float:
     return 100.0 - roa_mean
 
 
-def suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
-    """Suggest one value per param_space entry for this trial.
+def param_distributions(param_space: dict) -> Dict[str, BaseDistribution]:
+    """The Optuna distribution of each param_space entry.
 
     Args:
-        trial (optuna.trial.Trial): Current Optuna trial.
         param_space (dict): Maps parameter name to a (kind, low, high)
             tuple, where kind is "log_float", "float", or "int", with an
             optional step for "float" and "int": (kind, low, high, step)
@@ -105,24 +110,55 @@ def suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
             picks from a list. See optimize_adapt_decomp's docstring for
             the full format and DEFAULT_PARAM_SPACE.
 
+    Raises:
+        ValueError: If an entry's kind is unknown.
+
+    Returns:
+        Dict[str, BaseDistribution]: Parameter name -> its distribution.
+    """
+    distributions = {}
+    for name, spec in param_space.items():
+        kind = spec[0]
+        step = spec[3] if len(spec) > 3 else None
+        if kind == "log_float":
+            distributions[name] = FloatDistribution(spec[1], spec[2], log=True)
+        elif kind == "float":
+            distributions[name] = FloatDistribution(spec[1], spec[2], step=step)
+        elif kind == "int":
+            distributions[name] = IntDistribution(spec[1], spec[2], step=step or 1)
+        elif kind == "categorical":
+            distributions[name] = CategoricalDistribution(spec[1])
+        else:
+            raise ValueError(f"Unknown param_space kind: {kind!r}")
+    return distributions
+
+
+def suggest_overrides(trial: optuna.trial.Trial, param_space: dict) -> dict:
+    """Suggest one value per param_space entry for this trial.
+
+    A trial asked with study.ask(param_distributions(param_space)) already
+    holds every value, so this only reads them back.
+
+    Args:
+        trial (optuna.trial.Trial): Current Optuna trial.
+        param_space (dict): See param_distributions.
+
     Returns:
         dict: Parameter name -> suggested value, one entry per param_space
         key.
     """
     overrides = {}
-    for name, spec in param_space.items():
-        kind = spec[0]
-        step = spec[3] if len(spec) > 3 else None
-        if kind == "log_float":
-            overrides[name] = trial.suggest_float(name, spec[1], spec[2], log=True)
-        elif kind == "float":
-            overrides[name] = trial.suggest_float(name, spec[1], spec[2], step=step)
-        elif kind == "int":
-            overrides[name] = trial.suggest_int(name, spec[1], spec[2], step=step or 1)
-        elif kind == "categorical":
-            overrides[name] = trial.suggest_categorical(name, spec[1])
+    for name, dist in param_distributions(param_space).items():
+        if isinstance(dist, FloatDistribution):
+            overrides[name] = trial.suggest_float(
+                name, dist.low, dist.high, step=dist.step, log=dist.log
+            )
+        elif isinstance(dist, IntDistribution):
+            overrides[name] = trial.suggest_int(
+                name, dist.low, dist.high, step=dist.step, log=dist.log
+            )
         else:
-            raise ValueError(f"Unknown param_space kind: {kind!r}")
+            overrides[name] = trial.suggest_categorical(name, dist.choices)
     return overrides
 
 

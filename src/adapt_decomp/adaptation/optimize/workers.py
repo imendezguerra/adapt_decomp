@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import optuna
 import torch
 from loguru import logger
+from optuna.distributions import BaseDistribution
 
 from adapt_decomp.adaptation.optimize.resources import ResourcePlan
 from adapt_decomp.adaptation.optimize.scoring import score_dataset
@@ -135,12 +136,15 @@ def run_trials(
     n_cores: int,
     plan: ResourcePlan,
     callbacks: List[Callable[[optuna.Study, optuna.trial.FrozenTrial], None]],
+    distributions: Dict[str, BaseDistribution],
 ) -> None:
     """Run trials in batches: ask a batch, run it on free worker groups, tell it in trial order.
 
     The sampler's random start-up trials form one batch, the rest batches of
-    n_jobs; a batch larger than plan.n_groups runs in waves. The suggested
-    parameters therefore depend on n_jobs and the seed, not on n_cores.
+    n_jobs; a batch larger than plan.n_groups runs in waves. Every parameter is
+    drawn when its trial is asked, in trial order on this thread, so the
+    suggestions depend only on n_jobs and the seed, not on n_cores or on which
+    worker thread starts first.
 
     Args:
         study (optuna.Study): The study to fill.
@@ -152,6 +156,8 @@ def run_trials(
         n_cores (int): Cores the search may use.
         plan (ResourcePlan): Worker groups to run on.
         callbacks (List[Callable]): Called with (study, trial) after each tell.
+        distributions (Dict[str, BaseDistribution]): Every searched parameter's
+            distribution (see param_distributions), drawn at ask time.
 
     Returns:
         None
@@ -176,7 +182,7 @@ def run_trials(
             n_threads = max(1, n_cores // (running * plan.workers_per_group))
 
             # Ask the batch, run it, tell it in trial order
-            trials = [study.ask() for _ in range(size)]
+            trials = [study.ask(distributions) for _ in range(size)]
             futures = [executor.submit(run, trial, n_threads) for trial in trials]
             for trial, future in zip(trials, futures):
                 try:

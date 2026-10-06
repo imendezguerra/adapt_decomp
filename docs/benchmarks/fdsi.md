@@ -15,7 +15,7 @@ The benchmark runs in three stages:
    that match a simulated motor unit (`select_supervised(roa_th=0.9)`).
 2. **Search** the adaptation's hyperparameters (`wh_learning_rate`, `sv_learning_rate`,
    `centroid_momentum`) on a pool of three recordings: subject 1, 30 dB, triangular ramps of
-   40, 10 and 5 s. Five searches, 50 trials each:
+   40, 10 and 5 s. Five searches, 100 trials each, one at a time after 15 random start-up trials:
    - `sv_loss`, averaged or summed over units;
    - a Pareto front of `wh_loss` and `sv_loss`, averaged or summed, choosing the member with
      the lowest `sv_loss`;

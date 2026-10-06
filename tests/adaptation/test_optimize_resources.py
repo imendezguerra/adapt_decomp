@@ -3,6 +3,8 @@ batched trial loop (workers.py). Planning and checks are pure logic;
 end-to-end searches are marked slow.
 """
 
+import time
+
 import numpy as np
 import optuna
 import psutil
@@ -25,7 +27,7 @@ from adapt_decomp.adaptation.optimize.resources import (
     _shard,
     plan_search_resources,
 )
-from adapt_decomp.adaptation.optimize.scoring import suggest_overrides
+from adapt_decomp.adaptation.optimize.scoring import param_distributions, suggest_overrides
 from adapt_decomp.adaptation.optimize.search import _make_study
 from adapt_decomp.utils.loaders import emg_shape
 
@@ -158,6 +160,37 @@ def test_batched_start_up_trials_match_a_one_at_a_time_search(make_memory_pool):
         expected.append(suggest_overrides(trial, DEFAULT_PARAM_SPACE))
         reference.tell(trial, 1.0)
     assert [log["params"] for log in seen] == expected
+
+
+def test_parameters_are_drawn_in_trial_order_whichever_thread_suggests_first():
+    """Concurrent trials (here later ones reach suggest first) get the seed's draws in trial order."""
+    n_trials = 8
+
+    def objective(trial, group, n_threads):
+        time.sleep(0.02 * (n_trials - trial.number))
+        suggest_overrides(trial, DEFAULT_PARAM_SPACE)
+        return 1.0
+
+    study = _make_study(("sv_loss",), None, 7, n_jobs=1)
+    workers.run_trials(
+        study,
+        objective,
+        n_trials,
+        n_jobs=1,
+        n_startup=n_trials,
+        n_cores=4,
+        plan=ResourcePlan(4, 1),
+        callbacks=[],
+        distributions=param_distributions(DEFAULT_PARAM_SPACE),
+    )
+
+    reference = _make_study(("sv_loss",), None, 7, n_jobs=1)
+    expected = []
+    for _ in range(n_trials):
+        trial = reference.ask()
+        expected.append(suggest_overrides(trial, DEFAULT_PARAM_SPACE))
+        reference.tell(trial, 1.0)
+    assert [t.params for t in study.trials] == expected
 
 
 @pytest.mark.slow

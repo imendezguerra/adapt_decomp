@@ -96,7 +96,7 @@ def test_full_spec_is_the_planned_benchmark():
     assert spec.grid.cal_end == 5 * 2048
     for search in spec.searches.values():
         assert search.unit_selection is None
-        assert search.n_trials == 50 and search.n_jobs == 1
+        assert search.n_trials == 100 and search.n_jobs == 1
         assert "centroid_momentum" in search.param_space
         neuromotion = {"wh_learning_rate": 7e-3, "sv_learning_rate": 3e-3, "centroid_momentum": 0.8}
         assert search.initial_params == [neuromotion]  # read from the preset file

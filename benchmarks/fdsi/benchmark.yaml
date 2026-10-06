@@ -38,7 +38,7 @@ search:                    # Shared by every search; the keys of configs/sweep_c
   param_space: null        # DEFAULT_PARAM_SPACE: wh_learning_rate, sv_learning_rate (log), centroid_momentum (0.1-0.9, step 0.1)
   initial_params:          # Run first: a config file (its searched values) or {param: value} sets
     - src/adapt_decomp/adaptation/presets/neuromotion.yaml   # wh 7e-3, sv 3e-3, momentum 0.8
-  n_trials: 50
+  n_trials: 100
   n_jobs: 1                # Trials suggested together; 1 updates the sampler after every trial
   threads_per_run: 4       # Torch threads per run (same results, ~2.5x faster); cores per search = n_jobs x pool size x this
   random_seed: 42
