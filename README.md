@@ -9,7 +9,7 @@
 ## Overview
 <!-- --8<-- [start:overview] -->
 adapt_decomp decomposes high-density electromyography (HD-EMG) into motor unit firings during
-dynamic contractions, in real time (about 22 ms per 100 ms batch on a CPU). It calibrates a
+dynamic contractions, in real time (about 40 ms per 100 ms batch on 8 CPU cores). It calibrates a
 decomposition on a short window, then adapts it batch by batch as the contraction changes, as
 described in [Mendez Guerra et al., J. Neural Eng., 2024](https://dx.doi.org/10.1088/1741-2552/ad5ebf).
 It is written in Python with PyTorch.
@@ -71,28 +71,31 @@ calibrates, adapts and scores a synthetic recording in a few minutes on a CPU. D
 first (70 MB):
 
 ```sh
-adapt-decomp-data get fdsi_example-data
+adapt-decomp data get fdsi_example-data
 ```
 
 ## Documentation
 
-The documentation, **<https://imendezguerra.github.io/adapt_decomp/>**, has the quickstart and
-a tutorial, a user guide to calibration, adaptation and hyperparameter optimisation with their
-parameters, how-to guides, the FDSI benchmark and the API reference.
+The documentation, **<https://imendezguerra.github.io/adapt_decomp/>**, has the quickstart, the
+API concepts (calibration, adaptation and hyperparameter optimisation, with their parameters), a
+user guide of recipes, including the `adapt-decomp` command line, an example on the paper's
+simulated contraction, the FDSI benchmark and the API reference.
 
 ## Data
 
-The example, tutorial and benchmark datasets are published on Zenodo. `adapt-decomp-data list`
-shows them, and `adapt-decomp-data get <archive>` downloads one into `data/`. See
+The example, paper example and benchmark datasets are published on Zenodo. `adapt-decomp data list`
+shows them, and `adapt-decomp data get <archive>` downloads one into `data/`. See
 [Get the data](https://imendezguerra.github.io/adapt_decomp/getting-started/installation/#get-the-data).
 
 ## FDSI benchmark
 
 [`benchmarks/fdsi/`](https://github.com/imendezguerra/adapt_decomp/tree/main/benchmarks/fdsi)
 runs `adapt_decomp` on 100 synthetic HD-EMG recordings with ground truth (5 subjects × 5
-contractions × 4 SNR levels) as one cached, reproducible pipeline, locally or on a PBS cluster.
-See its [description](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/) and
-[results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/report/).
+contractions × 4 SNR levels): four notebooks that show each stage on one recording and run it on
+all of them, also from the command line or on a PBS cluster. Each version's results are in
+`benchmarks/fdsi/results/`. See its
+[description](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/) and
+[results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/4_results/).
 
 ## Contributing
 

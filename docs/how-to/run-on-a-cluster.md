@@ -21,10 +21,9 @@ cores become torch threads per run (on FDSI, with identical spikes). See
 
 The [FDSI benchmark](../benchmarks/fdsi.md) is a complete template:
 
-- a spec file declares the experiment;
-- `python -m benchmarks.fdsi <stage>` runs one task per array index (`--array-index`,
-  defaulting to `$PBS_ARRAY_INDEX`);
-- outputs are cached by content, and each one records its provenance;
+- `config.yaml` declares the experiment;
+- `python -m benchmarks.fdsi <stage>` runs one chunk of tasks per array index (`--index`,
+  defaulting to `$PBS_ARRAY_INDEX`), skipping those whose outputs exist;
 - `benchmarks/fdsi/pbs/submit.sh` chains the stages on PBS Pro.
 
 ```sh
@@ -33,7 +32,7 @@ bash benchmarks/fdsi/pbs/submit.sh
 ```
 
 To benchmark your own data, copy `benchmarks/fdsi/`, replace `fdsi.py`'s paths and loaders
-with your dataset's, and edit the spec.
+with your dataset's, and edit `config.yaml`.
 
 ## Reproducibility
 

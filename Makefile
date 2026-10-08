@@ -16,7 +16,7 @@ test-all:
 	pytest
 
 data:
-	adapt-decomp-data get neuromotion-data
+	adapt-decomp data get neuromotion-data
 
 repro:
 	pytest tests/reproducibility -m repro

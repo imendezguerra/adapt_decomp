@@ -25,6 +25,9 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+        # Python only: ruff also formats Markdown code blocks, which breaks the docs'
+        # snippet markers (--8<-- "file.py:section")
+        types_or: [python, pyi]
 
   - repo: local
     hooks:

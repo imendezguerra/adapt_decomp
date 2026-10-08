@@ -1,0 +1,18 @@
+# adapt_decomp v1.0.0 on the FDSI benchmark, frozen from its published outputs
+# (notebooks/fdsi_benchmark/ at the v1.0.0 tag) and scored by v1.1.0's code: RoA over the
+# whole recording and SIL, per unit (units.csv). configs/ holds each branch's applied config.
+version: v1.0.0
+commit: v1.0.0
+outputs_doi: 10.5281/zenodo.22882323   # adaptation/ and calibration/ pickles, ~11 GB
+notes: >-
+  Adapted each recording from its first sample; searched only wh_learning_rate and
+  sv_learning_rate (centroid_momentum fixed at 0.95) in 50 trials; summed sv_loss over units;
+  applied each search's winner with lr_mode "fixed" and "rel_error".
+labels:
+  fixed: No adaptation
+  lr_fixed_tpe_sv_median: sv_loss
+  lr_fixed_tpe_pareto: Pareto min-sv
+  lr_fixed_tpe_roa: RoA (oracle)
+  lr_relerror_tpe_sv_median: sv_loss, rel_error
+  lr_relerror_tpe_pareto: Pareto min-sv, rel_error
+  lr_relerror_tpe_roa: RoA (oracle), rel_error

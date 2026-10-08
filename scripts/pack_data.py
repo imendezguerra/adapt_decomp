@@ -50,6 +50,11 @@ data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_metadata.json               sim
 Load them with adapt_decomp.utils.load_emg and load_gt.
 """
 
+# A benchmark version's outputs archive (<dataset>/outputs/<version>): the applied configs'
+# spikes and sources, and the searches. Its calibrations embed the raw EMG, so they are left out
+# and recomputed from the data archive.
+OUTPUT_FOLDERS = ("results", "searches")
+
 
 def archive_members(name: str, data_root: Path) -> List[Tuple[Path, str]]:
     """List an archive's files and their names inside the zip.
@@ -66,7 +71,7 @@ def archive_members(name: str, data_root: Path) -> List[Tuple[Path, str]]:
         ValueError: If a file the archive needs is missing.
     """
     unpacks_to = ARCHIVES[name][1]
-    dataset, kind = unpacks_to.split("/")
+    dataset, kind = unpacks_to.split("/")[:2]
 
     if name == "fdsi_example-data":
         members = [
@@ -75,9 +80,11 @@ def archive_members(name: str, data_root: Path) -> List[Tuple[Path, str]]:
         ]
     else:
         source_dir = data_root / unpacks_to
+        sources = [source_dir / f for f in OUTPUT_FOLDERS] if kind == "outputs" else [source_dir]
         members = [
             (path, path.relative_to(data_root).as_posix())
-            for path in sorted(source_dir.rglob("*"))
+            for source in sources
+            for path in sorted(source.rglob("*"))
             if path.is_file()
         ]
         # The dataset README rides in its data archive only, so no two archives share a path

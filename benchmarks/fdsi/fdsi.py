@@ -1,16 +1,15 @@
 """The FDSI dataset: raw-data paths and loaders, triangular phases and per-unit metrics, for the
 benchmark stages and the dataset tour."""
 
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 
-from adapt_decomp import AdaptationResult, CBSSResult
+from adapt_decomp import CBSSResult
 from adapt_decomp.spikes import rate_of_agreement_paired
 from adapt_decomp.utils import load_emg, load_gt
 
@@ -133,25 +132,22 @@ def load_noise_metadata(data_root: Path, rec: Recording) -> Dict:
         return json.load(f)
 
 
-def load_gt_full_bin(
-    data_root: Path, rec: Recording, cbss_result: CBSSResult, n_samples: int
-) -> Optional[np.ndarray]:
-    """Ground-truth spikes for one recording, matched and ordered to its calibration's units.
+def load_gt_matched(
+    data_root: Path, rec: Recording, gt_unit: np.ndarray, n_samples: int
+) -> np.ndarray:
+    """Ground-truth spikes of one recording's calibrated units, in their order.
 
     Args:
         data_root (Path): Raw data root (<dataset>/data).
         rec (Recording): The recording.
-        cbss_result (CBSSResult): This recording's calibration.
+        gt_unit (np.ndarray): The simulated motor unit each calibrated unit matches, (units,).
         n_samples (int): Number of samples to densify the ground truth to.
 
     Returns:
-        Optional[np.ndarray]: Binary ground truth with shape (n_samples, units), or
-        None if cbss_result.gt_matched_indices is None (no supervised match).
+        np.ndarray: Binary ground truth with shape (n_samples, units).
     """
-    if cbss_result.gt_matched_indices is None:
-        return None
     gt_full_bin = load_gt(gt_spikes_path(data_root, rec.sub, rec.cond), n_samples=n_samples)
-    return gt_full_bin[:, cbss_result.gt_matched_indices]
+    return gt_full_bin[:, np.asarray(gt_unit, dtype=np.int64)]
 
 
 # Metrics
@@ -198,31 +194,9 @@ def compute_roa_subset(
     return roa
 
 
-def _calibration_unit_columns(calibration: CBSSResult) -> Dict[str, np.ndarray]:
-    """The calibration's per-unit ground-truth match and its RoA over the calibration window.
-
-    Args:
-        calibration (CBSSResult): The calibration, normally narrowed by select_supervised.
-
-    Returns:
-        Dict[str, np.ndarray]: "gt_unit" (the matched simulation motor unit's index,
-        -1 without a supervised match) and "roa_calib" (0-1, NaN without one),
-        each with shape (units,).
-    """
-    n_units = calibration.spikes.shape[1]
-    gt_unit = calibration.gt_matched_indices
-    roa = calibration.roa
-    return {
-        "gt_unit": np.full(n_units, -1) if gt_unit is None else np.asarray(gt_unit, dtype=np.int64),
-        "roa_calib": np.full(n_units, np.nan) if roa is None else np.asarray(roa, dtype=float),
-    }
-
-
-def _labels(rec: Recording, n_units: int, branch: Optional[str] = None) -> Dict[str, list]:
-    """The columns that identify a per-unit table's recording (and applied config)."""
+def _labels(rec: Recording, n_units: int) -> Dict[str, list]:
+    """The columns that identify a per-unit table's recording."""
     labels = {"recording": rec.stub, "sub": rec.sub, "condition": rec.cond, "snr": rec.snr}
-    if branch is not None:
-        labels = {"branch": branch, **labels}
     return {k: [v] * n_units for k, v in labels.items()}
 
 
@@ -230,7 +204,7 @@ def calibration_unit_metrics(calibration: CBSSResult, rec: Recording) -> pd.Data
     """Per-unit metrics of one calibration: its ground-truth match, RoA, SIL and CoV-ISI.
 
     Args:
-        calibration (CBSSResult): The calibration, normally narrowed by select_supervised.
+        calibration (CBSSResult): The calibration, narrowed by select_supervised.
         rec (Recording): Its recording.
 
     Returns:
@@ -240,26 +214,23 @@ def calibration_unit_metrics(calibration: CBSSResult, rec: Recording) -> pd.Data
         sil_calib and cov_isi_calib.
     """
     n_units = calibration.spikes.shape[1]
-    nan = np.full(n_units, np.nan)
     return pd.DataFrame(
         {
             **_labels(rec, n_units),
             "unit": np.arange(n_units),
-            **_calibration_unit_columns(calibration),
-            "sil_calib": nan
-            if calibration.sil is None
-            else np.asarray(calibration.sil, dtype=float),
-            "cov_isi_calib": nan
-            if calibration.cov_isi is None
-            else np.asarray(calibration.cov_isi, dtype=float),
+            "gt_unit": np.asarray(calibration.gt_matched_indices, dtype=np.int64),
+            "roa_calib": np.asarray(calibration.roa, dtype=float),
+            "sil_calib": np.asarray(calibration.sil, dtype=float),
+            "cov_isi_calib": np.asarray(calibration.cov_isi, dtype=float),
         }
     )
 
 
 def unit_metrics(
-    outputs: AdaptationResult,
-    gt_full_bin: Optional[np.ndarray],
-    calibration: CBSSResult,
+    spikes: np.ndarray,
+    sil: np.ndarray,
+    gt_full_bin: np.ndarray,
+    gt_unit: np.ndarray,
     rec: Recording,
     branch: str,
     *,
@@ -268,14 +239,13 @@ def unit_metrics(
     fs: int,
     tol_spike_ms: float,
 ) -> pd.DataFrame:
-    """Per-unit metrics of one result: RoA over several windows, SIL and spike counts.
+    """Per-unit metrics of one applied config: RoA over several windows, SIL and spike counts.
 
     Args:
-        outputs (AdaptationResult): The adaptation result, with sil set.
-        gt_full_bin (Optional[np.ndarray]): Binary ground truth with shape
-            (samples, units), or None without a supervised match (RoA columns NaN).
-        calibration (CBSSResult): The calibration the result started from (its
-            units, in the same order).
+        spikes (np.ndarray): Binary spikes over the whole recording, (samples, units).
+        sil (np.ndarray): Per-unit SIL over the whole recording, (units,).
+        gt_full_bin (np.ndarray): Matched binary ground truth, (samples, units).
+        gt_unit (np.ndarray): The simulated motor unit each unit matches, (units,).
         rec (Recording): The recording; phase RoA is computed for triangular
             conditions only.
         branch (str): The applied config.
@@ -285,13 +255,11 @@ def unit_metrics(
         tol_spike_ms (float): Spike-alignment tolerance in ms.
 
     Returns:
-        pd.DataFrame: One row per unit: branch, recording, sub, condition, snr,
-        unit, gt_unit (the matched simulation motor
-        unit), roa_calib (the calibration's RoA), roa_full, roa_after_cal,
-        roa_<phase> for each of PHASES (NaN for non-triangular conditions), sil,
-        n_spikes and n_spikes_gt (RoA as a 0-1 fraction).
+        pd.DataFrame: One row per unit: branch, recording, sub, condition, snr, unit,
+        gt_unit, roa_full, roa_after_cal, roa_<phase> for each of PHASES (NaN for
+        non-triangular conditions), sil, n_spikes and n_spikes_gt (RoA as a 0-1 fraction).
     """
-    spikes = outputs.spikes.numpy().astype(np.float32)
+    spikes = np.asarray(spikes, dtype=np.float32)
     n_samples, n_units = spikes.shape
     nan = np.full(n_units, np.nan)
 
@@ -301,38 +269,20 @@ def unit_metrics(
         windows.update(get_triangular_phases(n_samples, cal_end, iso_dur))
     roa = {
         name: compute_roa_subset(gt_full_bin, spikes, s, fs, tol_spike_ms)
-        if gt_full_bin is not None
-        else nan
         for name, s in windows.items()
     }
 
     return pd.DataFrame(
         {
-            **_labels(rec, n_units, branch),
+            "branch": [branch] * n_units,
+            **_labels(rec, n_units),
             "unit": np.arange(n_units),
-            **_calibration_unit_columns(calibration),
+            "gt_unit": np.asarray(gt_unit, dtype=np.int64),
             "roa_full": roa["full"],
             "roa_after_cal": roa["after_cal"],
             **{f"roa_{phase}": roa.get(phase, nan) for phase in PHASES},
-            "sil": outputs.sil if outputs.sil is not None else nan,
+            "sil": np.asarray(sil, dtype=float),
             "n_spikes": spikes.sum(axis=0).astype(np.int64),
-            "n_spikes_gt": gt_full_bin.sum(axis=0).astype(np.int64)
-            if gt_full_bin is not None
-            else np.full(n_units, -1),
+            "n_spikes_gt": gt_full_bin.sum(axis=0).astype(np.int64),
         }
     )
-
-
-def spikes_digest(spikes: np.ndarray) -> str:
-    """SHA-256 of a spike train, identical for identical spikes on any platform.
-
-    Args:
-        spikes (np.ndarray): Binary spikes with shape (samples, units).
-
-    Returns:
-        str: Hex digest of the shape and the spikes as contiguous int8.
-    """
-    spikes = np.ascontiguousarray(np.asarray(spikes) != 0, dtype=np.int8)
-    digest = hashlib.sha256(np.asarray(spikes.shape, dtype=np.int64).tobytes())
-    digest.update(spikes.tobytes())
-    return digest.hexdigest()

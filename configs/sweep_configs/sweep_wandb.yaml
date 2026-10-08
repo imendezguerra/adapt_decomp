@@ -1,6 +1,6 @@
-# Default wandb parameter space, for scripts/run.py's run_wandb command.
+# wandb sweep config for adapt-decomp wandb_sweep (pip install "adapt-decomp[wandb]").
 
-sweep_counts: 100  # Overridable via run_wandb's --sweep_counts; popped before being
+sweep_counts: 100  # Overridable via wandb_sweep's --sweep_counts; popped before being
                   # passed to wandb.sweep() itself, which doesn't know this key.
 
 method: "bayes"  # Bayesian optimization for efficient searching

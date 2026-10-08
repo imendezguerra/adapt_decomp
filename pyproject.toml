@@ -60,13 +60,12 @@ dependencies = [
     "psutil>=5.9",             # memory check before an optimize_adapt_decomp search
     "pyyaml>=6.0",
     "torch>=2.7",              # pip version (CPU by default); 2.7 adds slogdet on MPS
-    "wandb>=0.16.4",
     "optuna>=3.5",
     "cmaes>=0.10",             # required by optuna.samplers.CmaEsSampler
     "loguru>=0.7",
     "plotly>=5.18",
     "tqdm>=4.66",
-    "typer>=0.12",             # scripts/run.py's CLI
+    "typer>=0.12",             # the adapt-decomp and adapt-decomp-data commands
 ]
 
 [project.urls]
@@ -77,10 +76,13 @@ Issues = "https://github.com/imendezguerra/adapt_decomp/issues"
 Changelog = "https://imendezguerra.github.io/adapt_decomp/changelog/"
 
 [project.scripts]
-adapt-decomp-data = "adapt_decomp.utils.download:app"
+adapt-decomp = "adapt_decomp.cli:app"
+adapt-decomp-data = "adapt_decomp.utils.download:app"   # alias of adapt-decomp data
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6", "pre-commit>=3", "ipykernel>=6.29"]
+# Logging adaptations and searches to wandb: adapt-decomp optimize_adapt_decomp --wandb_project, wandb_sweep
+wandb = ["wandb>=0.16.4"]
 # The documentation site (mkdocs.yml): mkdocs build --strict
 docs = [
     "mkdocs>=1.6,<2",          # MkDocs 2 drops the plugin system the site relies on

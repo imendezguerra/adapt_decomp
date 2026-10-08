@@ -79,9 +79,9 @@ class AdaptConfig(_LegacyConfig):
         save_params (bool): Whether to write the adapted parameters of every batch to
             the HDF5 file given as save_path.
         wh_learning_rate (float): Step size of the whitening update. NeuroMotion: 7e-3 |
-            Wrist: 1e-3 | Forearm: 2e-3 | MUniverse: 4.7e-4.
+            Wrist: 1e-3 | Forearm: 2e-3 | MUniverse: 3.3e-2.
         sv_learning_rate (float): Step size of the separation-vector update.
-            NeuroMotion: 3e-3 | Wrist: 5e-4 | Forearm: 5e-4 | MUniverse: 1e-3.
+            NeuroMotion: 3e-3 | Wrist: 5e-4 | Forearm: 5e-4 | MUniverse: 4.9e-3.
         lr_mode (Literal["fixed", "rel_error"]): "fixed" takes a plain step of the
             learning rate along the gradient (the 1.0 behaviour); "rel_error" scales a
             unit-norm step by the normalised error, so it shrinks as the error does.
@@ -102,7 +102,7 @@ class AdaptConfig(_LegacyConfig):
         spike_det_exp (float): Power the source is raised to before peak detection.
         centroid_momentum (float): Momentum of the spike and baseline centroid updates,
             from 0 (follow each batch) to 1 (never move). NeuroMotion, Wrist, Forearm:
-            0.8 | MUniverse: 0.95.
+            0.8 | MUniverse: 0.6.
         shrinkage (float): Tikhonov shrinkage added to the whitening FIFO covariance.
         eps (float): Numerical stability floor.
         safety_clip_multiplier_wh (float): Caps the relative size of each whitening
@@ -287,19 +287,3 @@ def preset_path(name: str) -> Path:
     if name not in PRESETS:
         raise ValueError(f"Unknown preset: {name!r}. Expected one of {list(PRESETS)}.")
     return Path(str(files("adapt_decomp.adaptation") / "presets" / f"{name}.yaml"))
-
-
-def load_yaml(file_path: str) -> Dict:
-    """Load a YAML file into a dictionary."""
-    with open(file_path, "r") as f:
-        return yaml.safe_load(f)
-
-
-def load_config(defaults_path: str, wandb_config=None) -> AdaptConfig:
-    """Load YAML config and apply optional wandb sweep overrides."""
-    defaults = load_yaml(defaults_path)
-    if wandb_config:
-        for key, value in wandb_config.items():
-            if key in defaults:
-                defaults[key] = value
-    return AdaptConfig(**defaults)

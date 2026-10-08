@@ -1,0 +1,60 @@
+# The FDSI benchmark of adapt_decomp: the whole experiment, run by benchmarks/fdsi/pipeline.py
+# (the notebooks, or python -m benchmarks.fdsi). Paths are relative to the repository root.
+# Outputs go to <outputs_root>/<version>/, the results to <results_root>/<version>/; a new
+# version (or changed settings) means a new version name.
+
+version: v1.1.0
+previous: v1.0.0                         # The version 4_results compares this one with
+data_root: data/fdsi_benchmark/data      # Raw recordings (adapt-decomp data get fdsi_benchmark-data)
+outputs_root: data/fdsi_benchmark/outputs
+results_root: benchmarks/fdsi/results
+
+grid:
+  subjects: [sub-01, sub-02, sub-03, sub-04, sub-05]
+  conditions: [staircase, triangular-ramp40s, triangular-ramp20s, triangular-ramp10s, triangular-ramp5s]
+  snr_levels: [30, 25, 20, 15]
+  fs: 2048                 # Sampling frequency (Hz)
+  cal_duration_s: 5.0      # Calibration window, from the start of each recording (s)
+  iso_duration_s: 5.0      # Isometric bookends of the triangular contractions (s)
+  tol_spike_ms: 2.0        # Spike-alignment tolerance of every RoA (ms)
+
+calibration:
+  cbss_config: {fs: 2048, ext_fact: 10, sil_th: 0.9, random_seed: 42, ica_iter: 300, search_iter: 300, save_emg: true, device: cpu}
+  supervised_roa_th: 0.9   # Keep only units matching a ground-truth unit with RoA >= this
+
+pool:                      # The recordings every search runs on
+  subject: sub-01
+  snr: 30
+  conditions: [triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
+
+search:                    # Shared by every search: optimize_adapt_decomp's arguments
+  base_config: src/adapt_decomp/adaptation/presets/neuromotion.yaml
+  overrides: {lr_mode: fixed, source_fifo_from_calib: true, device: cpu}
+  param_space: null        # DEFAULT_PARAM_SPACE: wh_learning_rate, sv_learning_rate (log), centroid_momentum (0.1-0.9, step 0.1)
+  initial_params:          # Run first: a config file (its searched values) or {param: value}
+    - src/adapt_decomp/adaptation/presets/neuromotion.yaml
+  n_trials: 100
+  n_jobs: 1                # Trials suggested together; 1 updates the sampler after every trial
+  n_cores: null            # Cores per search, null for every core available: speed only
+  random_seed: 42
+  unit_selection: null     # The calibrations already keep only ground-truth-matched units
+  compute_roa: true
+
+searches:                  # Each overrides the shared settings; sv_loss_reduction sets the AdaptConfig's
+  sv_mean:     {objectives: [sv_loss], sv_loss_reduction: mean}
+  sv_sum:      {objectives: [sv_loss], sv_loss_reduction: sum}
+  pareto_mean: {objectives: [wh_loss, sv_loss], selection: min_sv_loss, sv_loss_reduction: mean}
+  pareto_sum:  {objectives: [wh_loss, sv_loss], selection: min_sv_loss, sv_loss_reduction: sum}
+  roa:         {objectives: [roa]}
+
+fixed_config: src/adapt_decomp/adaptation/presets/fixed.yaml   # The no-adaptation baseline
+
+quick:                     # --quick: a check of the whole pipeline in ~20 min on a laptop (numbers not meaningful)
+  grid:
+    subjects: [sub-01]
+    conditions: [staircase, triangular-ramp40s, triangular-ramp10s, triangular-ramp5s]
+    snr_levels: [30]
+  calibration:
+    cbss_config: {ica_iter: 100, search_iter: 40}
+  search:
+    n_trials: 4

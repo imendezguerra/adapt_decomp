@@ -52,14 +52,14 @@ archive's contents change, so a code release doesn't force a new upload of uncha
 
 ## Data archives
 
-`adapt-decomp-data` downloads the archives listed in `ARCHIVES`
+`adapt-decomp data` downloads the archives listed in `ARCHIVES`
 (`src/adapt_decomp/utils/download.py`), each pinned to a Zenodo **version** DOI. An archive with
 an empty DOI is packed but not published yet. Archives are named `adapt_decomp-<dataset>-<kind>.zip`
 and every entry carries its full path from `data/`, so any subset unpacks with
 `unzip '*.zip' -d data/`.
 
 For each archive that is new or changed in this release (for 1.1.0: `fdsi_example-data`, new,
-and `fdsi_benchmark-outputs`, with the v1.1 benchmark outputs):
+and `fdsi_benchmark-outputs-v1.1.0`, new, the v1.1.0 benchmark's outputs):
 
 1. **Pack** it into `dist/`, and check the entries (they must start with the dataset folder,
    never `data/` or an absolute path):
@@ -68,7 +68,7 @@ and `fdsi_benchmark-outputs`, with the v1.1 benchmark outputs):
     python -c "import zipfile; print(zipfile.ZipFile('dist/adapt_decomp-fdsi_example-data.zip').namelist()[:5])"
     ```
 2. **Rehearse** on [sandbox.zenodo.org](https://sandbox.zenodo.org), a throwaway copy of
-   Zenodo: create a record, upload, and download it with `adapt-decomp-data` pointed at it.
+   Zenodo: create a record, upload, and download it with `adapt-decomp data` pointed at it.
 3. **Create the draft** on Zenodo (*New upload*, or *New version* of an existing record), fill
    in the metadata (version, description, licence, related identifiers) and **reserve its
    DOI**.
@@ -84,22 +84,24 @@ and `fdsi_benchmark-outputs`, with the v1.1 benchmark outputs):
    into the dataset's README if it cites itself.
 6. **Publish** the draft, then check the download end to end:
     ```sh
-    adapt-decomp-data get fdsi_example-data --dest /tmp/check
+    adapt-decomp data get fdsi_example-data --dest /tmp/check
     ```
 
 ## Benchmark results
 
-The [Results](https://imendezguerra.github.io/adapt_decomp/benchmarks/fdsi/report/) page is
-rendered from the report notebook's stored outputs, which come from the full benchmark run:
+The benchmark pages are the notebooks of `benchmarks/fdsi/`, rendered from their stored
+outputs. When a release changes the benchmark's results:
 
-1. Commit everything: every output records its commit and whether the tree was dirty.
-2. On the cluster: `bash benchmarks/fdsi/pbs/submit.sh`. When it finishes, `verify` a few
-   tasks of each stage, e.g. `python -m benchmarks.fdsi verify apply --tasks 0,250,599`.
-3. Execute the report against the full tables and keep its outputs:
-   `jupyter nbconvert --to notebook --execute --inplace benchmarks/fdsi/report.ipynb`.
-   Remove its "Results pending" note, then commit it.
-4. Pack and publish the outputs as a new version of `fdsi_benchmark-outputs`
-   ([Data archives](#data-archives)).
+1. Set `version` (this release) and `previous` (the last benchmarked one) in
+   `benchmarks/fdsi/config.yaml`, and commit everything: `run.yaml` records the commit.
+2. On the cluster: `bash benchmarks/fdsi/pbs/submit.sh` (`--quick` first, to check the
+   pipeline). Its last job, `collect`, writes `benchmarks/fdsi/results/<version>/`.
+3. Execute the notebooks and keep their outputs, then commit them with the results:
+   `jupyter nbconvert --to notebook --execute --inplace benchmarks/fdsi/[1-4]_*.ipynb`
+   (1-3 need the data and the outputs, 4 only the results).
+4. Pack `fdsi_benchmark-outputs-<version>` (the outputs' `results/` and `searches/`) and
+   publish it as a new Zenodo record ([Data archives](#data-archives)), adding it to
+   `ARCHIVES`. Earlier versions' records stay as they are.
 
 ## Release checklist
 
@@ -120,7 +122,7 @@ rendered from the report notebook's stored outputs, which come from the full ben
     pip install torch --index-url https://download.pytorch.org/whl/cpu
     pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ adapt-decomp
     python -c "import adapt_decomp; print(adapt_decomp.__version__)"
-    adapt-decomp-data list
+    adapt-decomp data list
     ```
     TestPyPI also refuses a version it has already seen. To rehearse twice, use a pre-release
     version such as `1.1.0rc1`. The manual run also deploys the docs from `main`.

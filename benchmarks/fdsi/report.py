@@ -1,17 +1,18 @@
-"""Tables and comparisons behind report.ipynb: the collected tables with readable labels,
-paired per-unit comparisons, per-recording unit counts and search summaries. Reads only
-<outputs_root>/tables/, never the results themselves."""
+"""Tables and comparisons behind the notebooks: one version's results (results/<version>/)
+with readable labels, paired per-unit comparisons, per-recording unit counts, version
+comparisons and search summaries. Reads only the results in git, never the outputs."""
 
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+import yaml
 from scipy.stats import wilcoxon
 
 from adapt_decomp.adaptation.optimize import front_mask
-from benchmarks.fdsi.spec import FIXED_BRANCH, TABLES, BenchmarkSpec
 
+RESULTS_ROOT = Path(__file__).resolve().parent / "results"
 ROA_COLUMNS: Tuple[str, ...] = (
     "roa_calib",
     "roa_full",
@@ -34,93 +35,30 @@ SPLITS: Tuple[str, ...] = (
     "pool conditions, other recordings",
     "held-out conditions",
 )
-UNIT_KEYS: Tuple[str, ...] = ("sub", "condition", "snr", "unit")  # one unit, within this run
-
+UNIT_KEYS: Tuple[str, ...] = ("sub", "condition", "snr", "unit")  # one unit, within a version
 FIXED_LABEL = "No adaptation"
-SELECTION_LABELS = {"min_sv_loss": "min-sv", "knee": "knee", "max_roa_mean": "max-RoA"}
-
-
-# Labels
-
-
-def config_label(spec: BenchmarkSpec, branch: str) -> str:
-    """A readable label of an applied config, e.g. "Pareto min-sv, sum".
-
-    Args:
-        spec (BenchmarkSpec): The spec.
-        branch (str): FIXED_BRANCH or a search name.
-
-    Returns:
-        str: FIXED_LABEL for the baseline; otherwise the objective (sv_loss,
-        Pareto with its selection rule, or the RoA oracle) and, for loss-based
-        searches, how sv_loss is reduced across units.
-    """
-    if branch == FIXED_BRANCH:
-        return FIXED_LABEL
-    search = spec.searches[branch]
-    objectives = search.objectives
-    if objectives == ("roa",):
-        return "RoA (oracle)"
-    if len(objectives) > 1:
-        name = f"Pareto {SELECTION_LABELS.get(search.selection, search.selection)}"
-    else:
-        name = objectives[0]
-    reduction = search.overrides.get("sv_loss_reduction")
-    return f"{name}, {reduction}" if reduction else name
-
-
-def config_order(spec: BenchmarkSpec) -> List[str]:
-    """Config labels in the spec's order: the baseline, then each search.
-
-    Args:
-        spec (BenchmarkSpec): The spec.
-
-    Returns:
-        List[str]: One label per branch.
-    """
-    return [config_label(spec, branch) for branch in spec.branches]
-
-
-def split_of(spec: BenchmarkSpec, sub: str, cond: str, snr: int) -> str:
-    """How a recording relates to the searches' pool.
-
-    Args:
-        spec (BenchmarkSpec): The spec.
-        sub (str): Subject id.
-        cond (str): Condition name.
-        snr (int): SNR level in dB.
-
-    Returns:
-        str: One of SPLITS: a pool recording, a pool condition on another subject
-        or SNR, or a condition no search saw.
-    """
-    pool = spec.pool
-    if cond not in pool.conditions:
-        return SPLITS[2]
-    if sub == pool.subject and int(snr) == int(pool.snr):
-        return SPLITS[0]
-    return SPLITS[1]
 
 
 # Loading
 
 
-def _read_table(path: Path) -> pd.DataFrame:
-    """Read a collected CSV; one written from an empty table reads as an empty DataFrame."""
-    if not path.read_text().strip().strip('"'):
-        return pd.DataFrame()
-    return pd.read_csv(path)
+def split_of(pool: Dict[str, Any], sub: str, cond: str, snr: int) -> str:
+    """How a recording relates to the searches' pool (config's pool section): one of SPLITS."""
+    if cond not in pool["conditions"]:
+        return SPLITS[2]
+    if sub == pool["subject"] and int(snr) == int(pool["snr"]):
+        return SPLITS[0]
+    return SPLITS[1]
 
 
-def _add_recording_columns(spec: BenchmarkSpec, table: pd.DataFrame) -> pd.DataFrame:
-    """Add split, contraction and percent RoA columns to a per-recording or per-unit table."""
-    if not len(table):
-        return table
+def _add_recording_columns(table: pd.DataFrame, pool: Optional[Dict[str, Any]]) -> pd.DataFrame:
+    """Add split (with a pool), contraction and percent RoA columns to a per-unit table."""
     table = table.copy()
-    table["split"] = [
-        split_of(spec, sub, cond, snr)
-        for sub, cond, snr in zip(table["sub"], table["condition"], table["snr"])
-    ]
+    if pool is not None:
+        table["split"] = [
+            split_of(pool, sub, cond, snr)
+            for sub, cond, snr in zip(table["sub"], table["condition"], table["snr"])
+        ]
     table["contraction"] = np.where(
         table["condition"].str.contains("triangular"), "triangular", "staircase"
     )
@@ -130,40 +68,37 @@ def _add_recording_columns(spec: BenchmarkSpec, table: pd.DataFrame) -> pd.DataF
     return table
 
 
-def load_tables(spec: BenchmarkSpec) -> Dict[str, pd.DataFrame]:
-    """Load the collected tables, with readable labels and derived columns.
+def load_results(version: str, results_root: Path = RESULTS_ROOT) -> Dict[str, Any]:
+    """One version's results, with readable labels and derived columns.
 
     Args:
-        spec (BenchmarkSpec): The spec whose tables_dir to read.
-
-    Raises:
-        FileNotFoundError: If tables_dir or one of TABLES is missing, naming how
-            to produce them.
+        version (str): The version, a folder of results_root, e.g. "v1.1.0".
+        results_root (Path, optional): Defaults to benchmarks/fdsi/results.
 
     Returns:
-        Dict[str, pd.DataFrame]: Every table of TABLES. Tables with a branch or search column gain
-        "config" (config_label); per-recording and per-unit tables gain "split",
-        "contraction" and a "<roa column>_pct" (0-100) per RoA column.
+        Dict[str, Any]: "run" (its run.yaml), "labels" (branch -> label), and the tables it
+        has: "units" and "calibration_units" (with "config" from labels, "split" when run.yaml
+        records the pool, "contraction" and a "<roa column>_pct" per RoA column) and "trials"
+        (with "config").
     """
-    missing = [name for name in TABLES if not (spec.tables_dir / f"{name}.csv").exists()]
-    if missing:
-        raise FileNotFoundError(
-            f"No complete benchmark tables in {spec.tables_dir} (missing {missing}). Run the "
-            f"stages and then 'python -m benchmarks.fdsi collect --spec {spec.spec_ref}', or "
-            "download the published results tables."
+    folder = Path(results_root) / version
+    with open(folder / "run.yaml", encoding="utf-8") as f:
+        run = yaml.safe_load(f)
+    pool = (run.get("config") or {}).get("pool")
+    results: Dict[str, Any] = {"run": run, "labels": run["labels"]}
+    for name in ("units", "calibration_units", "trials"):
+        if (folder / f"{name}.csv").exists():
+            results[name] = pd.read_csv(folder / f"{name}.csv")
+    if "units" in results:
+        units = results["units"].assign(config=lambda t: t["branch"].map(run["labels"]))
+        results["units"] = _add_recording_columns(units, pool)
+    if "calibration_units" in results:
+        results["calibration_units"] = _add_recording_columns(results["calibration_units"], pool)
+    if "trials" in results:
+        results["trials"] = results["trials"].assign(
+            config=lambda t: t["search"].map(run["labels"])
         )
-    tables = {name: _read_table(spec.tables_dir / f"{name}.csv") for name in TABLES}
-    labels = {branch: config_label(spec, branch) for branch in spec.branches}
-
-    for name in ("recordings", "units"):
-        if len(tables[name]):
-            tables[name]["config"] = tables[name]["branch"].map(labels)
-    for name in ("searches", "best_configs"):
-        if len(tables[name]):
-            tables[name]["config"] = tables[name]["search"].map(labels)
-    for name in ("calibrations", "calibration_units", "recordings", "units"):
-        tables[name] = _add_recording_columns(spec, tables[name])
-    return tables
+    return results
 
 
 # Summaries
@@ -240,20 +175,24 @@ def paired_delta(
     before: str,
     after: str,
     value: str = ROA_PCT,
+    keys: Sequence[str] = UNIT_KEYS,
 ) -> pd.DataFrame:
     """Pair two configs' per-unit values and difference them.
 
     Args:
-        table (pd.DataFrame): Per-unit table with "config", the UNIT_KEYS and value.
+        table (pd.DataFrame): Per-unit table with "config", the keys and value.
         before (str): Config label of the reference.
         after (str): Config label compared with it.
         value (str, optional): Column to compare. Defaults to ROA_PCT.
+        keys (Sequence[str], optional): Columns identifying a unit. Defaults to UNIT_KEYS;
+            ("recording", "gt_unit") pairs units across versions, which calibrated each
+            recording themselves.
 
     Returns:
-        pd.DataFrame: The UNIT_KEYS, "before", "after" and "delta" (after - before), for
-        the units present in both.
+        pd.DataFrame: The keys, "before", "after" and "delta" (after - before), for the
+        units present in both.
     """
-    keys = list(UNIT_KEYS)
+    keys = list(keys)
     left = table[table["config"] == before][[*keys, value]].rename(columns={value: "before"})
     right = table[table["config"] == after][[*keys, value]].rename(columns={value: "after"})
     paired = left.merge(right, on=keys)
@@ -265,6 +204,7 @@ def paired_summary(
     pairs: Sequence[Tuple[str, str]],
     value: str = ROA_PCT,
     tol: float = 0.5,
+    keys: Sequence[str] = UNIT_KEYS,
 ) -> pd.DataFrame:
     """Paired per-unit comparison of each (before, after) config pair.
 
@@ -274,6 +214,8 @@ def paired_summary(
         value (str, optional): Column to compare. Defaults to ROA_PCT.
         tol (float, optional): |delta| at or below this counts as unchanged.
             Defaults to 0.5 (percentage points of RoA).
+        keys (Sequence[str], optional): Columns identifying a unit (see paired_delta).
+            Defaults to UNIT_KEYS.
 
     Returns:
         pd.DataFrame: One row per pair present in table, indexed by (before,
@@ -283,7 +225,7 @@ def paired_summary(
     """
     rows = []
     for before, after in pairs:
-        paired = paired_delta(table, before, after, value).dropna(subset=["delta"])
+        paired = paired_delta(table, before, after, value, keys).dropna(subset=["delta"])
         if paired.empty:
             continue
         delta = paired["delta"].to_numpy()
@@ -327,6 +269,25 @@ def phase_long(units: pd.DataFrame) -> pd.DataFrame:
     )
     long["phase"] = long["phase"].map(PHASES)
     return long.dropna(subset=["roa_pct"])
+
+
+def version_summary(
+    versions: Dict[str, pd.DataFrame], value: str = ROA_PCT, threshold: float = 90.0
+) -> pd.DataFrame:
+    """Every config of several versions, one row each (summary_by_config).
+
+    Args:
+        versions (Dict[str, pd.DataFrame]): Version -> its units table (load_results).
+        value (str, optional): Per-unit column to summarise. Defaults to ROA_PCT.
+        threshold (float, optional): Threshold of the "pct_ge_threshold" column.
+            Defaults to 90.0.
+
+    Returns:
+        pd.DataFrame: Indexed by (version, config), in the order given: n_units, mean,
+        median, std and pct_ge_threshold.
+    """
+    both = pd.concat([u.assign(version=v) for v, u in versions.items()], ignore_index=True)
+    return summary_by_config(both, value, threshold, by=("version", "config"))
 
 
 def heatmap_delta(units: pd.DataFrame, before: str, value: str = ROA_PCT) -> pd.DataFrame:
@@ -415,59 +376,3 @@ def best_so_far(trials: pd.DataFrame, value: str) -> pd.DataFrame:
             "best_so_far": complete[value].cummin().to_numpy(),
         }
     )
-
-
-# Run overview and cost
-
-
-def provenance_summary(provenance: pd.DataFrame) -> pd.DataFrame:
-    """Per stage: tasks by status, compute time, and the code and machines that ran them.
-
-    Args:
-        provenance (pd.DataFrame): The provenance table.
-
-    Returns:
-        pd.DataFrame: Indexed by stage: n_tasks, one column per status, compute_h
-        (summed run time), commits (distinct), any_dirty, hosts and cpus (distinct).
-    """
-    status = provenance.pivot_table(
-        index="stage", columns="status", values="id", aggfunc="count", fill_value=0
-    )
-    grouped = provenance.groupby("stage")
-    summary = pd.DataFrame(
-        {
-            "n_tasks": grouped["id"].count(),
-            "compute_h": grouped["run_time_s"].sum() / 3600,
-            "commits": grouped["commit"].nunique(),
-            "any_dirty": grouped["dirty"].apply(lambda v: bool(v.fillna(False).astype(bool).any())),
-            "hosts": grouped["hostname"].nunique(),
-            "cpus": grouped["cpu"].apply(lambda v: ", ".join(sorted(v.dropna().unique()))),
-        }
-    )
-    return summary.join(status)
-
-
-def cost_summary(recordings: pd.DataFrame, batch_ms: float) -> pd.DataFrame:
-    """Per config: processing time per batch against the batch's own duration.
-
-    Args:
-        recordings (pd.DataFrame): The recordings table, with config, status,
-            mean_batch_ms and run_time_s.
-        batch_ms (float): Batch duration in ms (AdaptConfig.batch_ms).
-
-    Returns:
-        pd.DataFrame: Indexed by config: mean_batch_ms, max_batch_ms (the largest
-        per-recording mean), real_time_factor (mean_batch_ms / batch_ms; below 1
-        keeps up with the signal) and apply_run_time_s (mean per recording).
-    """
-    done = recordings[recordings["status"] == "done"]
-    grouped = done.groupby("config", sort=False)
-    summary = pd.DataFrame(
-        {
-            "mean_batch_ms": grouped["mean_batch_ms"].mean(),
-            "max_batch_ms": grouped["mean_batch_ms"].max(),
-            "apply_run_time_s": grouped["run_time_s"].mean(),
-        }
-    )
-    summary.insert(2, "real_time_factor", summary["mean_batch_ms"] / batch_ms)
-    return summary

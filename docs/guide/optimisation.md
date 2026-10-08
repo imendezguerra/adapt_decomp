@@ -83,7 +83,8 @@ pool = load_pooled_cbss_memory(
 
 `start` and `stop` select the samples every trial adapts and scores, EMG and ground truth alike
 (the ground truth is matched to the calibration first, over the calibration window, which must
-start at the recording's first sample). When `start` is the calibration's end, set
+start at the recording's first sample, and only the matched units are kept; see
+[unit selection](#unit-selection)). When `start` is the calibration's end, set
 `source_fifo_from_calib=True` on the base config, as for
 [adapting from the calibration end](../how-to/adapt-from-calibration-end.md).
 
@@ -144,14 +145,24 @@ that builds `best_config`:
 
 ## Unit selection
 
-`unit_selection` sets which calibration units the search adapts and scores:
+The search scores a setting by the losses of the units it adapts, so it is only as good as
+those units. The decomposition is blind, and a calibration can hold unreliable units (see
+[Keeping the reliable units](calibration.md#keeping-the-reliable-units)): their losses follow
+noise rather than the setting, and they can steer the search towards a poor one. **Search on
+reliable units only.** Units are selected at two points:
 
-- `None` (default): every unit;
-- `"unsupervised"`: the regularly firing units (CoV-ISI ≤ 0.3, set with
-  `unit_selection_kwargs`), whose losses are reliable. Recommended without ground truth;
-- `"supervised"`: the units matched to the ground truth.
+1. **When the pool is loaded.** A recording with ground truth (`path_gt`) has its calibration
+   narrowed to the units that match a ground-truth unit (`select_supervised`, rate of
+   agreement ≥ 0.9 over the calibration window), whatever `unit_selection` says. Calibrations
+   saved after a selection (`select_unsupervised` or `select_supervised`) keep only those units.
+2. **In the search**, with `unit_selection`:
+    - `None` (default): every unit of the pool;
+    - `"unsupervised"`: the regularly firing units (CoV-ISI ≤ 0.3, set with
+      `unit_selection_kwargs`), whose losses are reliable. Recommended without ground truth;
+    - `"supervised"`: the units matched to the ground truth (every recording needs `path_gt`).
 
-The search only chooses the setting: applying `best_config` afterwards adapts every unit.
+The selection only applies to the search: `best_config` applied afterwards adapts every unit of
+the calibration it is given, so select the units there too.
 
 ## Speed and resources
 

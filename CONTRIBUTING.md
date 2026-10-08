@@ -39,11 +39,11 @@ Maintainers: the release process is in [`.github/RELEASING.md`](.github/RELEASIN
     ```sh
     pre-commit install
     ```
-4. Download the data the reproducibility test, the tutorial and the docs examples use (see
+4. Download the data the reproducibility test, the paper example and the docs examples use (see
    [Running tests](#running-tests)):
     ```sh
-    adapt-decomp-data get fdsi_example-data   # 70 MB: the docs examples
-    adapt-decomp-data get neuromotion-data    # 1.6 GB: the reproducibility test and the tutorial
+    adapt-decomp data get fdsi_example-data   # 70 MB: the docs examples
+    adapt-decomp data get neuromotion-data    # 1.6 GB: the reproducibility test and the paper example
     ```
 
 ## Making a change
@@ -65,8 +65,9 @@ Keep in mind:
   class's `Attributes:` section.
 - **Docs code.** The code on the quickstart and how-to pages comes from `docs/snippets/*.py`.
   Edit the snippet, not the page, and run it to check it still works.
-- **The FDSI benchmark.** When a change alters what a stage of `benchmarks/fdsi/` writes, bump
-  that stage in `STAGE_VERSIONS` (`benchmarks/fdsi/spec.py`), so cached outputs are recomputed.
+- **The FDSI benchmark.** Its outputs are only recomputed when missing. When a change alters
+  what a stage of `benchmarks/fdsi/` writes, run it under a new `version` in `config.yaml` (or
+  delete the old outputs), so old and new results never mix.
 
 ## Running tests
 
@@ -80,18 +81,18 @@ make repro      # the reproducibility test: pytest tests/reproducibility -m repr
 |---|---|---|
 | (none) | Unit tests of every subpackage, and calibration, adaptation and a search end to end on a synthetic recording with ground truth (`tests/test_pipeline.py`) | Nothing |
 | `slow` | Optuna searches across worker processes, multi-batch adaptation loops, the FDSI benchmark stages end to end on synthetic recordings | Nothing |
-| `repro` | The tutorial's adaptation against a stored reference | `neuromotion-data` (`make data`); skipped without it |
+| `repro` | The paper example's adaptation against a stored reference | `neuromotion-data` (`make data`); skipped without it |
 
 ## Documentation
 
 The site (https://imendezguerra.github.io/adapt_decomp/) is built with MkDocs Material:
 
-- `docs/`: the pages. `getting-started/`, `guide/` (the user guide), `how-to/`, `benchmarks/`
-  and `reference/` (the API reference, generated from the docstrings by mkdocstrings).
+- `docs/`: the pages. `getting-started/`, `guide/` (the API concepts), `how-to/` (the user
+  guide), `benchmarks/` and `reference/` (the API reference, generated from the docstrings by mkdocstrings).
 - `README.md`: the overview, installation and citation sections are included in the docs from
   between the `<!-- --8<-- [start:...] -->` markers. Keep its links absolute: it is also the
   PyPI page.
-- Notebooks: the tutorial and the benchmark's dataset and results notebooks are added from
+- Notebooks: the paper example (`notebooks/original_tutorial/`) and the benchmark's dataset and results notebooks are added from
   outside `docs/` by `docs/hooks.py`, and rendered from their stored outputs (they are not
   executed by the build). Re-run a notebook and commit its outputs to update its page.
 - Figures: the plots on the *Plot results* page (`docs/assets/how-to/*.png`) are the ones
@@ -127,7 +128,7 @@ the same file resolves on Linux, macOS and Windows. With it:
   and `n_jobs`.
 - **Across operating systems**, PyTorch uses different BLAS libraries (MKL, OpenBLAS,
   Accelerate), so results differ in the last digits. `tests/reproducibility/` checks that this
-  stays negligible: it re-runs the tutorial's adaptation and compares it with a stored
+  stays negligible: it re-runs the paper example's adaptation and compares it with a stored
   reference (per-unit spike agreement of at least 0.99, rate of agreement with the ground truth
   within 0.5 percentage points, losses within a relative 1e-3). CI runs it on all three OSes.
 - **Threads** change the order of floating-point sums. Pin one thread per run

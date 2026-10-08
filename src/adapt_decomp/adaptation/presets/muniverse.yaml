@@ -25,10 +25,10 @@ compute_loss: true                # Log wh_loss, sv_loss, wh_trace each batch
 sv_loss_reduction: mean           # sv_loss_total across units: "mean" (unit-count independent) or "sum" (v1.0)
 save_params: false                # Save newly adapted parameters per batch (HDF5)
 
-# Main adaptation hyperparameters -- TPE-optimal, lr_mode="fixed"
-wh_learning_rate: 4.7057124821825707e-4   # Whitening learning rate
-sv_learning_rate: 9.982265369641319e-4    # Separation-vector learning rate
-centroid_momentum: 0.95           # EMA momentum for centroid updates (0 = no memory)
+# Main adaptation hyperparameters -- FDSI benchmark v1.1.0, sv_mean search (min sv_loss, mean reduction), lr_mode="fixed"
+wh_learning_rate: 3.255281454777775e-2    # Whitening learning rate
+sv_learning_rate: 4.883813532043999e-3    # Separation-vector learning rate
+centroid_momentum: 0.6            # EMA momentum for centroid updates (0 = no memory)
 
 # Adaptation behaviour
 lr_mode: fixed                    # Step-size formula: "fixed" (v1's raw gradient) or "rel_error" (natural-gradient direction, needs its own tuning)

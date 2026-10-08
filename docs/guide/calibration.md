@@ -71,8 +71,17 @@ lists every field.
 
 ## Keeping the reliable units
 
-`decompose()` returns every unit that passed `sil_th`, `min_spikes` and duplicate removal.
-Two filters keep a stricter subset, each returning a new `CBSSResult`:
+The decomposition is blind: CBSS separates sources without knowing which motor units are
+there, so not every source it returns is a reliable unit, and not every motor unit is found.
+Some sources mix two units, follow noise or fire irregularly. `decompose()` returns every unit
+that passed `sil_th`, `min_spikes` and duplicate removal, and the
+[adaptation](adaptation.md) then tracks every unit it is given: it never drops one. Select the
+reliable units after calibrating, with one of two filters, each returning a new `CBSSResult`:
+
+- **Unsupervised**, on real recordings: keep the units whose quality metrics pass thresholds
+  (silhouette, pulse-to-noise ratio, CoV-ISI, discharge rate).
+- **Supervised**, on simulations or recordings with a reference decomposition: keep the units
+  that match a ground-truth unit.
 
 ```python
 # On real recordings: keep the units passing quality thresholds
@@ -86,7 +95,10 @@ calibration = calibration.select_supervised(gt_spikes, roa_th=0.9, fs=2048)
 (Hz). `select_supervised` records the ground-truth unit each kept unit tracks in
 `gt_matched_indices`, and its rate of agreement in `roa`. To apply either inside
 `decompose()`, set `CBSSConfig.selection` to `"unsupervised"` or `"supervised"` and pass the
-arguments in `selection_kwargs`.
+arguments in `selection_kwargs` (`AdaptDecomp.calibrate_and_process` uses it the same way).
+
+Reliable units matter most in a [hyperparameter search](optimisation.md#unit-selection): its
+losses are averaged over the units, so noisy units can steer it towards a poor setting.
 
 ## What you get back
 
@@ -120,9 +132,11 @@ config next to it (`cbss_config.to_yaml(path)`): building the adaptation needs b
 
 ## Reproducibility
 
-With the same `random_seed`, EMG and config, `decompose()` gives the same units on the CPU.
-On a GPU the arithmetic is not bit-for-bit deterministic, which can change which borderline
-units are kept. Calibrate on the CPU when the calibration must be reproduced exactly.
+With the same `random_seed`, EMG and config, `decompose()` gives the same units on the CPU with
+the same number of threads. Another thread count, or a GPU, changes the order of floating-point
+sums, which can change which borderline units are kept. Calibrate on the CPU, with the threads
+pinned (see [Run on a cluster](../how-to/run-on-a-cluster.md#reproducibility)), when the
+calibration must be reproduced exactly.
 
 ## Recipes
 

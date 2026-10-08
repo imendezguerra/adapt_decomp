@@ -8,7 +8,9 @@ real time. In each batch it:
 3. detects the unit's spikes in its source;
 4. updates the model so it keeps matching the calibration.
 
-It never searches for new units: it tracks the ones it was given.
+It never searches for new units, and never drops any: it tracks every unit of the calibration
+it was given, reliable or not. Select the units before adapting (see
+[Keeping the reliable units](calibration.md#keeping-the-reliable-units)).
 
 ```python
 from adapt_decomp import AdaptDecomp
@@ -54,14 +56,32 @@ is chosen by slicing that EMG. For a recording calibrated on its samples `[a, b)
 Starting at `b` is the usual choice: the model starts from the samples it was just calibrated
 on, and the adapted output is never scored on the calibration window itself.
 
+### In one call
+
+`AdaptDecomp.calibrate_and_process` runs the calibration, its unit selection and the
+adaptation together. It decomposes `emg[calib_indices]` with `cbss_config`, keeps the units
+`cbss_config.selection` selects (see
+[Keeping the reliable units](calibration.md#keeping-the-reliable-units)), builds the model and
+adapts from the end of the window, seeding the source FIFO itself. It returns the adaptation's
+output over the whole recording and the calibration:
+
+```python
+--8<-- "workflow.py:one-call"
+```
+
+It is the same as calling `CBSS.decompose`, `from_calibration` and `process_data` one after
+the other, as in the [quickstart](../getting-started/quickstart.md); use those when you want to
+inspect or save the calibration before adapting. From the shell, it is
+`adapt-decomp calibrate_and_process` (see [Use the command line](../how-to/use-the-command-line.md)).
+
 ## Presets
 
 `AdaptConfig.from_preset(name)` loads a config shipped with the package:
 
 | Preset | Tuned on | `wh_learning_rate` | `sv_learning_rate` | `centroid_momentum` |
 |---|---|---|---|---|
-| `muniverse` | The [FDSI benchmark](../benchmarks/fdsi.md)'s search pool (simulated, 100 channels) | 4.7e-4 | 1.0e-3 | 0.95 |
-| `neuromotion` | The NeuroMotion simulation of the [tutorial](../notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) (320 channels) | 7e-3 | 3e-3 | 0.8 |
+| `muniverse` | The [FDSI benchmark](../benchmarks/fdsi.md)'s search pool (simulated, 100 channels) | 3.3e-2 | 4.9e-3 | 0.6 |
+| `neuromotion` | The NeuroMotion simulation of the [paper example](../notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) (320 channels) | 7e-3 | 3e-3 | 0.8 |
 | `wrist` | The paper's experimental recordings, electrodes on the wrist | 1e-3 | 5e-4 | 0.8 |
 | `forearm` | The paper's experimental recordings, electrodes on the forearm | 2e-3 | 5e-4 | 0.8 |
 | `fixed` | No adaptation, the baseline | 0 | 0 | 1 |

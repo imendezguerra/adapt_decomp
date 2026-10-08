@@ -389,7 +389,7 @@ def plot_sources(
             if sil is not None and name in sil:
                 label_lines.append(f"{name} SIL = {sil[name][unit]:.2f}")
 
-        ax.set(ylabel="\n".join(label_lines))
+        ax.set_ylabel("\n".join(label_lines), rotation=0, va="center", ha="right")
         if time_range is not None:
             ax.set_xlim(time_range)
         if n_signals > 1:

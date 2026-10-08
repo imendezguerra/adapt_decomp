@@ -46,26 +46,34 @@ and this project follows [Semantic Versioning](https://semver.org/).
   - `param_space` ranges take an optional step, `("float"|"int", low, high, step)`, to search
     a grid of values.
 - `CBSSResult.unsupervised_mask()`: the quality-threshold mask behind `select_unsupervised()`.
-- `scripts/run.py run_optuna` reads `objectives` (Pareto search from the CLI), `selection`,
-  `unit_selection`/`unit_selection_kwargs`, `sampler` and `n_cores` from `--optim_config`.
+- `adapt-decomp`, a command installed with the package (`adapt_decomp.cli`), replacing
+  `scripts/run.py`. Each subcommand wraps the function it is named after, with options named
+  after its arguments: `decompose`, `process_data`, `calibrate_and_process` and
+  `optimize_adapt_decomp` (search settings from `--search_config`: `param_space`,
+  `objectives`, a Pareto search with several, `selection`, `unit_selection`, `sampler`,
+  `n_jobs`, `n_cores`, `initial_params`), plus `wandb_sweep` and `data`.
+- The `wandb` extra (`pip install "adapt-decomp[wandb]"`), for the command's wandb logging
+  (`--wandb_project`, `wandb_sweep`).
 - `adapt_decomp.utils.system`: `available_cores()`/`available_memory()` (moved from
   `adaptation/optimize/resources.py`, still re-exported from `adaptation.optimize`), now also
-  honouring PBS (`NCPUS`, `PBS_NUM_PPN`) and cgroup v1 memory limits; `describe_system()` (host,
-  scheduler job, OS, CPU/GPU/memory, Python and package versions).
-- `adapt_decomp.utils.provenance`: `build_metadata()`/`write_metadata()`/`read_metadata()` for a
-  result's metadata file (dates, run time, machine, git remote/commit/dirty state with a saved
-  diff patch, the command, and the lines that reproduce it), plus `git_state()`.
-- `benchmarks/fdsi/`: the FDSI benchmark as a spec (`benchmark.yaml`) and a CLI
-  (`python -m benchmarks.fdsi`) with one command per stage (`calibrate`, `search`, `apply`,
-  `collect`, `verify`), content-hashed caching, a metadata file next to every output, and PBS
-  Pro array-job scripts (job logs in `.job_outputs/`). Each search is seeded with the
-  `neuromotion` preset's values and runs its trials one at a time, with `threads_per_run`
-  torch threads per run for speed. Its tables include `calibration_units.csv` (one row per
-  calibrated unit: the simulated motor unit it matches, `gt_unit`, and its calibration RoA, SIL
-  and CoV-ISI), and every per-unit table carries `gt_unit`, so runs with different calibrations
-  can be paired unit by unit. Stage code versions are part of the cache keys.
-- `benchmarks/fdsi/report.ipynb` (with `benchmarks/fdsi/report.py`): the benchmark's results,
-  read from the collected tables only; `benchmarks/fdsi/dataset.ipynb`: a tour of the raw data.
+  honouring PBS (`NCPUS`, `PBS_NUM_PPN`) and cgroup v1 memory limits.
+- `benchmarks/fdsi/`: the FDSI benchmark as four notebooks (`1_calibrate`, `2_search`,
+  `3_apply`, `4_results`), each showing a stage on one recording with the library's own calls
+  and then running it on every recording through `pipeline.py`, the code the command line
+  (`python -m benchmarks.fdsi STAGE`, with `--workers`, `--index`/`--chunk` and `--quick`) and
+  the PBS Pro array-job scripts share. One `config.yaml` declares the experiment, with a
+  `quick` section for a 20-minute check; a task is skipped when its output exists. Each search
+  is seeded with the `neuromotion` preset's values, runs its trials one at a time and uses every
+  core available (`n_cores`). Applied results are saved as their spikes, sources and
+  ground-truth match (`.npz`), enough to recompute every score. `collect` writes each version's
+  results to `benchmarks/fdsi/results/<version>/`, in git: per-unit scores (`units.csv`, with
+  `gt_unit`, the simulated motor unit each unit tracks, so versions with different calibrations
+  pair unit by unit), the calibrations' units, every search trial, the tuned configs and
+  `run.yaml` (version, commit, config). `results/v1.0.0/` holds v1.0.0's per-unit scores and
+  applied configs, which `4_results.ipynb` compares with this version's; `dataset.ipynb` is a
+  tour of the raw data.
+- `fdsi_benchmark-outputs-v1.1.0` data archive: the v1.1.0 benchmark's spikes, sources and
+  searches.
 - `adapt_decomp.adaptation.optimize.front_mask()`: the Pareto front of a finished search's
   trials table.
 - `plot_search_landscape`, `plot_search_front` and `plot_search_parameters`
@@ -73,24 +81,26 @@ and this project follows [Semantic Versioning](https://semver.org/).
   (`study.trials_dataframe()`) rather than a pickled study; `plot_metric_heatmap` takes `cmap`
   and `center`.
 - A documentation site (MkDocs Material, `mkdocs.yml`), deployed to GitHub Pages on each
-  release: installation, a quickstart, the tutorial, a user guide to calibration, adaptation and
-  hyperparameter optimisation with their key parameters, tested how-to guides
-  (`docs/snippets/`), the FDSI benchmark and an API reference generated from the docstrings.
+  release: installation, a quickstart, the API concepts (calibration, adaptation and
+  hyperparameter optimisation with their key parameters), a user guide of recipes
+  (`docs/snippets/`), an example on the paper's simulated contraction (the former tutorial),
+  the FDSI benchmark and an API reference generated from the docstrings.
   Build it with the new `docs` extra (`make docs`, `make docs-build`).
 - `AdaptConfig.from_preset(name)`: the configs shipped with the package (`PRESETS`:
   `"muniverse"`, `"neuromotion"`, `"wrist"`, `"forearm"`, `"fixed"`), so a pip install has them
   too.
-- `adapt-decomp-data`, a command installed with the package (`adapt-decomp-data list`,
-  `adapt-decomp-data get <archive>`), and `adapt_decomp.utils.download_data()`: download and
-  unpack the Zenodo datasets.
+- `adapt-decomp data list` and `adapt-decomp data get <archive>` (also installed as
+  `adapt-decomp-data`), and `adapt_decomp.utils.download_data()`: download and unpack the
+  Zenodo datasets.
 - `fdsi_example-data`: one FDSI recording (70 MB) for the quickstart and how-to guides, so they
   no longer need the 10 GB benchmark archive. Not published on Zenodo yet.
 - `scripts/pack_data.py`: builds the data archives for upload to Zenodo.
 - `load_example()` also returns `gt_spikes`, the spike trains of every simulated motor unit.
-- `configs/data_configs/fdsi_example.yaml`: a data config for `scripts/run.py` on the example
-  recording.
-- The tutorial calibrates the same recording with CBSS too, and compares both calibrations with
-  and without adaptation (section 8).
+- `configs/data_configs/fdsi_example.yaml`: a pool of the example recording, for
+  `adapt-decomp optimize_adapt_decomp`.
+- The tutorial, now the paper example of the docs' Examples section, calibrates the same
+  recording with CBSS too, compares both calibrations with and without adaptation (section 8),
+  and tunes the hyperparameters for the CBSS calibration (section 9).
 - PyPI releases (`.github/workflows/publish.yml`, Trusted Publishing, with a TestPyPI rehearsal),
   checking the tag against `__version__`, `CITATION.cff` and this changelog. CI builds and
   smoke-tests the wheel on every push.
@@ -100,6 +110,9 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The `muniverse` preset takes the best config of the FDSI benchmark v1.1.0 `sv_mean` search
+  (minimum `sv_loss`, mean reduction): `wh_learning_rate` 3.3e-2 (was 4.7e-4),
+  `sv_learning_rate` 4.9e-3 (was 1.0e-3), `centroid_momentum` 0.6 (was 0.95).
 - `environment.yaml` (exact, cross-platform pins) replaces the Windows-only
   `environment.lock.yaml`.
 - `pyproject.toml` dependencies now have lower bounds; `pytest` and `ipykernel` moved to the
@@ -133,10 +146,11 @@ and this project follows [Semantic Versioning](https://semver.org/).
   the package with its `dev` and `docs` extras.
 - `CBSSConfig`, `AdaptConfig` and `CBSSResult` document every field in their docstring
   (`Attributes:`), shown in the API reference, instead of in inline comments.
-- `load_config(defaults_path, ...)` requires the path: its default pointed into the repository.
 - `CITATION.cff` cites the software's Zenodo DOI, with the paper as the preferred citation.
 - The README is shorter and links to the documentation, which includes its overview,
   installation and citation sections.
+
+- wandb is no longer a dependency: install the `wandb` extra to log to it.
 
 ### Deprecated
 
@@ -149,18 +163,22 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `configs/adapt_configs/default_{muniverse,neuromotion,wrist,forearm,fixed}.yaml`: moved into
   the package (`src/adapt_decomp/adaptation/presets/`); load them with
   `AdaptConfig.from_preset(name)`, or by path from there.
-- `scripts/download_data.py`: replaced by the `adapt-decomp-data` command, with the same `list`
+- `scripts/download_data.py`: replaced by the `adapt-decomp data` command, with the same `list`
   and `get` subcommands.
+- `scripts/run.py` and its example scripts (`run_example.sh`, `sweep_optuna_example.sh`,
+  `sweep_wandb_example.sh`): replaced by the `adapt-decomp` command (`run` by `process_data`,
+  `run_optuna` by `optimize_adapt_decomp`, `run_wandb` by `wandb_sweep`).
+- `adaptation.config.load_config` and `load_yaml`, used only by `scripts/run.py`: load configs
+  with `AdaptConfig.from_yaml` or `AdaptConfig.from_preset`.
 - `notebooks/fdsi_benchmark/` (the 1.0.0 benchmark notebooks and `fdsi_common.py`) and their
   configs (`configs/data_configs/fdsi_benchmark_grid.yaml`, `fdsi_pool_{memory,disk}_example.yaml`,
   `configs/adapt_configs/optim_muniverse_fdsi_*.yaml`): replaced by `benchmarks/fdsi/`; they
   stay at the `v1.0.0` tag.
+- The `fdsi_benchmark-outputs` archive from `adapt-decomp-data`: v1.0.0's outputs stay at their
+  DOI (10.5281/zenodo.22882323), and their per-unit scores in `benchmarks/fdsi/results/v1.0.0/`.
 
 ### Fixed
 
-- `scripts/run_example.sh`, `sweep_optuna_example.sh` and `sweep_wandb_example.sh` pointed at a
-  config that didn't exist; they now run on the example recording. `sweep_wandb_example.sh` had
-  its `set -e` inside a comment.
 - The separation-vector convergence check compared each update with itself, so
   `sv_epochs > 1` always stopped after the first epoch.
 - `load_example`'s legacy MATLAB calibrations stored `cov_isi` in percent; it is now a fraction,

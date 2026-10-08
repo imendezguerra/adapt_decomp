@@ -11,21 +11,7 @@ from adapt_decomp.utils.loaders import (
     load_gt,
 )
 from adapt_decomp.utils.download import ARCHIVES, download_data
-from adapt_decomp.utils.system import (
-    available_cores,
-    available_memory,
-    cgroup_memory_limit,
-    cpu_model,
-    describe_system,
-)
-from adapt_decomp.utils.provenance import (
-    build_metadata,
-    git_state,
-    read_metadata,
-    sanitise_remote_url,
-    save_patch,
-    write_metadata,
-)
+from adapt_decomp.utils.system import available_cores, available_memory, cgroup_memory_limit
 from adapt_decomp.utils.plots import (
     plot_sep_vectors_comp,
     plot_sep_vectors_diff,
@@ -48,14 +34,6 @@ __all__ = [
     "available_cores",
     "available_memory",
     "cgroup_memory_limit",
-    "cpu_model",
-    "describe_system",
-    "build_metadata",
-    "git_state",
-    "read_metadata",
-    "sanitise_remote_url",
-    "save_patch",
-    "write_metadata",
     "plot_sep_vectors_comp",
     "plot_sep_vectors_diff",
     "plot_whitening_comp",

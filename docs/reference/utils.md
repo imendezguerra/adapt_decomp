@@ -22,13 +22,6 @@
       show_root_heading: false
       heading_level: 3
 
-## Provenance
-
-::: adapt_decomp.utils.provenance
-    options:
-      show_root_heading: false
-      heading_level: 3
-
 ## Plots
 
 ::: adapt_decomp.utils.plots

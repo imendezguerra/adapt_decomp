@@ -1,6 +1,7 @@
 """Download the adapt_decomp datasets from Zenodo and unpack them into data/.
 
-Also the adapt-decomp-data command: adapt-decomp-data list, adapt-decomp-data get NAME.
+Also the adapt-decomp data command (adapt-decomp data list, adapt-decomp data get NAME), and
+its alias adapt-decomp-data.
 """
 
 import hashlib
@@ -22,7 +23,7 @@ ARCHIVES: Dict[str, Tuple[str, str, float]] = {
     "fdsi_example-data": ("", "fdsi_example/data", 0.07),
     "neuromotion-data": ("10.5281/zenodo.22880910", "neuromotion/data", 1.64),
     "fdsi_benchmark-data": ("10.5281/zenodo.22882346", "fdsi_benchmark/data", 10.35),
-    "fdsi_benchmark-outputs": ("10.5281/zenodo.22882323", "fdsi_benchmark/outputs", 10.75),
+    "fdsi_benchmark-outputs-v1.1.0": ("", "fdsi_benchmark/outputs/v1.1.0", 3.49),
 }
 
 app = typer.Typer(help="Download the adapt_decomp datasets from Zenodo.")

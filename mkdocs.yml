@@ -104,13 +104,12 @@ nav:
   - Getting started:
       - Installation: getting-started/installation.md
       - Quickstart: getting-started/quickstart.md
-      - "Tutorial: adaptation in depth": notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb
-  - User guide:
+  - API Concepts:
       - Overview: guide/overview.md
       - Calibration: guide/calibration.md
       - Adaptation: guide/adaptation.md
       - Hyperparameter optimisation: guide/optimisation.md
-  - How-to guides:
+  - User guide:
       - how-to/index.md
       - Calibrate a recording: how-to/calibrate-a-recording.md
       - Adapt from the calibration end: how-to/adapt-from-calibration-end.md
@@ -120,11 +119,15 @@ nav:
       - Process online: how-to/process-online.md
       - Use the command line: how-to/use-the-command-line.md
       - Run on a cluster: how-to/run-on-a-cluster.md
-      - Record provenance: how-to/record-provenance.md
+  - Examples:
+      - "Paper example: NeuroMotion wrist staircase": notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb
   - FDSI benchmark:
       - Overview: benchmarks/fdsi.md
-      - Dataset: benchmarks/fdsi/dataset.ipynb
-      - Results: benchmarks/fdsi/report.ipynb
+      - 0. Dataset: benchmarks/fdsi/0_dataset.ipynb
+      - 1. Calibration: benchmarks/fdsi/1_calibrate.ipynb
+      - 2. Search: benchmarks/fdsi/2_search.ipynb
+      - 3. Apply: benchmarks/fdsi/3_apply.ipynb
+      - 4. Results: benchmarks/fdsi/4_results.ipynb
       - Running the benchmark: benchmarks/fdsi/running.md
   - API reference:
       - reference/index.md

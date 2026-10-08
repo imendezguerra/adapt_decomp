@@ -44,8 +44,9 @@ chosen config is then applied to every unit:
 --8<-- "tune.py:no-ground-truth"
 ```
 
-When the calibrations already keep only ground-truth-matched units, leave `unit_selection` at
-its default (`None`).
+With ground truth (`path_gt`), the pool already holds only the ground-truth-matched units, so
+leave `unit_selection` at its default (`None`). Either way, search on reliable units only: noisy
+ones degrade the search (see [Unit selection](../guide/optimisation.md#unit-selection)).
 
 ## Keep the result
 
@@ -56,4 +57,4 @@ its default (`None`).
 `sv_loss_reduction` on the base config sets whether `sv_loss` is averaged (`"mean"`, the
 default) or summed over units. `n_jobs` and `n_cores` set how many trials run together and on
 how many cores; see [Speed and resources](../guide/optimisation.md#speed-and-resources).
-The [FDSI benchmark results](../benchmarks/fdsi/report.ipynb) compare these choices.
+The [FDSI benchmark results](../benchmarks/fdsi/4_results.ipynb) compare these choices.

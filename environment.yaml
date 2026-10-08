@@ -47,4 +47,4 @@ dependencies:
       - mkdocstrings-python==2.0.9
       - mkdocs-jupyter==0.26.3
       # The package itself, with its dev and docs extras (the pins above already satisfy them).
-      - "-e .[dev,docs]"
+      - "-e .[dev,docs,wandb]"

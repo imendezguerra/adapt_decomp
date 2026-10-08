@@ -10,12 +10,12 @@ The recording is synthetic, from the [FDSI benchmark](../benchmarks/fdsi.md): 90
 `data/`:
 
 ```sh
-adapt-decomp-data get fdsi_example-data
+adapt-decomp data get fdsi_example-data
 ```
 
 The code on this page is
-[`docs/snippets/workflow.py`](https://github.com/imendezguerra/adapt_decomp/blob/main/docs/snippets/workflow.py),
-which is tested, so it runs as shown. The outputs below come from running it.
+[`docs/snippets/workflow.py`](https://github.com/imendezguerra/adapt_decomp/blob/main/docs/snippets/workflow.py);
+the outputs below come from running it.
 
 ## 1. Load the recording
 
@@ -40,7 +40,7 @@ the result reproducible.
 ```
 
 ```text
-48 units found
+47 units found
 ```
 
 ## 3. Keep the reliable units
@@ -55,8 +55,8 @@ metrics instead, with `select_unsupervised` (see
 ```
 
 ```text
-[28 32 38 37 35 24 34 36 33 29 30 31  7 22]
-[1.  1.  1.  1.  1.  0.986  0.982  1.  1.  0.984  1.  0.983  0.927  0.947]
+[28 32 37 35 24 34 36 33 29 30 38 31  7]
+[1.  1.  1.  1.  0.986  0.982  1.  1.  0.984  1.  1.  0.983  0.927]
 ```
 
 ## 4. Save the calibration
@@ -79,10 +79,34 @@ sources, which come right before them.
 ```
 
 ```text
-torch.Size([174080, 14]) 17.1 ms per 100 ms batch
+torch.Size([174080, 13]) 39.1 ms per 100 ms batch
 ```
 
-## 6. Compare with no adaptation
+## 6. Or in one call
+
+`AdaptDecomp.calibrate_and_process` runs steps 2 to 5 at once: it calibrates on the window,
+keeps the units `CBSSConfig.selection` selects, and adapts from the end of the window. Its
+output covers the whole recording: CBSS's own output over the calibration window, then the
+adapted samples.
+
+```python
+--8<-- "workflow.py:one-call"
+```
+
+```text
+torch.Size([184320, 13])
+```
+
+From the shell, the [command line](../how-to/use-the-command-line.md) does the same:
+
+```sh
+adapt-decomp calibrate_and_process data/fdsi_example/data/sub-01/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz \
+  --calib_stop 10240 --gt data/fdsi_example/data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz \
+  --cbss_config data/fdsi_example/outputs/docs-example/calibration_config.yaml \
+  --preset muniverse --out_dir data/fdsi_example/outputs/cli
+```
+
+## 7. Compare with no adaptation
 
 The `fixed` preset switches every adaptation off: the calibration is applied as it is.
 
@@ -90,7 +114,7 @@ The `fixed` preset switches every adaptation off: the calibration is applied as 
 --8<-- "workflow.py:baseline"
 ```
 
-## 7. Score
+## 8. Score
 
 Each unit's spikes are compared with those of the simulated motor unit it tracks, over the
 adapted samples after the calibration window.
@@ -100,18 +124,18 @@ adapted samples after the calibration window.
 ```
 
 ```text
-no adaptation: mean RoA after calibration 33.8 %
-adapted: mean RoA after calibration 52.0 %
+no adaptation: mean RoA after calibration 34.3 %
+adapted: mean RoA after calibration 92.7 %
 ```
 
 As the wrist moves, the units of the fixed calibration drift away from the motor units they
-were matched to; the adaptation tracks them more closely. The [benchmark results](../benchmarks/fdsi/report.ipynb) show the same comparison over 100
+were matched to; the adaptation tracks them more closely. The [benchmark results](../benchmarks/fdsi/4_results.ipynb) show the same comparison over 100
 recordings, and with tuned hyperparameters.
 
 ## Next
 
-- The [tutorial](../notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) goes
-  through the adaptation in depth: losses, timings, online processing and how the model changes.
-- The [user guide](../guide/overview.md) explains each stage and its parameters.
-- The [how-to guides](../how-to/index.md) cover tuning the hyperparameters, evaluating,
-  plotting and processing online.
+- The [API concepts](../guide/overview.md) explain each stage and its parameters.
+- The [user guide](../how-to/index.md) covers tuning the hyperparameters, evaluating, plotting,
+  processing online and the command line.
+- The [paper example](../notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb) goes
+  through the adaptation in depth: losses, timings, how the model changes and a search.

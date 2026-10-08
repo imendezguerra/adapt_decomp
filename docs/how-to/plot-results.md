@@ -34,7 +34,7 @@ the ground truth.
 
 `plot_metric_heatmap` and `plot_metric_boxplot` take a long table (one row per unit, with
 `config`, `condition`, `snr` and the value) and draw one panel per config; the
-[FDSI benchmark results](../benchmarks/fdsi/report.ipynb) use both.
+[FDSI benchmark results](../benchmarks/fdsi/4_results.ipynb) use both.
 
 ## Searches
 

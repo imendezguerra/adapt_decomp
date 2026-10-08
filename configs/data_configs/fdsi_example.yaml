@@ -1,6 +1,6 @@
-# data_config for scripts/run.py on the example recording (adapt-decomp-data get fdsi_example-data),
-# with the calibration the quickstart saves (python docs/snippets/workflow.py). Run from the
-# repository root.
+# Pool of recordings (--data_config of adapt-decomp optimize_adapt_decomp and wandb_sweep) on the
+# example recording (adapt-decomp data get fdsi_example-data), with the calibration the quickstart
+# saves (python docs/snippets/workflow.py). Run from the repository root.
 
 root: '.'                                   # Paths below are relative to this directory
 loader: 'load_pooled_cbss_memory'           # Loading function to use
@@ -12,3 +12,4 @@ datasets:
     path_calib: 'data/fdsi_example/outputs/docs-example/calibration.pkl'
     path_calib_config: 'data/fdsi_example/outputs/docs-example/calibration_config.yaml'
     path_gt: 'data/fdsi_example/data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz'   # Optional; omit for no RoA
+    start: 10240                            # Adapt and score from the calibration's end (5 s at 2048 Hz)

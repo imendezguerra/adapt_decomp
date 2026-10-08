@@ -1,0 +1,98 @@
+version: v1.1.0
+adapt_decomp: 1.1.0
+commit: 8ace13c390a4327a2ad0feb9330c99749454c001-dirty
+date: '2026-10-07'
+data_doi: 10.5281/zenodo.22882346
+labels:
+  fixed: No adaptation
+  sv_mean: sv_loss, mean
+  sv_sum: sv_loss, sum
+  pareto_mean: Pareto min-sv, mean
+  pareto_sum: Pareto min-sv, sum
+  roa: RoA (oracle)
+config:
+  version: v1.1.0
+  previous: v1.0.0
+  data_root: data/fdsi_benchmark/data
+  outputs_root: data/fdsi_benchmark/outputs
+  results_root: benchmarks/fdsi/results
+  grid:
+    subjects:
+    - sub-01
+    - sub-02
+    - sub-03
+    - sub-04
+    - sub-05
+    conditions:
+    - staircase
+    - triangular-ramp40s
+    - triangular-ramp20s
+    - triangular-ramp10s
+    - triangular-ramp5s
+    snr_levels:
+    - 30
+    - 25
+    - 20
+    - 15
+    fs: 2048
+    cal_duration_s: 5.0
+    iso_duration_s: 5.0
+    tol_spike_ms: 2.0
+  calibration:
+    cbss_config:
+      fs: 2048
+      ext_fact: 10
+      sil_th: 0.9
+      random_seed: 42
+      ica_iter: 300
+      search_iter: 300
+      save_emg: true
+      device: cpu
+    supervised_roa_th: 0.9
+  pool:
+    subject: sub-01
+    snr: 30
+    conditions:
+    - triangular-ramp40s
+    - triangular-ramp10s
+    - triangular-ramp5s
+  search:
+    base_config: src/adapt_decomp/adaptation/presets/muniverse.yaml
+    overrides:
+      lr_mode: fixed
+      source_fifo_from_calib: true
+      device: cpu
+    param_space: null
+    initial_params:
+    - src/adapt_decomp/adaptation/presets/neuromotion.yaml
+    n_trials: 100
+    n_jobs: 1
+    n_cores: null
+    random_seed: 42
+    unit_selection: null
+    compute_roa: true
+  searches:
+    sv_mean:
+      objectives:
+      - sv_loss
+      sv_loss_reduction: mean
+    sv_sum:
+      objectives:
+      - sv_loss
+      sv_loss_reduction: sum
+    pareto_mean:
+      objectives:
+      - wh_loss
+      - sv_loss
+      selection: min_sv_loss
+      sv_loss_reduction: mean
+    pareto_sum:
+      objectives:
+      - wh_loss
+      - sv_loss
+      selection: min_sv_loss
+      sv_loss_reduction: sum
+    roa:
+      objectives:
+      - roa
+  fixed_config: src/adapt_decomp/adaptation/presets/fixed.yaml

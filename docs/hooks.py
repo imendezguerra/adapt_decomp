@@ -15,8 +15,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Notebooks in the repository, each published at its own repository path
 EXTERNAL_NOTEBOOKS = (
-    "benchmarks/fdsi/dataset.ipynb",
-    "benchmarks/fdsi/report.ipynb",
+    "benchmarks/fdsi/0_dataset.ipynb",
+    "benchmarks/fdsi/1_calibrate.ipynb",
+    "benchmarks/fdsi/2_search.ipynb",
+    "benchmarks/fdsi/3_apply.ipynb",
+    "benchmarks/fdsi/4_results.ipynb",
     "notebooks/original_tutorial/adaptive_emg_decomp_dyn_example.ipynb",
 )
 

@@ -1,7 +1,7 @@
-"""How-to examples on one FDSI recording: calibrate, adapt, evaluate, plot and record.
+"""How-to examples on one FDSI recording: calibrate, adapt, evaluate and plot.
 
 Run it from the directory holding data/, with the example recording downloaded
-(adapt-decomp-data get fdsi_example-data); the quickstart and the how-to pages include its
+(adapt-decomp data get fdsi_example-data); the quickstart and the how-to pages include its
 sections.
 """
 
@@ -68,6 +68,27 @@ adapter = AdaptDecomp.from_calibration(
 adapted = adapter.process_data(emg[CAL_END:])
 print(adapted.spikes.shape, f"{adapted.total_time_ms.float().mean():.1f} ms per 100 ms batch")
 # --8<-- [end:adapt]
+
+# --8<-- [start:one-call]
+# Calibrate, keep the matched units and adapt from the calibration end, in one call
+one_call_cbss_config = CBSSConfig(
+    fs=FS,
+    ext_fact=10,
+    sil_th=0.9,
+    random_seed=42,
+    device="cpu",
+    selection="supervised",  # or "unsupervised", with its thresholds in selection_kwargs
+    selection_kwargs={"gt_spikes": gt_spikes[:CAL_END], "roa_th": 0.9, "tol_spike_ms": 2},
+)
+adapted_full, calibration_full = AdaptDecomp.calibrate_and_process(
+    emg,
+    timestamps=np.arange(emg.shape[0]) / FS,
+    calib_indices=slice(0, CAL_END),
+    cbss_config=one_call_cbss_config,
+    adapt_config=AdaptConfig.from_preset("muniverse"),
+)
+print(adapted_full.spikes.shape)  # the whole recording: CBSS's output, then the adapted one
+# --8<-- [end:one-call]
 
 # --8<-- [start:prepend]
 # The whole recording: CBSS's own output over the calibration window, then the adapted samples
@@ -166,22 +187,3 @@ for batch_idx, batch in enumerate(live_feed):
         break  # a live feed only hands over full batches
     batch_spikes, batch_sources = adapter.process_batch(batch, batch_idx)  # (batch_size, units)
 # --8<-- [end:online-loop]
-
-# --8<-- [start:provenance]
-import sys
-from datetime import datetime
-
-from adapt_decomp.utils import build_metadata, write_metadata
-
-started = datetime.now().astimezone()  # before the work, in practice
-metadata = build_metadata(
-    command=["python", *sys.argv],
-    started=started,
-    finished=datetime.now().astimezone(),
-    run_name="docs-example",
-    reproduce=["python docs/snippets/workflow.py"],  # after the checkout lines it adds
-    patch_dir=OUT / "patches",  # where an uncommitted diff is saved, if any
-    extra={"results": {"roa_after_cal_mean": float(roa.mean()), "n_units": int(sil.size)}},
-)
-write_metadata(OUT / "results.meta.yaml", metadata)
-# --8<-- [end:provenance]

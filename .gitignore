@@ -205,3 +205,6 @@ site/
 
 # PBS job logs (benchmarks/fdsi/pbs/submit.sh)
 .job_outputs/
+
+# FDSI benchmark quick checks (python -m benchmarks.fdsi STAGE --quick)
+benchmarks/fdsi/results/*-quick/

@@ -1,7 +1,7 @@
-# Optuna search settings for scripts/run.py's run_optuna command --
-# param_space plus the rest of optimize_adapt_decomp's search-strategy
-# arguments (reusable across datasets/runs). best_result_path/compute_roa/roa_kwargs
-# are run-specific instead, so they live as run_optuna's own inputs, not here.
+# Search settings for adapt-decomp optimize_adapt_decomp --search_config: param_space plus
+# the rest of optimize_adapt_decomp's search arguments (reusable across datasets and runs).
+# best_result_path and compute_roa are run-specific, so they are command-line options instead;
+# --objectives, --n_trials and --n_cores override the values below.
 
 param_space:                       # omit to use adapt_decomp's DEFAULT_PARAM_SPACE
   wh_learning_rate: ["log_float", 1.0e-4, 5.0e-2]

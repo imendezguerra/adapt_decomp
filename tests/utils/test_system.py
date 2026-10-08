@@ -1,23 +1,10 @@
-"""Tests for adapt_decomp.utils.system: scheduler-aware cores and memory, and describe_system()."""
-
-import platform
+"""Tests for adapt_decomp.utils.system: scheduler-aware cores and memory."""
 
 import pytest
-import yaml
 
-import adapt_decomp
 from adapt_decomp.utils import system
 
-ALL_SCHEDULER_VARS = (
-    *system.SCHEDULER_CORE_VARS,
-    "SLURM_MEM_PER_NODE",
-    "SLURM_MEM_PER_CPU",
-    "SLURM_JOB_ID",
-    "SLURM_ARRAY_TASK_ID",
-    "PBS_JOBID",
-    "PBS_ARRAY_INDEX",
-    "PBS_ARRAYID",
-)
+ALL_SCHEDULER_VARS = (*system.SCHEDULER_CORE_VARS, "SLURM_MEM_PER_NODE", "SLURM_MEM_PER_CPU")
 
 
 @pytest.fixture
@@ -59,30 +46,3 @@ def test_available_memory_is_capped_by_the_cgroup_limit(no_scheduler, monkeypatc
     limit, available = system.available_memory()
     assert limit == 1024
     assert available <= 1024
-
-
-def test_describe_system_has_every_section_and_is_yaml_safe(no_scheduler):
-    description = system.describe_system()
-
-    assert set(description) == {"host", "os", "hardware", "python", "packages"}
-    assert set(description["hardware"]) == {"cpu", "gpu", "memory"}
-    assert isinstance(description["hardware"]["cpu"]["model"], str)
-    assert description["hardware"]["cpu"]["model"]
-    assert description["hardware"]["memory"]["total_gb"] > 0
-    assert description["python"]["version"] == platform.python_version()
-    assert description["packages"]["adapt_decomp"] == adapt_decomp.__version__
-    assert description["host"]["scheduler"] is None
-    yaml.safe_dump(description)  # every value is a plain YAML type
-
-
-def test_describe_system_reads_the_pbs_job(no_scheduler, monkeypatch):
-    monkeypatch.setenv("PBS_JOBID", "1234[7].pbs")
-    monkeypatch.setenv("PBS_ARRAY_INDEX", "7")
-    monkeypatch.setenv("NCPUS", "12")
-
-    host = system.describe_system()["host"]
-
-    assert host["scheduler"] == "pbs"
-    assert host["job_id"] == "1234[7].pbs"
-    assert host["array_index"] == "7"
-    assert host["ncpus"] == "12"

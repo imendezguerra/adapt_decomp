@@ -4,18 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
 
 from benchmarks.fdsi import fdsi
 from benchmarks.fdsi.fdsi import Recording
-
-
-class _Outputs:
-    """A minimal stand-in for AdaptationResult: spikes (samples, units) and sil (units,)."""
-
-    def __init__(self, spikes: np.ndarray, sil=None):
-        self.spikes = torch.from_numpy(spikes.astype(np.int32))
-        self.sil = sil
 
 
 class _Calibration:
@@ -82,29 +73,18 @@ def test_raw_data_loaders_read_the_fdsi_clean_and_noisy_files(tmp_path):
     }
 
 
-def test_load_gt_full_bin_selects_and_orders_the_matched_units(tmp_path):
+def test_load_gt_matched_selects_and_orders_the_matched_units(tmp_path):
     path = fdsi.gt_spikes_path(tmp_path, "sub-01", "triangular-ramp40s")
     path.parent.mkdir(parents=True)
     spikes = np.array([np.array([2, 5]), np.array([7]), np.array([1, 9])], dtype=object)
     np.savez(path, spikes=spikes)
 
-    class _Calibration:
-        gt_matched_indices = np.array([2, 0])
-
     rec = Recording("sub-01", "triangular-ramp40s", 30)
-    out = fdsi.load_gt_full_bin(tmp_path, rec, _Calibration(), 20)
+    out = fdsi.load_gt_matched(tmp_path, rec, np.array([2, 0]), 20)
 
     assert out.shape == (20, 2)
     assert out[1, 0] == 1 and out[9, 0] == 1  # ground-truth unit 2, now column 0
     assert out[2, 1] == 1 and out[5, 1] == 1  # ground-truth unit 0, now column 1
-
-
-def test_load_gt_full_bin_is_none_without_a_supervised_match(tmp_path):
-    class _Calibration:
-        gt_matched_indices = None
-
-    rec = Recording("sub-01", "staircase", 30)
-    assert fdsi.load_gt_full_bin(tmp_path, rec, _Calibration(), 10) is None
 
 
 def test_triangular_phases_cover_the_recording_without_gaps():
@@ -126,9 +106,10 @@ def test_compute_roa_subset_is_nan_for_an_empty_slice_and_one_for_identical_trai
 def test_unit_metrics_of_a_perfect_triangular_result():
     spikes = _spike_train(2000, 2)
     metrics = fdsi.unit_metrics(
-        _Outputs(spikes, sil=np.array([0.9, 0.8])),
         spikes,
-        _Calibration(2, gt_matched_indices=np.array([7, 3]), roa=np.array([0.95, 1.0])),
+        np.array([0.9, 0.8]),
+        spikes,
+        np.array([7, 3]),
         Recording("sub-01", "triangular-ramp10s", 30),
         "sv_mean",
         cal_end=400,
@@ -141,7 +122,6 @@ def test_unit_metrics_of_a_perfect_triangular_result():
     assert set(metrics["recording"]) == {"sub-01_FDSI_triangular-ramp10s_snr30dB"}
     assert list(metrics["unit"]) == [0, 1]
     assert list(metrics["gt_unit"]) == [7, 3]  # the simulation motor units they track
-    np.testing.assert_allclose(metrics["roa_calib"], [0.95, 1.0])
     for column in ("roa_full", "roa_after_cal", "roa_first_iso", "roa_ramp", "roa_last_iso"):
         np.testing.assert_allclose(metrics[column], [1.0, 1.0])
     np.testing.assert_allclose(metrics["sil"], [0.9, 0.8])
@@ -149,22 +129,23 @@ def test_unit_metrics_of_a_perfect_triangular_result():
     assert list(metrics["n_spikes"]) == list(metrics["n_spikes_gt"])
 
 
-def test_unit_metrics_without_phases_or_ground_truth():
+def test_unit_metrics_of_a_staircase_have_no_phases():
     spikes = _spike_train(2000, 3)
-    calibration = _Calibration(3)  # no supervised match
-    rec, scoring = (
+    staircase = fdsi.unit_metrics(
+        spikes,
+        np.ones(3),
+        spikes,
+        np.arange(3),
         Recording("sub-01", "staircase", 30),
-        dict(cal_end=400, iso_dur=400, fs=2048, tol_spike_ms=1.0),
+        "fixed",
+        cal_end=400,
+        iso_dur=400,
+        fs=2048,
+        tol_spike_ms=1.0,
     )
-    staircase = fdsi.unit_metrics(_Outputs(spikes), spikes, calibration, rec, "fixed", **scoring)
-    no_gt = fdsi.unit_metrics(_Outputs(spikes), None, calibration, rec, "fixed", **scoring)
 
     assert staircase["roa_ramp"].isna().all()  # phases only for triangular contractions
     assert staircase["roa_after_cal"].notna().all()
-    assert no_gt["roa_full"].isna().all()
-    assert (no_gt["n_spikes_gt"] == -1).all()
-    assert no_gt["sil"].isna().all()
-    assert (no_gt["gt_unit"] == -1).all() and no_gt["roa_calib"].isna().all()
 
 
 def test_calibration_unit_metrics_list_each_unit_with_its_ground_truth_match():
@@ -186,15 +167,3 @@ def test_calibration_unit_metrics_list_each_unit_with_its_ground_truth_match():
     assert list(units["gt_unit"]) == [12, 0, 5]
     np.testing.assert_allclose(units["roa_calib"], [0.97, 0.91, 1.0])
     assert int((units["sil_calib"] >= 0.9).sum()) == 2
-
-
-def test_spikes_digest_depends_only_on_the_spikes_and_their_shape():
-    spikes = _spike_train(100, 2)
-    digest = fdsi.spikes_digest(spikes)
-
-    assert fdsi.spikes_digest(spikes.astype(np.int32)) == digest
-    assert fdsi.spikes_digest(spikes.astype(bool)) == digest
-    moved = spikes.copy()
-    moved[5, 0], moved[6, 0] = 0, 1
-    assert fdsi.spikes_digest(moved) != digest
-    assert fdsi.spikes_digest(spikes.reshape(50, 4)) != digest

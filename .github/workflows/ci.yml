@@ -113,7 +113,8 @@ jobs:
           /tmp/wheel-env/bin/pip install dist/*.whl
           cd /tmp
           /tmp/wheel-env/bin/python -c "import adapt_decomp; from adapt_decomp.adaptation import PRESETS, AdaptConfig; [AdaptConfig.from_preset(p) for p in PRESETS]; print(adapt_decomp.__version__)"
-          /tmp/wheel-env/bin/adapt-decomp-data list
+          /tmp/wheel-env/bin/adapt-decomp --help
+          /tmp/wheel-env/bin/adapt-decomp data list
 
   pinned-env:
     name: Pinned environment.yaml + reproducibility (${{ matrix.os }})
