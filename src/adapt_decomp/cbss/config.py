@@ -69,20 +69,31 @@ class CBSSConfig:
         refine_max_iter (int): Maximum refinement iterations per unit.
         sil_th (float): Minimum silhouette for a unit to be kept.
         min_spikes (int): Minimum number of spikes for a unit to be kept.
-        roa_th (float): Rate of agreement above which two units count as duplicates.
+        roa_th (float): Score on duplicate_metric at or above which two units count
+            as duplicates.
+        duplicate_metric (Literal["roa", "f1", "match"]): Agreement score compared with
+            roa_th: rate of agreement, F1, or common spikes over the larger spike count
+            (muniverse's duplicate score).
+        duplicate_keep_by (Literal["cov_isi", "sil"]): Unit kept from each group of
+            duplicates: lowest CoV-ISI or highest silhouette.
+        duplicate_tol_spike_ms (float): Spike coincidence tolerance for duplicate
+            detection, in ms.
+        duplicate_tol_train_ms (float): Largest lag searched between two units for
+            duplicate detection, in ms.
         run_duplicate_removal (bool): Whether to remove duplicate units.
         selection (Literal["unsupervised", "supervised", None]): Unit selection
             applied at the end of decompose(): on unit properties ("unsupervised") or
             against ground truth ("supervised"). None keeps every unit.
         selection_kwargs (Optional[Dict[str, Any]]): Keyword arguments for
-            CBSSResult.select_unsupervised() or select_supervised().
+            CBSSResult.select_unsupervised() or select_supervised(). Its gt_spikes,
+            being data, is left out of to_dict()/to_yaml() and embedded configs.
         compute_properties (bool): Whether to compute each unit's pulse-to-noise ratio,
             discharge rate and MUAPs. Required by unsupervised selection.
         save_emg (bool): Whether to store the calibration EMG and timestamps in the
             result. Required to build an AdaptDecomp from it.
         device (Optional[Literal["cpu", "mps", "cuda"]]): Compute device. None picks
             CUDA, then MPS, then the CPU.
-        dtype (torch.dtype): Floating-point precision of the computation.
+        dtype (torch.dtype): Floating-point precision; CBSS runs in float32 only.
         random_seed (Optional[int]): Seed of the ICA initialisation order. None gives
             a different decomposition on every run.
         verbose (bool): Whether to print progress.
@@ -138,6 +149,10 @@ class CBSSConfig:
 
     # Duplicate removal
     roa_th: float = 0.3
+    duplicate_metric: Literal["roa", "f1", "match"] = "roa"
+    duplicate_keep_by: Literal["cov_isi", "sil"] = "cov_isi"
+    duplicate_tol_spike_ms: float = 0.5
+    duplicate_tol_train_ms: float = 40.0
     run_duplicate_removal: bool = True
 
     # Unit selection
@@ -170,6 +185,8 @@ class CBSSConfig:
                 self.device = "cpu"
         if isinstance(self.dtype, str):
             self.dtype = dtype_from_string(self.dtype)
+        if self.dtype != torch.float32:
+            raise ValueError(f"CBSS supports float32 only, got dtype={self.dtype}.")
         if self.device is not None:
             self.device = str(self.device)
         if self.ch_map is not None and not isinstance(self.ch_map, np.ndarray):
@@ -184,7 +201,8 @@ class CBSSConfig:
 
         Excludes derived (init=False) fields such as spike_min_dist, so that
         from_yaml(to_dict()) round-trips cleanly through the constructor
-        instead of raising on an unexpected keyword argument.
+        instead of raising on an unexpected keyword argument. Also excludes
+        selection_kwargs["gt_spikes"]: ground truth is data, not config.
 
         Returns:
             dict: Mapping of constructor field name to YAML-safe value.
@@ -194,6 +212,10 @@ class CBSSConfig:
             if not f.init:
                 continue
             out[f.name] = to_yaml_safe(getattr(self, f.name))
+        if out["selection_kwargs"] is not None:
+            out["selection_kwargs"] = {
+                k: v for k, v in out["selection_kwargs"].items() if k != "gt_spikes"
+            }
         return out
 
     def to_yaml(self, path: str | Path) -> None:
@@ -205,7 +227,20 @@ class CBSSConfig:
     @classmethod
     def from_yaml(cls, path: str | Path) -> "CBSSConfig":
         with Path(path).open("r") as f:
-            data = yaml.safe_load(f) or {}
+            return cls.from_dict(yaml.safe_load(f) or {})
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CBSSConfig":
+        """Build a CBSSConfig from a dict written by to_dict().
+
+        Args:
+            data (dict): Mapping of constructor field name to YAML-safe value.
+
+        Returns:
+            CBSSConfig: A new instance, with ch_map/ch_mask/dtype restored to
+            their array/dtype types.
+        """
+        data = dict(data)
         if data.get("ch_map") is not None:
             data["ch_map"] = np.asarray(data["ch_map"])
         if data.get("ch_mask") is not None:

@@ -1,5 +1,6 @@
-"""Tests for AdaptDecomp.from_calibration()'s required cbss_config and the
-reconciliation it performs against adapt_config.
+"""Tests for AdaptDecomp.from_calibration()'s cbss_config (the calibration's
+embedded config, or an explicit fallback) and the reconciliation it performs
+against adapt_config.
 
 cbss_config is treated as ground truth for every field in
 core._SHARED_CBSS_ADAPT_FIELDS (ext_fact, ext_mode, spike_det_exp, the
@@ -182,3 +183,35 @@ def test_cbss_config_calibration_ext_fact_mismatch_raises():
             calibration=calibration,
             cbss_config=cbss_config,
         )
+
+
+def test_embedded_config_is_used_without_cbss_config():
+    """calibration.config alone is enough: it seeds adapt_config, and the
+    adapter keeps it for its AdaptationResult."""
+    calibration = _make_cbss_result(ext_fact=3, C=2)
+    calibration.config = CBSSConfig(ext_fact=3, spike_det_exp=1.5)
+
+    adapter = AdaptDecomp.from_calibration(calibration)
+
+    assert adapter.config.spike_det_exp == 1.5
+    assert adapter.cbss_config is calibration.config
+
+
+def test_embedded_config_wins_over_a_differing_cbss_config():
+    """With both set, calibration.config is used and one UserWarning names
+    the fields the explicit cbss_config differs on."""
+    calibration = _make_cbss_result(ext_fact=2, C=2)
+    calibration.config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
+
+    with pytest.warns(UserWarning, match="spike_det_exp.*embedded one is used"):
+        adapter = AdaptDecomp.from_calibration(
+            calibration, cbss_config=CBSSConfig(ext_fact=2, spike_det_exp=9.0)
+        )
+
+    assert adapter.config.spike_det_exp == 1.5
+
+
+def test_no_embedded_config_and_no_cbss_config_raises():
+    """A legacy calibration (no embedded config) needs an explicit cbss_config."""
+    with pytest.raises(ValueError, match="no embedded config"):
+        AdaptDecomp.from_calibration(_make_cbss_result())

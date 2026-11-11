@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from adapt_decomp import CBSSResult
-from adapt_decomp.spikes import rate_of_agreement_paired
+from adapt_decomp.spikes import compare_paired_spikes
 from adapt_decomp.utils import load_emg, load_gt
 
 PHASES = ("first_iso", "ramp", "last_iso")
@@ -190,7 +190,7 @@ def compute_roa_subset(
     sub_gt, sub_pred = gt_full_bin[s], pred_full_spikes[s]
     if sub_gt.shape[0] == 0:
         return np.full(gt_full_bin.shape[1], np.nan)
-    roa, _, _ = rate_of_agreement_paired(sub_gt, sub_pred, fs=fs, tol_spike_ms=tol_spike_ms)
+    roa = compare_paired_spikes(sub_gt, sub_pred, fs=fs, tol_spike_ms=tol_spike_ms).roa
     return roa
 
 

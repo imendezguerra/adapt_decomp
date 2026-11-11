@@ -9,7 +9,6 @@ preprocess: true                            # Filter the EMG before extension
 datasets:
   - name: triangular-ramp40s                # Dataset name for labelling
     path_emg: 'data/fdsi_example/data/sub-01/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz'
-    path_calib: 'data/fdsi_example/outputs/docs-example/calibration.pkl'
-    path_calib_config: 'data/fdsi_example/outputs/docs-example/calibration_config.yaml'
+    path_calib: 'data/fdsi_example/outputs/docs-example/calibration.h5'
     path_gt: 'data/fdsi_example/data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz'   # Optional; omit for no RoA
     start: 10240                            # Adapt and score from the calibration's end (5 s at 2048 Hz)

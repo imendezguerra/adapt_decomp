@@ -2,11 +2,15 @@
 
 import pickle
 
+import h5py
 import numpy as np
 import pytest
 import torch
 
+from adapt_decomp import __version__
+from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.utils import write_h5
 
 
 def _make_result(
@@ -112,7 +116,7 @@ def test_dict_style_access_mirrors_to_dict():
 
 
 def test_cbss_result_save_load_roundtrip(tmp_path):
-    """CBSSResult.save()/.load() should round-trip fields via pickle."""
+    """CBSSResult.save()/.load() should round-trip fields and the embedded config via HDF5."""
     n_mu, T, D = 2, 20, 4
     spikes = np.zeros((T, n_mu), dtype=np.int32)
     spikes[::5] = 1
@@ -128,9 +132,15 @@ def test_cbss_result_save_load_roundtrip(tmp_path):
         sil=np.full(n_mu, 0.9, dtype=np.float32),
         cov_isi=np.full(n_mu, 0.1, dtype=np.float32),
         ext_fact=2,
+        config=CBSSConfig(
+            ext_fact=2,
+            ch_map=np.arange(4).reshape(2, 2),
+            selection="supervised",
+            selection_kwargs={"gt_spikes": np.ones((T, 2)), "roa_th": 0.9},
+        ),
     )
 
-    path = tmp_path / "cbss_result.pkl"
+    path = tmp_path / "cbss_result.h5"
     result.save(path)
     loaded = CBSSResult.load(path)
 
@@ -139,13 +149,32 @@ def test_cbss_result_save_load_roundtrip(tmp_path):
     np.testing.assert_array_equal(loaded.spikes, result.spikes)
     assert loaded.ext_fact == result.ext_fact
     assert loaded.spikes_dict.keys() == result.spikes_dict.keys()
+    np.testing.assert_array_equal(loaded.spikes_dict[1], result.spikes_dict[1])
+    assert loaded.pnr is None
+    assert loaded.config.to_dict() == result.config.to_dict()
+    with h5py.File(path) as f:
+        assert f.attrs["package_version"] == __version__
 
 
 def test_cbss_result_load_rejects_wrong_type(tmp_path):
-    """CBSSResult.load() must raise ValueError if the pickle holds a different type."""
-    path = tmp_path / "not_a_result.pkl"
-    with open(path, "wb") as f:
-        pickle.dump({"not": "a CBSSResult"}, f)
+    """CBSSResult.load() must raise ValueError if the file holds a different result."""
+    path = tmp_path / "not_a_result.h5"
+    write_h5(path, {"sources": np.zeros(2)}, {"format": "AdaptationResult"})
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="CBSSResult"):
         CBSSResult.load(path)
+
+
+def test_cbss_result_load_reads_legacy_pickle_with_deprecation_warning(tmp_path):
+    """A pickled CBSSResult still loads, warning, with no embedded config."""
+    result = _make_result()
+    del result.__dict__["config"]  # simulate an instance pickled before config existed
+    path = tmp_path / "legacy_result.pkl"
+    with open(path, "wb") as f:
+        pickle.dump(result, f)
+
+    with pytest.warns(DeprecationWarning, match="legacy pickle"):
+        loaded = CBSSResult.load(path)
+
+    np.testing.assert_array_equal(loaded.sources, result.sources)
+    assert loaded.config is None

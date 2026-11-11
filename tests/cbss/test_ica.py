@@ -1,5 +1,5 @@
 """Tests for cbss/ica.py's shared contrast math (log_cosh is also imported
-directly by adaptation/ops.py -- see CLAUDE.md's cbss/ica.py note).
+directly by adaptation/ops.py).
 """
 
 import math

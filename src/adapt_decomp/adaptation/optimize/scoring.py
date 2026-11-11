@@ -25,7 +25,7 @@ from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize.units import UnitSelection, select_units
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
-from adapt_decomp.spikes.comparison import rate_of_agreement_paired
+from adapt_decomp.spikes.comparison import compare_paired_spikes
 from adapt_decomp.utils import validate_literals
 from adapt_decomp.utils.loaders import PooledDataset
 
@@ -220,7 +220,7 @@ def _run_one_dataset(
         compute_roa (bool): If True, score RoA against gt_paired_bin and
             include it in the returned losses.
         roa_kwargs (Optional[dict]): Extra keyword arguments forwarded to
-            rate_of_agreement_paired() when compute_roa is True.
+            compare_paired_spikes() when compute_roa is True.
 
     Returns:
         Tuple[AdaptationResult, Dict[str, Any]]: outputs, this dataset's
@@ -237,8 +237,8 @@ def _run_one_dataset(
     losses: Dict[str, Any] = _base_losses(outputs)
 
     if compute_roa:
-        pred_spikes = outputs.spikes.numpy().astype(np.float32)
-        roa_vals, _, _ = rate_of_agreement_paired(gt_paired_bin, pred_spikes, **roa_kwargs)
+        pred_spikes = outputs.spikes.numpy()
+        roa_vals = compare_paired_spikes(gt_paired_bin, pred_spikes, **roa_kwargs).roa
         outputs.roa = np.asarray(roa_vals, dtype=np.float32)  # travels with outputs.save()
         roa_mean = float(np.nanmean(roa_vals)) * 100
         losses["roa_mean"] = roa_mean

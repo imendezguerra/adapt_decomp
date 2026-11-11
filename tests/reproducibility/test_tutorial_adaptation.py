@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from adapt_decomp.spikes import rate_of_agreement_paired
+from adapt_decomp.spikes import compare_paired_spikes
 from tests.reproducibility.fingerprint import (
     PATH_REFERENCE,
     TOL_SPIKE_MS,
@@ -61,9 +61,9 @@ def reference():
 
 def test_spike_trains_match_reference(run, reference):
     assert run["spikes"].shape == reference["spikes"].shape
-    roa, _, _ = rate_of_agreement_paired(
+    roa = compare_paired_spikes(
         reference["spikes"], run["spikes"], fs=int(run["fs"]), tol_spike_ms=TOL_SPIKE_MS
-    )
+    ).roa
     worst = int(np.argmin(roa))
     assert roa.min() >= MIN_ROA_TO_REFERENCE, (
         f"unit {worst}: RoA to reference {roa[worst]:.4f} < {MIN_ROA_TO_REFERENCE} "

@@ -99,7 +99,7 @@ def score_pool(
             to run in-process.
         overrides (dict): This trial's suggested parameter overrides.
         stage_dir (Optional[Path]): Scratch directory for this trial's
-            "<trial_number>_<dataset>.pkl" outputs, or None.
+            "<trial_number>_<dataset>.h5" outputs, or None.
         trial_number (int): This trial's Optuna trial.number, unique even
             when trials run concurrently, so staged files never collide.
         settings (dict): score_dataset's keyword-only arguments.
@@ -110,7 +110,7 @@ def score_pool(
     """
 
     def stage_path(name: str) -> Optional[Path]:
-        return stage_dir / f"{trial_number}_{name}.pkl" if stage_dir is not None else None
+        return stage_dir / f"{trial_number}_{name}.h5" if stage_dir is not None else None
 
     if group is None:
         torch.set_num_threads(n_threads)

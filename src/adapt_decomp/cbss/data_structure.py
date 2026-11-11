@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import pickle
-from dataclasses import dataclass
+import warnings
+from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
+import h5py
 import numpy as np
 import torch
+import yaml
+
+from adapt_decomp import __version__
+from adapt_decomp.utils.utils import read_h5, write_h5
+
+if TYPE_CHECKING:
+    from adapt_decomp.cbss.config import CBSSConfig
 
 
 @dataclass
@@ -54,6 +63,8 @@ class CBSSResult:
         roa (Optional[np.ndarray]): Rate of agreement of each unit with its
             ground-truth unit with shape (n_mu,), as a fraction. Set by
             select_supervised().
+        config (Optional[CBSSConfig]): The config that produced this result. Set by
+            CBSS.decompose() and CBSS.apply(); None for legacy files.
     """
 
     sources: np.ndarray
@@ -76,6 +87,7 @@ class CBSSResult:
     timestamps: Optional[np.ndarray] = None
     gt_matched_indices: Optional[np.ndarray] = None
     roa: Optional[np.ndarray] = None
+    config: Optional[CBSSConfig] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise to a plain dict, omitting fields that are still None.
@@ -166,7 +178,7 @@ class CBSSResult:
     # ------------------------------------------------------------------
 
     def save(self, path: Union[str, Path]) -> None:
-        """Pickle this result to disk.
+        """Save this result to HDF5, with its config embedded as YAML.
 
         Args:
             path (Union[str, Path]): Destination file path.
@@ -174,27 +186,53 @@ class CBSSResult:
         Returns:
             None
         """
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        attrs = {"format": "CBSSResult", "format_version": 1, "package_version": __version__}
+        if self.config is not None:
+            attrs["config"] = yaml.safe_dump(self.config.to_dict(), sort_keys=True)
+        write_h5(path, self.to_dict(), attrs)
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> CBSSResult:
         """Load a CBSSResult previously written by save().
 
+        Fields missing from the file take their defaults, and unknown ones are
+        dropped. Legacy pickle files are still read, with a DeprecationWarning.
+
         Args:
-            path (Union[str, Path]): Path to a pickle file written by save().
+            path (Union[str, Path]): Path to a file written by save().
 
         Returns:
-            CBSSResult: The unpickled result.
+            CBSSResult: The loaded result.
 
         Raises:
-            ValueError: If the unpickled object is not a CBSSResult.
+            ValueError: If the file does not contain a CBSSResult.
         """
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
-        if not isinstance(obj, cls):
-            raise ValueError(f"{path} does not contain a CBSSResult (got {type(obj).__name__}).")
-        return obj
+        if not h5py.is_hdf5(path):
+            with open(path, "rb") as f:
+                obj = pickle.load(f)
+            warnings.warn(
+                f"{path} is a legacy pickle; reading pickled results is deprecated. "
+                "Re-save it with CBSSResult.load(path).save(new_path).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            if not isinstance(obj, cls):
+                raise ValueError(
+                    f"{path} does not contain a CBSSResult (got {type(obj).__name__})."
+                )
+            return obj
+
+        from adapt_decomp.cbss.config import CBSSConfig
+
+        data, attrs = read_h5(path)
+        if attrs.get("format") != "CBSSResult":
+            raise ValueError(f"{path} does not contain a CBSSResult (got {attrs.get('format')}).")
+        data = {k: v for k, v in data.items() if k in {f.name for f in fields(cls)}}
+        data["spikes_dict"] = {int(k): v for k, v in data["spikes_dict"].items()}
+        data["ext_fact"] = int(data["ext_fact"])
+        if "config" in attrs:
+            data["config"] = CBSSConfig.from_dict(yaml.safe_load(attrs["config"]))
+        return cls(**data)
 
     # ------------------------------------------------------------------
     # Derived properties
@@ -270,6 +308,7 @@ class CBSSResult:
             timestamps=self.timestamps,
             gt_matched_indices=_sel1d(self.gt_matched_indices),
             roa=_sel1d(self.roa),
+            config=self.config,
         )
 
     def unsupervised_mask(
@@ -376,8 +415,6 @@ class CBSSResult:
             ValueError: If no units match or fs cannot be determined.
         """
         T = self.sources.shape[0]
-        n_mu = self.sources.shape[1]
-
         if gt_spikes.shape[0] != T:
             raise ValueError(
                 f"gt_spikes has {gt_spikes.shape[0]} samples but self.sources has {T}. "
@@ -385,34 +422,21 @@ class CBSSResult:
             )
         fs_val = float(fs) if fs is not None else self.fs
 
-        from adapt_decomp.spikes import rate_of_agreement
+        from adapt_decomp.spikes import compare_spikes
 
-        roa_vals, pairs, _ = rate_of_agreement(
-            gt_spikes.astype(np.float32),
-            self.spikes.astype(np.float32),
-            fs=int(fs_val),
-            tol_spike_ms=tol_spike_ms,
+        # pairs[i] = (gt_idx, dec_idx), sorted by dec_idx: 1:1 Hungarian assignment
+        agreement = compare_spikes(
+            gt_spikes, self.spikes, fs=fs_val, min_score=roa_th, tol_spike_ms=tol_spike_ms
         )
-        # pairs[i] = (gt_idx, dec_idx), sorted by dec_idx ascending — 1:1 global greedy assignment
-        mask = np.zeros(n_mu, dtype=bool)
-        gt_matched = np.zeros(n_mu, dtype=np.int64)
-        roa_by_dec_idx = np.zeros(n_mu, dtype=np.float64)
-        for (gt_idx, dec_idx), roa_val in zip(pairs, roa_vals):
-            if roa_val >= roa_th:
-                mask[dec_idx] = True
-                gt_matched[dec_idx] = gt_idx
-                roa_by_dec_idx[dec_idx] = roa_val
-
-        n_kept = int(mask.sum())
-        if n_kept == 0:
+        if len(agreement.pairs) == 0:
             raise ValueError(
                 f"No units had RoA >= {roa_th} with any ground-truth unit. "
                 "Lower roa_th or check the calibration."
             )
 
-        subset = self.subset(mask)
-        subset.gt_matched_indices = gt_matched[mask].astype(np.int64)
-        subset.roa = roa_by_dec_idx[mask]
+        subset = self.subset(agreement.pairs[:, 1])
+        subset.gt_matched_indices = agreement.pairs[:, 0].astype(np.int64)
+        subset.roa = agreement.roa
         return subset
 
     # ------------------------------------------------------------------

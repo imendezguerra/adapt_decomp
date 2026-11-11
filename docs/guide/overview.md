@@ -49,7 +49,7 @@ Results also read like dicts: `result["spikes"]` is `result.spikes`.
 
 | Use | When |
 |---|---|
-| `AdaptDecomp.from_calibration(calibration, cbss_config, adapt_config)` | You have a `CBSSResult`, just computed or loaded. The usual path. |
+| `AdaptDecomp.from_calibration(calibration, adapt_config=adapt_config)` | You have a `CBSSResult`, just computed or loaded. The usual path. |
 | `AdaptDecomp.calibrate_and_process(emg, timestamps, calib_indices, cbss_config, adapt_config)` | One call that calibrates on a window, then adapts over the whole recording. Returns `(AdaptationResult, CBSSResult)`. |
 | `AdaptDecomp(whitening=..., sep_vectors=..., ...)` | Your calibration comes from another tool. |
 

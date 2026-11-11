@@ -15,7 +15,7 @@ import pytest
 from adapt_decomp.adaptation import AdaptConfig, AdaptDecomp
 from adapt_decomp.adaptation.optimize import DEFAULT_UNIT_SELECTION_KWARGS, optimize_adapt_decomp
 from adapt_decomp.cbss import CBSS
-from adapt_decomp.spikes import rate_of_agreement_paired
+from adapt_decomp.spikes import compare_paired_spikes
 from adapt_decomp.utils.loaders import PooledDatasetMemory
 
 TOL_SPIKE_MS = 1
@@ -24,9 +24,9 @@ TOL_SPIKE_MS = 1
 def _roa(rec, calibration, spikes, start=0):
     """Per-unit RoA of spikes[start:] against the ground truth of calibration's units."""
     gt = rec.spikes[start:, calibration.gt_matched_indices]
-    roa, _, _ = rate_of_agreement_paired(
+    roa = compare_paired_spikes(
         gt, np.asarray(spikes)[start:], fs=rec.fs, tol_spike_ms=TOL_SPIKE_MS
-    )
+    ).roa
     return roa
 
 
@@ -62,7 +62,7 @@ def test_apply_reproduces_the_calibration(
     applied = CBSS(synthetic_cbss_config).apply(rec.emg[: rec.n_cal], cal)
 
     np.testing.assert_allclose(applied.sources, cal.sources, rtol=1e-3, atol=1e-3)
-    roa, _, _ = rate_of_agreement_paired(cal.spikes, applied.spikes, fs=rec.fs, tol_spike_ms=1)
+    roa = compare_paired_spikes(cal.spikes, applied.spikes, fs=rec.fs, tol_spike_ms=1).roa
     assert roa.min() >= 0.99
 
 
@@ -100,9 +100,9 @@ def test_adaptation_tracks_the_units_the_fixed_decomposition_loses(
     assert np.isfinite(np.asarray(adapted.sv_loss)).all()
 
     # Streaming the raw EMG batch by batch matches preprocessing it all at once
-    roa, _, _ = rate_of_agreement_paired(
+    roa = compare_paired_spikes(
         np.asarray(adapted.spikes), np.asarray(streamed.spikes), fs=rec.fs, tol_spike_ms=1
-    )
+    ).roa
     assert roa.min() >= 0.99
 
 

@@ -10,6 +10,7 @@ from torch.testing import assert_close
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import Data, RawData
+from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.preprocessing import extend_data
 
 # ---------------------------------------------------------------------------
@@ -258,12 +259,13 @@ def test_raw_data_dtype_and_device():
 
 
 # ---------------------------------------------------------------------------
-# AdaptationResult save/load (pickle round-trip)
+# AdaptationResult save/load (HDF5 round-trip)
 # ---------------------------------------------------------------------------
 
 
 def test_adaptation_result_save_load_roundtrip(tmp_path):
-    """AdaptationResult.save()/.load() should round-trip tensors via pickle."""
+    """AdaptationResult.save()/.load() should round-trip tensors, numpy fields and
+    the embedded configs via HDF5."""
     from adapt_decomp.adaptation.data_structures import AdaptationResult
 
     batches, M = 5, 3
@@ -275,15 +277,24 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
         sd_time_ms=torch.rand(batches),
         preprocess_time_ms=torch.zeros(batches),
         total_time_ms=torch.rand(batches),
+        wh_loss_total=torch.tensor(0.5),
+        roa=np.array([0.9, 0.8, 0.7], dtype=np.float32),
+        config=AdaptConfig(device="cpu"),
+        cbss_config=CBSSConfig(ext_fact=4),
     )
 
-    path = tmp_path / "adaptation_result.pkl"
+    path = tmp_path / "adaptation_result.h5"
     result.save(path)
     loaded = AdaptationResult.load(path)
 
     assert isinstance(loaded, AdaptationResult)
     assert_close(loaded.sources, result.sources)
+    assert_close(loaded.spikes, result.spikes)
+    assert_close(loaded.wh_loss_total, result.wh_loss_total)
+    assert isinstance(loaded.roa, np.ndarray)
     assert loaded.wh_loss is None
+    assert loaded.config.to_dict() == result.config.to_dict()
+    assert loaded.cbss_config.ext_fact == 4
 
 
 def test_adaptation_result_load_rejects_wrong_type(tmp_path):
@@ -317,7 +328,7 @@ def test_adaptation_result_sil_roundtrip(tmp_path):
     )
     assert result.to_dict()["sil"] is not None
 
-    path = tmp_path / "adaptation_result_sil.pkl"
+    path = tmp_path / "adaptation_result_sil.h5"
     result.save(path)
     loaded = AdaptationResult.load(path)
 
@@ -340,16 +351,19 @@ def test_adaptation_result_sil_defaults_none_for_legacy_pickle(tmp_path):
         preprocess_time_ms=torch.zeros(batches),
         total_time_ms=torch.rand(batches),
     )
-    del result.__dict__["sil"]  # simulate an instance pickled before this field existed
+    for key in ("sil", "config", "cbss_config"):
+        del result.__dict__[key]  # simulate an instance pickled before these fields existed
 
     path = tmp_path / "legacy_result.pkl"
     with open(path, "wb") as f:
         pickle.dump(result, f)
 
-    loaded = AdaptationResult.load(path)
+    with pytest.warns(DeprecationWarning, match="legacy pickle"):
+        loaded = AdaptationResult.load(path)
 
     assert loaded.sil is None
     assert "sil" not in loaded.to_dict()
+    assert loaded.config is None and loaded.cbss_config is None
 
 
 def test_decomposition_ipts_calib_deprecated_alias_warns():

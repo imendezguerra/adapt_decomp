@@ -249,7 +249,7 @@ def optimize_adapt_decomp(
             dataset's ground truth for every trial and write it onto the
             saved AdaptationResult.roa. Defaults to False.
         roa_kwargs (Optional[dict], optional): Extra keyword arguments
-            forwarded to rate_of_agreement_paired() (e.g. tol_spike_ms).
+            forwarded to compare_paired_spikes() (e.g. tol_spike_ms).
             "fs" defaults to base_config's fs. Defaults to None.
         unit_selection (UnitSelection, optional): Which calibration units
             the search adapts and scores: None keeps every unit;
@@ -277,7 +277,8 @@ def optimize_adapt_decomp(
             use; sets only its speed. Datasets are spread over worker
             processes first (plan_resources), leftover cores become torch
             threads per run; a single worker runs in-process. Defaults to
-            None, which uses available_cores().
+            None, which uses every core of available_cores() and runs as
+            many datasets and trials at once as fit under the memory limit.
         sampler (Optional[optuna.samplers.BaseSampler], optional): Optuna
             sampler. Defaults to None, which uses multivariate
             TPESampler(n_startup_trials=DEFAULT_N_STARTUP_TRIALS,
@@ -293,7 +294,7 @@ def optimize_adapt_decomp(
         best_result_path (Optional[str], optional): If set, each trial's
             per-dataset AdaptationResults are staged in
             "<best_result_path>_temp" (deleted at the end) and promoted when
-            the trial improves on the best so far ("<dataset>.pkl" plus
+            the trial improves on the best so far ("<dataset>.h5" plus
             "config.yaml" in best_result_path itself) or joins the Pareto
             front ("trial_<n>/" subdirectories, removed when dominated);
             "study.pkl" is rewritten after every trial. Defaults to None.
@@ -385,7 +386,7 @@ def optimize_adapt_decomp(
             log_vars["on_front"] = joined
             # This trial's scratch files are no longer needed either way.
             for name in pool:
-                (temp_dir / f"{trial.number}_{name}.pkl").unlink(missing_ok=True)
+                (temp_dir / f"{trial.number}_{name}.h5").unlink(missing_ok=True)
 
         if on_trial is not None:
             on_trial(log_vars)
@@ -443,7 +444,7 @@ def optimize_adapt_decomp(
         shutil.rmtree(temp_dir)  # scratch space only, everything worth keeping is in best_dir
         if isinstance(next(iter(pool.values())), PooledDatasetMemory):
             outputs = {
-                name: AdaptationResult.load(member_dir(chosen.number) / f"{name}.pkl")
+                name: AdaptationResult.load(member_dir(chosen.number) / f"{name}.h5")
                 for name in pool
             }
         saved = ", ".join(sorted(p.name for p in best_dir.iterdir()))

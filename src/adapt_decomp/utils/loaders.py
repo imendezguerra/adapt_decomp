@@ -12,9 +12,12 @@ from scipy.io import loadmat
 
 from adapt_decomp.cbss.data_structure import CBSSResult
 from adapt_decomp.preprocessing.extension import extend_data
-from adapt_decomp.spikes import firings_to_spikes, pair_ground_truth
+from adapt_decomp.spikes import compare_spikes, firings_to_spikes
+from adapt_decomp.utils.utils import resolve_config
 
 if TYPE_CHECKING:
+    from adapt_decomp.adaptation.config import AdaptConfig
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
     from adapt_decomp.cbss.config import CBSSConfig
 
 # ------------------------------------------------------------------
@@ -168,13 +171,19 @@ def load_example(
         ext_mode="block",
         save_emg=False,
     )
+    cbss_result.config = cbss_config
 
     gt_source = sim_data if (path_gt is None or path_gt == path_emg) else _load_neuromotion(path_gt)
     spikes_gt = np.asarray(gt_source["spikes"])
-    gt_full_bin, roa_calib = pair_ground_truth(
-        spikes_gt,
+    # Match ground truth to the calibration's units over the calibration window
+    agreement = compare_spikes(
+        spikes_gt[: cbss_result.spikes.shape[0]],
         cbss_result.spikes,
         fs=int(sim_data["fs"]),
+        tol_spike_ms=2.0,
+    )
+    gt_full_bin, roa_calib = (
+        (spikes_gt[:, agreement.pairs[:, 0]], agreement.roa) if agreement.tp.any() else (None, None)
     )
 
     return {
@@ -238,19 +247,23 @@ def load_calib(
 ) -> Tuple[CBSSResult, Optional["CBSSConfig"]]:
     """Load a calibration result and its config by calib_loader's mechanism.
 
+    The config embedded in the result wins; path_calib_config is only a
+    fallback for results without one (e.g. legacy files), and warns if it
+    differs from the embedded one.
+
     Args:
         path_calib (Union[str, Path]): Path to the calibration result.
         path_calib_config (Optional[Union[str, Path]], optional): Path to
-            the calibration config, the sibling of path_calib from the same
-            calibration run. Defaults to None, which skips loading a config
-            (e.g. callers with no use for it, like load_pooled_cbss_memory).
+            a calibration config YAML from the same calibration run.
+            Defaults to None, which uses the embedded config only.
         calib_loader (CalibLoaderName, optional): Which mechanism loads
             path_calib/path_calib_config -- "class" delegates to
             CBSSResult.load()/CBSSConfig.from_yaml(). Defaults to "class".
 
     Returns:
         Tuple[CBSSResult, Optional[CBSSConfig]]: The loaded calibration
-        result, and its config (None if path_calib_config was None).
+        result, with config set, and that config (None if the result has
+        none embedded and path_calib_config was None).
 
     Raises:
         ValueError: If calib_loader is not "class".
@@ -259,11 +272,52 @@ def load_calib(
 
     if calib_loader == "class":
         cbss_result = CBSSResult.load(path_calib)
-        cbss_config = (
-            CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None
+        cbss_result.config = resolve_config(
+            cbss_result.config,
+            CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None,
         )
-        return cbss_result, cbss_config
+        return cbss_result, cbss_result.config
     raise ValueError(f"Unknown calib_loader: {calib_loader!r}. Expected 'class'.")
+
+
+def load_adapt(
+    path_adapt: Union[str, Path],
+    path_adapt_config: Optional[Union[str, Path]] = None,
+    path_calib_config: Optional[Union[str, Path]] = None,
+) -> Tuple["AdaptationResult", Optional["AdaptConfig"], Optional["CBSSConfig"]]:
+    """Load an adaptation result and the configs embedded in it.
+
+    As in load_calib(), the embedded configs win; the YAML paths are only a
+    fallback for results without them (e.g. legacy files), and warn if they
+    differ from the embedded ones.
+
+    Args:
+        path_adapt (Union[str, Path]): Path to an AdaptationResult written by
+            AdaptationResult.save().
+        path_adapt_config (Optional[Union[str, Path]], optional): Path to an
+            AdaptConfig YAML from the same run. Defaults to None.
+        path_calib_config (Optional[Union[str, Path]], optional): Path to the
+            CBSSConfig YAML of the calibration it adapted. Defaults to None.
+
+    Returns:
+        Tuple[AdaptationResult, Optional[AdaptConfig], Optional[CBSSConfig]]:
+        The loaded result, with config/cbss_config set, and those two configs
+        (each None if neither embedded nor given).
+    """
+    from adapt_decomp.adaptation.config import AdaptConfig
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+    from adapt_decomp.cbss.config import CBSSConfig
+
+    adapt_result = AdaptationResult.load(path_adapt)
+    adapt_result.config = resolve_config(
+        adapt_result.config,
+        AdaptConfig.from_yaml(path_adapt_config) if path_adapt_config is not None else None,
+    )
+    adapt_result.cbss_config = resolve_config(
+        adapt_result.cbss_config,
+        CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None,
+    )
+    return adapt_result, adapt_result.config, adapt_result.cbss_config
 
 
 def load_emg(path_emg: Union[str, Path], emg_loader: EmgLoaderName = "npz") -> np.ndarray:
@@ -460,14 +514,14 @@ class PooledDatasetDisk:
     PooledDatasetMemory, for optimize_adapt_decomp().
 
     Attributes:
-        path_calib (Path): Calibration result (e.g. a CBSSResult pickle
+        path_calib (Path): Calibration result (e.g. a CBSSResult HDF5
             written by CBSSResult.save()), with .emg set.
-        path_calib_config (Path): Calibration config (e.g. a CBSSConfig
-            YAML written by CBSSConfig.to_yaml()) -- the sibling of
-            path_calib, from the same calibration run.
         path_emg (Path): .npz file, key "emg", with shape
             (samples, channels) -- the full online recording for this
             dataset.
+        path_calib_config (Optional[Path]): Calibration config YAML written
+            by CBSSConfig.to_yaml(), only needed when path_calib has no
+            embedded config (e.g. a legacy file). Defaults to None.
         calib_loader (CalibLoaderName, optional): Mechanism loading
             path_calib/path_calib_config, resolved via load_calib() each
             trial. Defaults to "class".
@@ -492,8 +546,8 @@ class PooledDatasetDisk:
     """
 
     path_calib: Path
-    path_calib_config: Path
     path_emg: Path
+    path_calib_config: Optional[Path] = None
     calib_loader: CalibLoaderName = "class"
     emg_loader: EmgLoaderName = "npz"
     gt_loader: GtLoaderName = "npz"
@@ -561,9 +615,9 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
         datasets:
           - name: <pool key, e.g. a dataset/recording label>
             path_emg: <emg_loader format, e.g. .npz key "emg", shape (samples, channels)>
-            path_calib: <calib_loader format, e.g. CBSSResult pickle written by CBSSResult.save()>
-            path_calib_config: <CBSSConfig YAML written by CBSSConfig.to_yaml()
-                                 -- the sibling of path_calib, same calibration run>
+            path_calib: <calib_loader format, e.g. CBSSResult HDF5 written by CBSSResult.save()>
+            path_calib_config: <optional -- CBSSConfig YAML written by CBSSConfig.to_yaml(),
+                                 only for results without an embedded config>
             path_gt: <optional -- gt_loader format, e.g. .npz key "spikes">
             preprocess: <optional per-dataset override>
             calib_loader: <optional per-dataset override>
@@ -603,9 +657,10 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
     pool: Dict[str, PooledDatasetMemory] = {}
     for dataset in data_config["datasets"]:
         calib_loader, emg_loader, gt_loader = _resolve_pool_loaders(dataset, defaults)
+        path_calib_config = dataset.get("path_calib_config")
         cbss_result, cbss_config = load_calib(
             root / dataset["path_calib"],
-            root / dataset["path_calib_config"],
+            root / path_calib_config if path_calib_config is not None else None,
             calib_loader,
         )
         emg_full = load_emg(root / dataset["path_emg"], emg_loader)
@@ -652,9 +707,9 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
         datasets:
           - name: <pool key, e.g. a dataset/recording label>
             path_emg: <emg_loader format, e.g. .npz key "emg", shape (samples, channels)>
-            path_calib: <calib_loader format, e.g. CBSSResult pickle written by CBSSResult.save()>
-            path_calib_config: <CBSSConfig YAML written by CBSSConfig.to_yaml()
-                                 -- the sibling of path_calib, same calibration run>
+            path_calib: <calib_loader format, e.g. CBSSResult HDF5 written by CBSSResult.save()>
+            path_calib_config: <optional -- CBSSConfig YAML written by CBSSConfig.to_yaml(),
+                                 only for results without an embedded config>
             path_gt: <optional -- gt_loader format, e.g. .npz key "spikes">
             preprocess: <optional per-dataset override>
             calib_loader: <optional per-dataset override>
@@ -687,11 +742,12 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
     for dataset in data_config["datasets"]:
         calib_loader, emg_loader, gt_loader = _resolve_pool_loaders(dataset, defaults)
         path_gt = dataset.get("path_gt")
+        path_calib_config = dataset.get("path_calib_config")
         start, stop = _resolve_pool_window(dataset)
         pool[dataset["name"]] = PooledDatasetDisk(
             path_calib=root / dataset["path_calib"],
-            path_calib_config=root / dataset["path_calib_config"],
             path_emg=root / dataset["path_emg"],
+            path_calib_config=root / path_calib_config if path_calib_config is not None else None,
             calib_loader=calib_loader,
             emg_loader=emg_loader,
             gt_loader=gt_loader,

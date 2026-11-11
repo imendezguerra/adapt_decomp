@@ -41,22 +41,25 @@ def test_decompose_then_process_data_from_the_calibration_end(tmp_path, files, s
         "decompose", files["emg"], "--cbss_config", files["cbss_config"], "--stop", n_cal,
         "--gt", files["gt"], "--out_dir", tmp_path / "calib",
     )  # fmt: skip
-    calibration = CBSSResult.load(tmp_path / "calib" / "calibration.pkl")
+    calibration = CBSSResult.load(tmp_path / "calib" / "calibration.h5")
     assert calibration.gt_matched_indices is not None
     assert calibration.sources.shape[0] == n_cal
+    assert calibration.config is not None
 
+    # No --calibration_config: the config embedded in the calibration is used
     invoke(
         "process_data", files["emg"],
-        "--calibration", tmp_path / "calib" / "calibration.pkl",
-        "--calibration_config", tmp_path / "calib" / "calibration_config.yaml",
+        "--calibration", tmp_path / "calib" / "calibration.h5",
         "--preset", "muniverse", "--start", n_cal, "--source_fifo_from_calib",
-        "--out", tmp_path / "adapted.pkl",
+        "--out", tmp_path / "adapted.h5",
     )  # fmt: skip
-    adapted = AdaptationResult.load(tmp_path / "adapted.pkl")
+    adapted = AdaptationResult.load(tmp_path / "adapted.h5")
     assert adapted.spikes.shape == (
         synthetic_recording.emg.shape[0] - n_cal,
         calibration.spikes.shape[1],
     )
+    assert adapted.config.source_fifo_from_calib
+    assert adapted.cbss_config.to_dict() == calibration.config.to_dict()
 
 
 def test_calibrate_and_process_covers_the_recording_and_saves_no_ground_truth(
@@ -67,11 +70,13 @@ def test_calibrate_and_process_covers_the_recording_and_saves_no_ground_truth(
         "--calib_stop", synthetic_recording.n_cal, "--gt", files["gt"], "--preset", "muniverse",
         "--out_dir", tmp_path / "out",
     )  # fmt: skip
-    adapted = AdaptationResult.load(tmp_path / "out" / "adapted.pkl")
+    adapted = AdaptationResult.load(tmp_path / "out" / "adapted.h5")
     assert adapted.spikes.shape[0] == synthetic_recording.emg.shape[0]
-    assert CBSSResult.load(tmp_path / "out" / "calibration.pkl").gt_matched_indices is not None
+    calibration = CBSSResult.load(tmp_path / "out" / "calibration.h5")
+    assert calibration.gt_matched_indices is not None
     # The saved config is the one passed in: the ground truth stays out of the YAML
     assert CBSSConfig.from_yaml(tmp_path / "out" / "calibration_config.yaml").selection is None
+    assert calibration.config.selection is None
 
 
 def test_preset_and_adapt_config_cannot_both_be_given(tmp_path, files):
@@ -105,8 +110,7 @@ def pool_config(tmp_path, files, synthetic_recording):
                     {
                         "name": "synthetic",
                         "path_emg": "emg.npz",
-                        "path_calib": "calib/calibration.pkl",
-                        "path_calib_config": "calib/calibration_config.yaml",
+                        "path_calib": "calib/calibration.h5",
                         "path_gt": "spikes.npz",
                         "start": n_cal,
                     }

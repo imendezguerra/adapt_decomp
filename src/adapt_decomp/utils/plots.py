@@ -141,6 +141,9 @@ def plot_sep_vectors_diff(
         cax = divider.append_axes("right", size="5%", pad=0.05)
         plt.colorbar(im, cax=cax, orientation="vertical")
 
+    for unit in range(units, len(ax)):
+        ax[unit].axis("off")
+
     return ax
 
 
@@ -1105,6 +1108,9 @@ def plot_search_front(
 ) -> plt.Axes:
     """A two-objective search's trials and Pareto front, coloured by pooled RoA.
 
+    When the trials carry RoA, points are coloured by it and the highest-RoA trial
+    is marked with a star; otherwise points are grey.
+
     Args:
         trials (pd.DataFrame): One search's trials in study.trials_dataframe()
             format, with values_<objective> columns; only COMPLETE trials are drawn.
@@ -1125,12 +1131,31 @@ def plot_search_front(
         _fig, ax = plt.subplots(figsize=(5.5, 4.2), layout="constrained")
     complete = _complete_trials(trials)
     x_col, y_col = (f"values_{objective}" for objective in objectives)
+    has_roa = roa_col in complete and complete[roa_col].notna().any()
 
     points = ax.scatter(
-        complete[x_col], complete[y_col], c=complete[roa_col], cmap="viridis", s=24, zorder=2
+        complete[x_col],
+        complete[y_col],
+        c=complete[roa_col] if has_roa else "0.6",
+        cmap="viridis" if has_roa else None,
+        s=24,
+        zorder=2,
     )
     on_front = complete[complete["number"].isin(front)].sort_values(x_col)
     ax.plot(on_front[x_col], on_front[y_col], color="black", linewidth=1, label="Pareto front")
+    if has_roa:
+        best = complete.loc[complete[roa_col].idxmax()]
+        ax.scatter(
+            best[x_col],
+            best[y_col],
+            marker="*",
+            s=180,
+            color="tab:orange",
+            edgecolor="black",
+            linewidth=0.6,
+            label="Highest RoA",
+            zorder=4,
+        )
     chosen = complete[complete["number"] == chosen_number]
     if len(chosen):
         ax.scatter(
@@ -1147,7 +1172,8 @@ def plot_search_front(
     _log_if_positive(ax, complete[x_col], "x")
     _log_if_positive(ax, complete[y_col], "y")
     ax.set(xlabel=objectives[0], ylabel=objectives[1], title=title)
-    ax.figure.colorbar(points, ax=ax, label="Pooled mean RoA (%)")
+    if has_roa:
+        ax.figure.colorbar(points, ax=ax, label="Pooled mean RoA (%)")
     ax.legend(loc="best", fontsize="small")
     return ax
 

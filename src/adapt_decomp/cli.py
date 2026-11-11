@@ -22,7 +22,7 @@ from adapt_decomp.adaptation import optimize_adapt_decomp as _optimize_adapt_dec
 from adapt_decomp.adaptation.optimize import DEFAULT_PARAM_SPACE
 from adapt_decomp.adaptation.optimize.units import has_gt
 from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
-from adapt_decomp.spikes import rate_of_agreement_paired
+from adapt_decomp.spikes import compare_paired_spikes
 from adapt_decomp.utils import download
 from adapt_decomp.utils.loaders import PooledDataset, load_data, load_emg, load_gt
 
@@ -32,7 +32,7 @@ app = typer.Typer(
 )
 app.add_typer(download.app, name="data")
 
-CALIBRATION_FILE = "calibration.pkl"
+CALIBRATION_FILE = "calibration.h5"
 CALIBRATION_CONFIG_FILE = "calibration_config.yaml"
 WANDB_MISSING = 'wandb is not installed; install it with: pip install "adapt-decomp[wandb]"'
 
@@ -228,17 +228,18 @@ def _timestamps(n_samples: int, fs: float) -> np.ndarray:
 
 
 def _save_calibration(calibration: CBSSResult, cbss_config: CBSSConfig, out_dir: Path) -> None:
-    """Save a calibration and its config side by side, as process_data reads them.
+    """Save a calibration, with cbss_config embedded, and cbss_config's YAML side by side.
 
     Args:
         calibration (CBSSResult): The calibration.
         cbss_config (CBSSConfig): The config that produced it.
-        out_dir (Path): Folder to write calibration.pkl and calibration_config.yaml into.
+        out_dir (Path): Folder to write calibration.h5 and calibration_config.yaml into.
 
     Returns:
         None
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    calibration.config = cbss_config
     calibration.save(out_dir / CALIBRATION_FILE)
     cbss_config.to_yaml(out_dir / CALIBRATION_CONFIG_FILE)
 
@@ -424,18 +425,19 @@ def process_data(
             "--calibration", exists=True, dir_okay=False, help="CBSSResult (CBSSResult.save)."
         ),
     ],
+    out: Annotated[
+        Path, typer.Option("--out", help="File to write the AdaptationResult into (.h5).")
+    ],
     calibration_config: Annotated[
-        Path,
+        Optional[Path],
         typer.Option(
             "--calibration_config",
             exists=True,
             dir_okay=False,
-            help="The CBSSConfig YAML that produced --calibration.",
+            help="The CBSSConfig YAML that produced --calibration. Only needed when "
+            "--calibration has no embedded config (a legacy file).",
         ),
-    ],
-    out: Annotated[
-        Path, typer.Option("--out", help="File to write the AdaptationResult into (.pkl).")
-    ],
+    ] = None,
     preset: PresetOption = None,
     adapt_config: AdaptConfigOption = None,
     start: Annotated[
@@ -452,7 +454,7 @@ def process_data(
     """Adapt a calibration over a recording, batch by batch (AdaptDecomp.process_data)."""
     adapter = AdaptDecomp.from_calibration(
         calibration=CBSSResult.load(calibration),
-        cbss_config=CBSSConfig.from_yaml(calibration_config),
+        cbss_config=CBSSConfig.from_yaml(calibration_config) if calibration_config else None,
         adapt_config=_adapt_config(preset, adapt_config, source_fifo_from_calib),
     )
     result = adapter.process_data(
@@ -474,7 +476,7 @@ def calibrate_and_process(
         Path,
         typer.Option(
             "--out_dir",
-            help=f"Folder to write adapted.pkl, {CALIBRATION_FILE} and {CALIBRATION_CONFIG_FILE} into.",
+            help=f"Folder to write adapted.h5, {CALIBRATION_FILE} and {CALIBRATION_CONFIG_FILE} into.",
         ),
     ],
     calib_start: Annotated[
@@ -519,7 +521,7 @@ def calibrate_and_process(
         adapt_from=adapt_from.value,
     )
     _save_calibration(calibration, config, out_dir)  # config: without the ground truth
-    result.save(out_dir / "adapted.pkl")
+    result.save(out_dir / "adapted.h5")
     typer.echo(f"{_describe(result)}, saved in {out_dir}")
 
 
@@ -673,9 +675,9 @@ def wandb_sweep(
                 calibration=calibration, cbss_config=cbss_config, adapt_config=copy.deepcopy(config)
             ).process_data(emg, preprocess=preprocess)
             roa[name] = (
-                rate_of_agreement_paired(
+                compare_paired_spikes(
                     gt_paired, outputs[name].spikes.numpy(), fs=config.fs, tol_spike_ms=2
-                )[0]
+                ).roa
                 if gt_paired is not None
                 else None
             )

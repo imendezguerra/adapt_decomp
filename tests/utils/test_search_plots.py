@@ -69,6 +69,17 @@ def test_front_draws_the_front_line_through_the_front_trials():
     assert len(line.get_xdata()) == len(front)
     assert list(line.get_xdata()) == sorted(line.get_xdata())
     assert ax.get_xlabel() == "wh_loss" and ax.get_ylabel() == "sv_loss"
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert labels == ["Pareto front", "Highest RoA", "Chosen"]
+
+
+def test_front_draws_without_roa():
+    trials = _trials().drop(columns="user_attrs_roa_mean_pooled")
+    ax = plot_search_front(trials, [0, 1])
+
+    labels = [text.get_text() for text in ax.get_legend().get_texts()]
+    assert labels == ["Pareto front"]
+    assert len(ax.figure.axes) == 1  # no colorbar
 
 
 def test_parameters_draw_one_panel_per_param_with_log_learning_rates():

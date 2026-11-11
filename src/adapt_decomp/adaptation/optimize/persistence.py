@@ -24,7 +24,7 @@ def promote_trial(
 
     Args:
         temp_dir (Path): Directory holding this trial's
-            "<trial_number>_<dataset>.pkl" scratch files.
+            "<trial_number>_<dataset>.h5" scratch files.
         member_dir (Path): Destination: best_result_path itself for a
             single-objective search, or its "trial_<trial_number>"
             subdirectory for a Pareto front member.
@@ -38,7 +38,7 @@ def promote_trial(
     """
     member_dir.mkdir(parents=True, exist_ok=True)
     for dataset in dataset_names:
-        shutil.copy2(temp_dir / f"{trial_number}_{dataset}.pkl", member_dir / f"{dataset}.pkl")
+        shutil.copy2(temp_dir / f"{trial_number}_{dataset}.h5", member_dir / f"{dataset}.h5")
     trial_config.to_yaml(member_dir / "config.yaml")
 
 

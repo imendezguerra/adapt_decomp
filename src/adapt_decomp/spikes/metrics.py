@@ -1,6 +1,6 @@
 """Functions to measure MU properties."""
 
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import torch
@@ -49,6 +49,22 @@ def firings_to_spikes(
         spikes[i, firing.astype(int)] = 1
 
     return spikes
+
+
+def spikes_dict_to_binary(
+    spikes_dict: Dict[int, np.ndarray],
+    n_samples: int,
+    *,
+    device: torch.device | str,
+) -> torch.Tensor:
+    """Convert {unit: spike_indices} to an int32 binary matrix with shape (T, n_units)."""
+    spike_trains = torch.zeros(n_samples, len(spikes_dict), dtype=torch.int32, device=device)
+    for unit, idx in spikes_dict.items():
+        idx_t = torch.as_tensor(idx, dtype=torch.long, device=device)
+        idx_t = idx_t[(idx_t >= 0) & (idx_t < n_samples)]
+        if idx_t.numel() > 0:
+            spike_trains[idx_t, int(unit)] = 1
+    return spike_trains
 
 
 def get_number_of_spikes(spike_train: np.ndarray) -> np.ndarray:

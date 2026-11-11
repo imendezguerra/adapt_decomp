@@ -49,7 +49,7 @@ def run_tutorial_adaptation() -> Dict[str, np.ndarray]:
         and "fs".
     """
     from adapt_decomp.adaptation import AdaptConfig, AdaptDecomp
-    from adapt_decomp.spikes import rate_of_agreement_paired
+    from adapt_decomp.spikes import compare_paired_spikes
     from adapt_decomp.utils import load_example
 
     make_deterministic()
@@ -70,9 +70,9 @@ def run_tutorial_adaptation() -> Dict[str, np.ndarray]:
     outputs = adapter.process_data(data["emg"], preprocess=data["preprocess"])
 
     spikes = outputs["spikes"].numpy()
-    roa_gt, _, _ = rate_of_agreement_paired(
+    roa_gt = compare_paired_spikes(
         data["gt_full_bin"], spikes, fs=data["fs"], tol_spike_ms=TOL_SPIKE_MS
-    )
+    ).roa
     return {
         "spikes": spikes,
         "roa_gt": np.asarray(roa_gt, dtype=np.float64),

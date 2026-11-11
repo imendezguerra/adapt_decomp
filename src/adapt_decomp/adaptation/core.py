@@ -32,6 +32,7 @@ from adapt_decomp.preprocessing import (
     select_channels,
     validate_channel_selection,
 )
+from adapt_decomp.utils.utils import resolve_config
 
 
 class AdaptDecomp:
@@ -45,7 +46,7 @@ class AdaptDecomp:
     def from_calibration(
         cls,
         calibration: CBSSResult,
-        cbss_config: CBSSConfig,
+        cbss_config: Optional[CBSSConfig] = None,
         adapt_config: Optional[AdaptConfig] = None,
         save_path: Optional[str] = None,
     ) -> "AdaptDecomp":
@@ -55,10 +56,13 @@ class AdaptDecomp:
             calibration (CBSSResult): Calibration result from
                 calibrate_and_process(). calibration.emg must be set
                 (guaranteed there, which forces save_emg=True).
-            cbss_config (CBSSConfig): The CBSSConfig that produced
-                calibration. Treated as ground truth for every field it
-                shares with AdaptConfig (ext_fact, ext_mode, spike_det_exp,
-                and the preprocessing/filter fields); see Notes.
+            cbss_config (Optional[CBSSConfig], optional): The CBSSConfig that
+                produced calibration, only needed when calibration.config is
+                None (e.g. a legacy file); calibration.config wins when both
+                are set, warning if they differ. Treated as ground truth for
+                every field it shares with AdaptConfig (ext_fact, ext_mode,
+                spike_det_exp, and the preprocessing/filter fields); see
+                Notes. Defaults to None.
             adapt_config (Optional[AdaptConfig], optional): Online adaptation
                 configuration. Defaults to None, which builds an AdaptConfig
                 seeded entirely from cbss_config's shared fields.
@@ -68,7 +72,8 @@ class AdaptDecomp:
 
         Raises:
             TypeError: If calibration is not a CBSSResult.
-            ValueError: If calibration.emg is None, or if
+            ValueError: If calibration.emg is None, if neither
+                calibration.config nor cbss_config is set, or if
                 cbss_config.ext_fact does not match calibration.ext_fact
                 (they must come from the same calibration run).
 
@@ -91,6 +96,11 @@ class AdaptDecomp:
         if calibration.emg is None:
             raise ValueError(
                 "calibration.emg is None. Use calibrate_and_process() which sets save_emg=True."
+            )
+        cbss_config = resolve_config(calibration.config, cbss_config)
+        if cbss_config is None:
+            raise ValueError(
+                "calibration has no embedded config (e.g. a legacy file); pass cbss_config."
             )
         if cbss_config.ext_fact != calibration.ext_fact:
             raise ValueError(
@@ -123,6 +133,7 @@ class AdaptDecomp:
             pca_mean=tensors["pca_mean"],
         )
         instance.gt_matched_indices = calibration.gt_matched_indices  # None if unsupervised
+        instance.cbss_config = cbss_config
         return instance
 
     @classmethod
@@ -1414,6 +1425,9 @@ class AdaptDecomp:
             result.diagnostics = self.diagnostics
         if hasattr(self, "gt_matched_indices"):
             result.gt_matched_indices = self.gt_matched_indices
+        if hasattr(self, "cbss_config"):
+            result.cbss_config = copy(self.cbss_config)
+        result.config = copy(self.config)
         return result
 
 

@@ -24,8 +24,7 @@ pool = load_pooled_cbss_memory(
             {
                 "name": "triangular-ramp40s",
                 "path_emg": f"{DATA}/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz",
-                "path_calib": str(OUT / "calibration.pkl"),
-                "path_calib_config": str(OUT / "calibration_config.yaml"),
+                "path_calib": str(OUT / "calibration.h5"),
                 "path_gt": f"{DATA}/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz",  # optional
                 "start": 5 * 2048,  # optional: adapt and score from the calibration's end
             },

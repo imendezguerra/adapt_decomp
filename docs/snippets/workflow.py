@@ -47,23 +47,20 @@ print(calibration.roa)  # and their rate of agreement over the calibration windo
 
 # --8<-- [start:save]
 OUT.mkdir(parents=True, exist_ok=True)
-calibration.save(OUT / "calibration.pkl")
-cbss_config.to_yaml(OUT / "calibration_config.yaml")  # needed to rebuild the model
+calibration.save(OUT / "calibration.h5")  # with its CBSSConfig embedded
+calibration.config.to_yaml(OUT / "calibration_config.yaml")  # optional: to share or log it
 # --8<-- [end:save]
 
 # --8<-- [start:adapt]
 from adapt_decomp import AdaptDecomp, CBSSResult
 from adapt_decomp.adaptation import AdaptConfig
 
-calibration = CBSSResult.load(OUT / "calibration.pkl")
-cbss_config = CBSSConfig.from_yaml(OUT / "calibration_config.yaml")
+calibration = CBSSResult.load(OUT / "calibration.h5")
 adapt_config = AdaptConfig.from_preset("muniverse")  # tuned on the FDSI benchmark
 adapt_config.device = "cpu"
 adapt_config.source_fifo_from_calib = True  # the EMG below starts where calibration ends
 
-adapter = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
-)
+adapter = AdaptDecomp.from_calibration(calibration=calibration, adapt_config=adapt_config)
 # Adapt from the end of the calibration window
 adapted = adapter.process_data(emg[CAL_END:])
 print(adapted.spikes.shape, f"{adapted.total_time_ms.float().mean():.1f} ms per 100 ms batch")
@@ -102,27 +99,36 @@ fixed_config = AdaptConfig.from_preset("fixed")
 fixed_config.device = "cpu"
 fixed_config.source_fifo_from_calib = True
 fixed = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config, adapt_config=fixed_config
+    calibration=calibration, adapt_config=fixed_config
 ).process_data(emg[CAL_END:])
 # --8<-- [end:baseline]
 
 # --8<-- [start:evaluate]
-from adapt_decomp.spikes import get_sil, rate_of_agreement_paired
+from adapt_decomp.spikes import compare_paired_spikes, get_sil
 
 # Ground truth of the adapted samples, one column per unit, in unit order
 gt_paired = gt_spikes[CAL_END:, calibration.gt_matched_indices]
 for name, result in (("no adaptation", fixed), ("adapted", adapted)):
-    roa, _, _ = rate_of_agreement_paired(gt_paired, result.spikes.numpy(), fs=FS, tol_spike_ms=2)
+    roa = compare_paired_spikes(gt_paired, result.spikes.numpy(), fs=FS, tol_spike_ms=2).roa
     print(f"{name}: mean RoA after calibration {100 * roa.mean():.1f} %")
 # --8<-- [end:evaluate]
 
 # --8<-- [start:evaluate-window]
 # Any window, e.g. the ramp of this triangular contraction (10 s to 80 s of the recording)
 ramp = slice(10 * FS - CAL_END, 80 * FS - CAL_END)  # in samples of emg[CAL_END:]
-roa_ramp, _, _ = rate_of_agreement_paired(
+roa_ramp = compare_paired_spikes(
     gt_paired[ramp], adapted.spikes.numpy()[ramp], fs=FS, tol_spike_ms=2
-)
+).roa
 # --8<-- [end:evaluate-window]
+
+# --8<-- [start:metrics]
+agreement = compare_paired_spikes(gt_paired, adapted.spikes.numpy(), fs=FS, tol_spike_ms=2)
+print(
+    f"RoA {100 * agreement.roa.mean():.1f} %, F1 {100 * agreement.f1.mean():.1f} %, "
+    f"precision {100 * agreement.precision.mean():.1f} %, "
+    f"sensitivity {100 * agreement.sensitivity.mean():.1f} %"
+)
+# --8<-- [end:metrics]
 
 # --8<-- [start:sil]
 sil = get_sil(
@@ -166,9 +172,7 @@ plt.savefig(OUT / "spikes.png", dpi=100, bbox_inches="tight")
 
 # --8<-- [start:online]
 # The same model, preprocessing each raw batch itself as it would online
-adapter = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
-)
+adapter = AdaptDecomp.from_calibration(calibration=calibration, adapt_config=adapt_config)
 streamed = adapter.process_data(emg[CAL_END : 15 * FS], processing_mode="online")
 # --8<-- [end:online]
 
@@ -176,9 +180,7 @@ streamed = adapter.process_data(emg[CAL_END : 15 * FS], processing_mode="online"
 # A live feed: hand each raw batch to process_batch as it arrives
 import torch
 
-adapter = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
-)
+adapter = AdaptDecomp.from_calibration(calibration=calibration, adapt_config=adapt_config)
 batch_size = adapter.config.batch_size  # samples per batch (batch_ms)
 live_feed = torch.as_tensor(emg[CAL_END : 15 * FS]).split(batch_size)  # stands in for the device
 

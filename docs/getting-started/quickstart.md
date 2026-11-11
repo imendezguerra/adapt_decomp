@@ -55,8 +55,8 @@ metrics instead, with `select_unsupervised` (see
 ```
 
 ```text
-[28 32 37 35 24 34 36 33 29 30 38 31  7]
-[1.  1.  1.  1.  0.986  0.982  1.  1.  0.984  1.  1.  0.983  0.927]
+[28 38 32 36 37 24 34 35 29 30 33 31]
+[1.  1.  1.  1.  1.  0.986  0.982  1.  0.968  1.  1.  1.]
 ```
 
 ## 4. Save the calibration
@@ -79,7 +79,7 @@ sources, which come right before them.
 ```
 
 ```text
-torch.Size([174080, 13]) 39.1 ms per 100 ms batch
+torch.Size([174080, 12]) 12.2 ms per 100 ms batch
 ```
 
 ## 6. Or in one call
@@ -94,7 +94,7 @@ adapted samples.
 ```
 
 ```text
-torch.Size([184320, 13])
+torch.Size([184320, 12])
 ```
 
 From the shell, the [command line](../how-to/use-the-command-line.md) does the same:
@@ -124,12 +124,11 @@ adapted samples after the calibration window.
 ```
 
 ```text
-no adaptation: mean RoA after calibration 34.3 %
-adapted: mean RoA after calibration 92.7 %
+no adaptation: mean RoA after calibration 35.7 %
+adapted: mean RoA after calibration 87.8 %
 ```
 
-As the wrist moves, the units of the fixed calibration drift away from the motor units they
-were matched to; the adaptation tracks them more closely. The [benchmark results](../benchmarks/fdsi/4_results.ipynb) show the same comparison over 100
+As the wrist moves, the motor unit action potentials of the fixed calibration drift away from those observed during the calibration. Adaptation aims to correct this batch by batch. The [benchmark results](../benchmarks/fdsi/4_results.ipynb) show the same comparison over 100
 recordings, and with tuned hyperparameters.
 
 ## Next

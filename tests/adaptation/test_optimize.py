@@ -309,7 +309,7 @@ def test_single_objective_search_over_a_memory_pool(make_memory_pool, tmp_path):
     for name, output in result.outputs.items():
         assert isinstance(output, AdaptationResult)
         assert output.spikes.shape[1] == 1 and output.roa.shape == (1,)
-        assert (best_dir / f"{name}.pkl").exists()
+        assert (best_dir / f"{name}.h5").exists()
     assert (best_dir / "config.yaml").exists() and (best_dir / "study.pkl").exists()
     assert not best_dir.with_name("best_temp").exists()
 
@@ -349,11 +349,11 @@ def test_pareto_search_over_a_disk_pool(make_disk_dataset, make_optimize_kwargs,
     )
     for n in on_disk:
         assert {p.name for p in (best_dir / f"trial_{n}").iterdir()} == {
-            "a.pkl",
-            "b.pkl",
+            "a.h5",
+            "b.h5",
             "config.yaml",
         }
-    assert AdaptationResult.load(best_dir / f"trial_{min(on_disk)}" / "a.pkl").wh_loss is not None
+    assert AdaptationResult.load(best_dir / f"trial_{min(on_disk)}" / "a.h5").wh_loss is not None
     assert (best_dir / "study.pkl").exists() and not best_dir.with_name("front_temp").exists()
     assert result.outputs is None
 

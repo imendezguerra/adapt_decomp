@@ -127,6 +127,40 @@ def testplan_search_resources_guides_the_user_when_memory_does_not_fit(
         plan_search_resources(pool, 4, 1, 8)
 
 
+def test_plan_search_resources_default_cores_run_fewer_at_once_to_fit_memory(
+    make_memory_pool, allow_cores, monkeypatch
+):
+    allow_cores(8)
+    pool, _ = make_memory_pool(("a", "b"))
+    current = psutil.Process().memory_info().rss
+    # Room for exactly one worker: one run at a time, still on all 8 cores (as threads)
+    budget = current + PROCESS_BASELINE_BYTES + 10 * 1024**2
+    monkeypatch.setattr(resources, "available_memory", lambda: (budget, budget))
+    plan, shards, n_cores = plan_search_resources(pool, 4, 1, None)
+    assert (plan, shards, n_cores) == (ResourcePlan(1, 1), [["a", "b"]], 8)
+
+    monkeypatch.setattr(resources, "available_memory", lambda: (current, current))
+    with pytest.raises(ValueError, match="Even n_cores=1 does not fit"):
+        plan_search_resources(pool, 4, 1, None)
+
+
+def test_plan_search_resources_default_cores_do_not_warn(
+    make_memory_pool, allow_cores, monkeypatch
+):
+    allow_cores(8)
+    pool, _ = make_memory_pool(("a", "b"))
+    # Little memory free now and n_jobs above the trials that fit: noted, not warned
+    monkeypatch.setattr(resources, "available_memory", lambda: (1000 * GB, 1))
+    messages = []
+    handler = logger.add(messages.append, level="WARNING")
+    try:
+        plan, _, n_cores = plan_search_resources(pool, 8, 8, None)
+    finally:
+        logger.remove(handler)
+    assert (plan, n_cores) == (ResourcePlan(4, 2), 8)
+    assert not messages
+
+
 def testplan_search_resources_warns_when_free_memory_is_short_or_batches_wait(
     make_memory_pool, allow_cores, monkeypatch
 ):

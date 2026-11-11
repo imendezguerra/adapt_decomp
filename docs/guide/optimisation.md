@@ -70,8 +70,7 @@ pool = load_pooled_cbss_memory(
             {
                 "name": "recording-1",
                 "path_emg": "data/.../recording-1_emg.npz",
-                "path_calib": "outputs/recording-1_cbss.pkl",  # CBSSResult.save()
-                "path_calib_config": "outputs/recording-1_cbss_config.yaml",  # CBSSConfig.to_yaml()
+                "path_calib": "outputs/recording-1_cbss.h5",  # CBSSResult.save()
                 "path_gt": "data/.../recording-1_spikes.npz",  # optional
                 "start": 10240,  # optional: adapt and score from this sample, e.g. the calibration's end
             },
@@ -172,8 +171,12 @@ the calibration it is given, so select the units there too.
   only sets the speed. Runs are spread over worker processes first, one recording each, and
   leftover cores become threads within each run.
 
-Before it starts, the search predicts its peak memory from the pool and raises if it exceeds
-the machine's or the job's limit, naming the largest `n_cores` that fits.
+Before it starts, the search predicts its peak memory from the pool. Memory grows with the
+runs going at once, not with the cores, so with the default `n_cores` the search runs as many
+as fit under the machine's or the job's limit, and any spare cores become threads within each
+run (same search). An `n_cores` you set that does not fit raises instead, naming the largest
+that does, and warns if the memory free now is short. Either way it raises when even one run at a
+time does not fit.
 
 ## What you get back
 

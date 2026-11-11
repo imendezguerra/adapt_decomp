@@ -19,11 +19,13 @@ from adapt_decomp.adaptation import AdaptConfig
 adapt_config = AdaptConfig.from_preset("muniverse")
 adapt_config.source_fifo_from_calib = True  # the EMG starts where calibration ends
 
-adapter = AdaptDecomp.from_calibration(
-    calibration=calibration, cbss_config=cbss_config, adapt_config=adapt_config
-)
+adapter = AdaptDecomp.from_calibration(calibration=calibration, adapt_config=adapt_config)
 result = adapter.process_data(emg[5 * 2048 :])  # after a 5 s calibration window
 ```
+
+The calibration's own config (`calibration.config`) sets the fields the adaptation must share
+with it. Pass `cbss_config=` only for a calibration saved without one (a legacy pickle); when
+both are set, `calibration.config` wins, with a warning if they differ.
 
 ## How it adapts
 
@@ -125,7 +127,7 @@ live feed, call `process_batch` yourself, one batch of `adapt_config.batch_size`
 a time:
 
 ```python
-adapter = AdaptDecomp.from_calibration(calibration, cbss_config, adapt_config)
+adapter = AdaptDecomp.from_calibration(calibration, adapt_config=adapt_config)
 for batch_idx, batch in enumerate(live_feed):  # torch.Tensor, (batch_size, channels)
     spikes, sources = adapter.process_batch(batch, batch_idx)
 ```
@@ -152,8 +154,12 @@ An `AdaptationResult`, with `M` units and one entry per batch for the per-batch 
 | `sv_loss_total` | scalar | The separation-vector loss over the whole run, as the search scores it |
 | `total_loss` | scalar | `wh_loss_total + sv_loss_total` |
 | `gt_matched_indices` | (M,) | The ground-truth unit each unit tracks, carried over from the calibration |
+| `config` | | The `AdaptConfig` that ran, after matching the calibration's |
+| `cbss_config` | | The calibration's `CBSSConfig` |
 
-Save it with `result.save(path)` and reload it with `AdaptationResult.load(path)`.
+Save it with `result.save(path)`, an HDF5 file with both configs embedded, and reload it with
+`AdaptationResult.load(path)`, or with `load_adapt(path)` from `adapt_decomp.utils`, which also
+returns the two configs.
 
 ## Reproducibility
 

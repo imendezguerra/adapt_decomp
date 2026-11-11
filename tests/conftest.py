@@ -267,8 +267,8 @@ def make_disk_dataset(tmp_path):
     """Factory fixture: one on-disk search dataset, written to tmp_path.
 
     Same shapes as make_optimize_kwargs (raw_chs=3, ext_fact=2, M=2, fs=200,
-    500 calibration and 600 online samples): a CBSSResult pickle, a CBSSConfig
-    YAML and an emg .npz, plus a "<name>_gt.npz" when gt_dense is given.
+    500 calibration and 600 online samples): a CBSSResult HDF5 with its CBSSConfig
+    embedded and an emg .npz, plus a "<name>_gt.npz" when gt_dense is given.
 
     Returns:
         Callable[..., PooledDatasetDisk]: Call with the dataset name, optionally
@@ -300,10 +300,8 @@ def make_disk_dataset(tmp_path):
             cov_isi=np.full(M, 0.1, dtype=np.float32),
             ext_fact=ext_fact,
             emg=rng.standard_normal((n_cal, raw_chs)).astype(np.float32),
-        ).save(tmp_path / f"{name}_cbss.pkl")
-        CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True).to_yaml(
-            tmp_path / f"{name}_cbss_config.yaml"
-        )
+            config=CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True),
+        ).save(tmp_path / f"{name}_cbss.h5")
         emg = rng.standard_normal((n_full, raw_chs)).astype(np.float32)
         np.savez(tmp_path / f"{name}_emg.npz", emg=emg)
         path_gt = None
@@ -312,8 +310,7 @@ def make_disk_dataset(tmp_path):
             np.savez(path_gt, spikes=gt_dense)
 
         return PooledDatasetDisk(
-            path_calib=tmp_path / f"{name}_cbss.pkl",
-            path_calib_config=tmp_path / f"{name}_cbss_config.yaml",
+            path_calib=tmp_path / f"{name}_cbss.h5",
             path_emg=tmp_path / f"{name}_emg.npz",
             preprocess=False,  # fs=200 is below AdaptConfig's default highcut
             path_gt=path_gt,

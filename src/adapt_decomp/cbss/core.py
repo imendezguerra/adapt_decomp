@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from copy import copy
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -15,7 +16,7 @@ from adapt_decomp.cbss.ica import _fast_fixed_point_ica, _gram_schmidt_deflate, 
 from adapt_decomp.cbss.pca import pca_reduction
 from adapt_decomp.cbss.whitening import whiten
 from adapt_decomp.preprocessing import extend_data, filter_kwargs, preprocess_emg, select_channels
-from adapt_decomp.spikes import detect_spikes, remove_duplicates, spikes_dict_to_binary
+from adapt_decomp.spikes import detect_spikes, find_duplicates, spikes_dict_to_binary
 from adapt_decomp.spikes.metrics import (
     emg_to_ch_array,
     get_coefficient_of_variation,
@@ -181,6 +182,26 @@ class CBSS:
         return dict_results
 
     @staticmethod
+    def _keep_units(result: Dict, keep: np.ndarray) -> Dict:
+        """Restrict a CBSS result dict to the given units, renumbered in their order.
+
+        Args:
+            result (Dict): CBSS results from _extraction_loop_full, with "spikes".
+            keep (np.ndarray): Sorted indices of the units to keep.
+
+        Returns:
+            Dict: result with every per-unit field sliced to keep.
+        """
+        idx = torch.as_tensor(keep, dtype=torch.long)
+        spikes_dict = result["spikes_dict"]
+        result["spikes_dict"] = {new: spikes_dict[int(old)] for new, old in enumerate(keep)}
+        for key in ("sources", "spikes", "sep_vectors"):
+            result[key] = result[key][:, idx]
+        for key in ("sil", "cov_isi", "spikes_centr", "base_centr"):
+            result[key] = result[key][idx]
+        return result
+
+    @staticmethod
     def _to_numpy(result: Dict) -> Dict:
         for key in (
             "sources",
@@ -263,36 +284,37 @@ class CBSS:
         # 4. ICA extraction — use a local version that properly captures sep_vectors
         dict_results = self._extraction_loop_full(emg_wh, timestamps_t, dict_results)
 
-        # 5. Duplicate removal
-        if self.config.run_duplicate_removal:
-            dict_results = remove_duplicates(
-                dict_results,
-                fs=self.config.fs,
-                roa_th=self.config.roa_th,
-                tol_spike_ms=self.config.spike_min_dist_ms,
-                dtype=self._dtype,
-                device=str(self._device),
-                verbose=self.config.verbose,
-            )
-
-        # 6. Binary spike matrix
+        # 5. Binary spike matrix
         sources = dict_results.get("sources")
         spikes_dict = dict_results.get("spikes_dict", {})
         if sources is not None and spikes_dict:
-            sources_t = torch.as_tensor(sources, dtype=self._dtype, device=self._device)
             dict_results["spikes"] = spikes_dict_to_binary(
-                spikes_dict, sources_t.shape[0], device=self._device
+                spikes_dict, sources.shape[0], device=self._device
             ).cpu()
+
+        # 6. Duplicate removal
+        if self.config.run_duplicate_removal and len(spikes_dict) > 1:
+            keep_by = self.config.duplicate_keep_by
+            quality = np.asarray(dict_results[keep_by], dtype=float)
+            keep = find_duplicates(
+                dict_results["spikes"].numpy(),
+                -quality if keep_by == "cov_isi" else quality,
+                fs=self.config.fs,
+                metric=self.config.duplicate_metric,
+                threshold=self.config.roa_th,
+                tol_spike_ms=self.config.duplicate_tol_spike_ms,
+                max_lag_ms=self.config.duplicate_tol_train_ms,
+            )
+            if self.config.verbose and len(keep) < len(spikes_dict):
+                logger.debug(f"Removed {len(spikes_dict) - len(keep)} duplicate units")
+            dict_results = self._keep_units(dict_results, keep)
 
         # 7. Properties
         if self.config.compute_properties:
             sources = dict_results.get("sources")
-            spikes_dict = dict_results.get("spikes_dict", {})
-            if sources is not None and spikes_dict:
+            if sources is not None and dict_results.get("spikes_dict"):
                 sources_d = torch.as_tensor(sources, dtype=self._dtype, device=self._device)
-                spike_trains = spikes_dict_to_binary(
-                    spikes_dict, sources_d.shape[0], device=self._device
-                )
+                spike_trains = dict_results["spikes"].to(self._device)
                 dict_results["pnr"] = get_pulse_to_noise_ratio(
                     spike_trains, sources_d, self.config.ext_fact, self.config.spike_min_dist
                 ).cpu()
@@ -322,6 +344,7 @@ class CBSS:
             muaps=d.get("muaps"),
             emg=d.get("emg"),
             timestamps=d.get("timestamps"),
+            config=copy(self.config),
         )
 
         # 8. Optional post-hoc unit selection (config-driven, see CBSSConfig.selection).
@@ -505,6 +528,7 @@ class CBSS:
                 pca_mean=result.pca_mean,
                 emg=emg_original.cpu().numpy() if self.config.save_emg else None,
                 timestamps=timestamps_t.cpu().numpy() if self.config.save_emg else None,
+                config=copy(self.config),
             )
 
         sources_t = emg_wh @ sep_vectors
@@ -547,6 +571,7 @@ class CBSS:
             pca_mean=result.pca_mean,
             emg=emg_original.cpu().numpy() if self.config.save_emg else None,
             timestamps=timestamps_t.cpu().numpy() if self.config.save_emg else None,
+            config=copy(self.config),
         )
 
         if self.config.compute_properties:

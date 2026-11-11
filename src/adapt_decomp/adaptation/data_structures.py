@@ -4,20 +4,25 @@ AdaptDecomp's typed output.
 
 import pickle
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Literal, Optional, Tuple, Union
 
+import h5py
 import numpy as np
 import torch
+import yaml
 from torch.utils.data import Dataset
 
+from adapt_decomp import __version__
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.ops import stable_cov
+from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.preprocessing import extend_data as _extend_data
 from adapt_decomp.preprocessing import filter_kwargs, validate_channel_selection
 from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
 from adapt_decomp.preprocessing import select_channels as select_channels_fn
+from adapt_decomp.utils.utils import read_h5, write_h5
 
 
 class Data(Dataset):
@@ -757,7 +762,7 @@ class AdaptationResult:
             adapt_decomp.cbss.data_structure.CBSSResult.roa's convention
             (per-unit, not built here) -- callers set it after computing
             their own comparison (e.g.
-            adapt_decomp.spikes.comparison.rate_of_agreement_paired), such
+            adapt_decomp.spikes.comparison.compare_paired_spikes), such
             as adaptation/optimize/'s optimize_adapt_decomp(compute_roa=True).
         sil (Optional[np.ndarray]): Per-unit silhouette score with shape
             (M,), from the already-detected spike population against a
@@ -772,6 +777,12 @@ class AdaptationResult:
         ipts (Optional[torch.Tensor]): Deprecated alias for sources, accepted
             as a construction-time keyword only. Defaults to None. Raises
             FutureWarning when given.
+        config (Optional[AdaptConfig]): The adaptation config that produced this
+            result, after reconciliation with cbss_config. Set by
+            AdaptDecomp.process_data(); None for legacy files.
+        cbss_config (Optional[CBSSConfig]): The config of the calibration this
+            result adapted. Set when the instance was built via
+            AdaptDecomp.from_calibration(); None for legacy files.
     """
 
     # Fields with one entry per processed batch, in processing order.
@@ -785,6 +796,8 @@ class AdaptationResult:
         "sv_loss",
         "wh_trace",
     )
+    # Fields kept as numpy arrays rather than tensors.
+    NUMPY_FIELDS: ClassVar[Tuple[str, ...]] = ("gt_matched_indices", "roa", "sil")
 
     spikes: torch.Tensor
     preprocess_time_ms: torch.Tensor
@@ -809,6 +822,8 @@ class AdaptationResult:
     # a default cannot precede one without -- see __post_init__.
     sources: Optional[torch.Tensor] = None
     ipts: Optional[torch.Tensor] = None  # deprecated alias for sources
+    config: Optional[AdaptConfig] = None
+    cbss_config: Optional[CBSSConfig] = None
 
     def __post_init__(self) -> None:
         """Resolve the deprecated ipts alias into sources.
@@ -874,7 +889,9 @@ class AdaptationResult:
     # ------------------------------------------------------------------
 
     def save(self, path: Union[str, Path]) -> None:
-        """Pickle this result to disk.
+        """Save this result to HDF5, with its configs embedded as YAML.
+
+        diagnostics is not saved, as in io.H5ParamsBatchWriter._save().
 
         Args:
             path (Union[str, Path]): Destination file path.
@@ -882,29 +899,61 @@ class AdaptationResult:
         Returns:
             None
         """
-        with open(path, "wb") as f:
-            pickle.dump(self, f)
+        attrs = {"format": "AdaptationResult", "format_version": 1, "package_version": __version__}
+        for key in ("config", "cbss_config"):
+            if getattr(self, key) is not None:
+                attrs[key] = yaml.safe_dump(getattr(self, key).to_dict(), sort_keys=True)
+        data = {k: v for k, v in self.to_dict().items() if k != "diagnostics"}
+        write_h5(path, data, attrs)
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "AdaptationResult":
         """Load an AdaptationResult previously written by save().
 
+        Fields missing from the file take their defaults, and unknown ones are
+        dropped. Legacy pickle files are still read, with a DeprecationWarning.
+
         Args:
-            path (Union[str, Path]): Path to a pickle file written by save().
+            path (Union[str, Path]): Path to a file written by save().
 
         Returns:
-            AdaptationResult: The unpickled result.
+            AdaptationResult: The loaded result, with every field but
+            NUMPY_FIELDS as a CPU tensor.
 
         Raises:
-            ValueError: If the unpickled object is not an AdaptationResult.
+            ValueError: If the file does not contain an AdaptationResult.
         """
-        with open(path, "rb") as f:
-            obj = pickle.load(f)
-        if not isinstance(obj, cls):
-            raise ValueError(
-                f"{path} does not contain an AdaptationResult (got {type(obj).__name__})."
+        if not h5py.is_hdf5(path):
+            with open(path, "rb") as f:
+                obj = pickle.load(f)
+            warnings.warn(
+                f"{path} is a legacy pickle; reading pickled results is deprecated. "
+                "Re-save it with AdaptationResult.load(path).save(new_path).",
+                DeprecationWarning,
+                stacklevel=2,
             )
-        return obj
+            if not isinstance(obj, cls):
+                raise ValueError(
+                    f"{path} does not contain an AdaptationResult (got {type(obj).__name__})."
+                )
+            return obj
+
+        data, attrs = read_h5(path)
+        if attrs.get("format") != "AdaptationResult":
+            raise ValueError(
+                f"{path} does not contain an AdaptationResult (got {attrs.get('format')})."
+            )
+        names = {f.name for f in fields(cls)}
+        data = {
+            k: v if k in cls.NUMPY_FIELDS else torch.as_tensor(v)
+            for k, v in data.items()
+            if k in names
+        }
+        if "config" in attrs:
+            data["config"] = AdaptConfig.from_dict(yaml.safe_load(attrs["config"]))
+        if "cbss_config" in attrs:
+            data["cbss_config"] = CBSSConfig.from_dict(yaml.safe_load(attrs["cbss_config"]))
+        return cls(**data)
 
     def __getitem__(self, key: str) -> Any:
         """Dict-style subscript access, delegating to to_dict().

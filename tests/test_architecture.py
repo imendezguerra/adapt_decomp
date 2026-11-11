@@ -1,7 +1,7 @@
 """Cross-module consistency guards.
 
 Unlike the rest of the suite (unit tests scoped to one module), these check
-an architectural invariant CLAUDE.md documents explicitly: certain functions
+an architectural invariant: certain functions
 must have exactly one implementation, imported everywhere they're used,
 rather than independent duplicates that can silently drift apart.
 """

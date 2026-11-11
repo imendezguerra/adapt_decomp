@@ -110,13 +110,13 @@ def find_peaks_multisource(
     # Apply max-pool across time for all sources simultaneously: input [1, M, N]
     pooled = (
         F.max_pool1d(
-            sources_det.T.unsqueeze(0).float(),
+            sources_det.T.unsqueeze(0),
             kernel_size=win,
             stride=1,
             padding=min_dist,
         )
         .squeeze(0)
-        .T.to(sources_det.dtype)
+        .T
     )
 
     strict_mask = torch.zeros_like(sources_det, dtype=torch.bool)

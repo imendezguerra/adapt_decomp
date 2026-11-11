@@ -78,8 +78,9 @@ and this project follows [Semantic Versioning](https://semver.org/).
   trials table.
 - `plot_search_landscape`, `plot_search_front` and `plot_search_parameters`
   (`adapt_decomp.utils.plots`): static plots of a search, drawn from its trials table
-  (`study.trials_dataframe()`) rather than a pickled study; `plot_metric_heatmap` takes `cmap`
-  and `center`.
+  (`study.trials_dataframe()`) rather than a pickled study; `plot_search_front` stars the
+  highest-RoA trial and draws without RoA when the trials have none; `plot_metric_heatmap`
+  takes `cmap` and `center`.
 - A documentation site (MkDocs Material, `mkdocs.yml`), deployed to GitHub Pages on each
   release: installation, a quickstart, the API concepts (calibration, adaptation and
   hyperparameter optimisation with their key parameters), a user guide of recipes
@@ -107,8 +108,40 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `CONTRIBUTING.md` (development setup, tests, docs, dependencies, reproducibility across OSes,
   the automated checks) and `.github/RELEASING.md` (versions, data archives, benchmark results,
   the release checklist).
+- Results carry the configs that produced them: `CBSSResult.config` (set by `CBSS.decompose()`
+  and `apply()`), and `AdaptationResult.config` and `.cbss_config`. `load_adapt()` loads an
+  `AdaptationResult` with both, as `load_calib()` does a calibration with its config.
+- `CBSSConfig.from_dict()` and `AdaptConfig.from_dict()`, the counterparts of `to_dict()`.
+- `spikes.SpikeAgreement`: per pair of units, the common (`tp`), missed (`fn`) and extra
+  (`fp`) spikes and the lag, with `roa`, `f1`, `precision` and `sensitivity`, and
+  `score("match")` (common spikes over the larger spike count, MUniverse's duplicate score).
+- Spike-train comparison in three functions, all on binary `(samples, units)` arrays with a
+  keyword-only `fs`: `spikes.compare_paired_spikes()` (unit `i` against unit `i`),
+  `spikes.compare_spikes()` (one-to-one Hungarian pairing; `min_score` drops poor pairs) and
+  `spikes.find_duplicates()` (indices of the units kept after greedy duplicate removal).
+- `CBSSConfig.duplicate_metric` (`"roa"`, `"f1"` or `"match"`), `duplicate_keep_by`
+  (`"cov_isi"` or `"sil"`), `duplicate_tol_spike_ms` (0.5) and `duplicate_tol_train_ms` (40):
+  the duplicate criterion and which unit of a group is kept.
 
 ### Changed
+
+- CBSS whitening computes the covariance and its eigendecomposition in float64 on the CPU, and
+  still returns float32. The extended EMG's covariance has a condition number of about 1e9,
+  beyond float32's precision. On the FDSI calibrations, units found and matched are unchanged
+  with `regularization="auto"`, but far fewer change with the order of floating-point sums
+  (agreement with a channel-permuted run 81% → 98%); `regularization=None` works now (5.9
+  instead of 3.6 matched units). CBSS results change on purpose: 82% of units are the same.
+  `whiten()` takes `compute_dtype`. See `notebooks/cbss_precision/cbss_precision.ipynb`.
+- `CBSSResult.save()` and `AdaptationResult.save()` write HDF5, with the configs embedded as
+  YAML, instead of pickling the object; `load()` restores fields by name, so files survive
+  changes to the classes. The CLI writes `calibration.h5` and `adapted.h5`, and the search's
+  per-trial results `<dataset>.h5`. `AdaptationResult.save()` leaves out `diagnostics`.
+- `AdaptDecomp.from_calibration()` takes `cbss_config` from `calibration.config`, so it is
+  optional, as are `process_data --calibration_config` and a pool's `path_calib_config`. An
+  explicit config is only a fallback for results without one: when both are set, the embedded
+  config wins, with a warning if they differ.
+- `CBSSConfig.to_dict()`, and so `to_yaml()`, leave out `selection_kwargs["gt_spikes"]`: ground
+  truth is data, not config.
 
 - The `muniverse` preset takes the best config of the FDSI benchmark v1.1.0 `sv_mean` search
   (minimum `sv_loss`, mean reduction): `wh_learning_rate` 3.3e-2 (was 4.7e-4),
@@ -152,14 +185,41 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 - wandb is no longer a dependency: install the `wandb` extra to log to it.
 
+- **Breaking:** `rate_of_agreement_paired()` and `rate_of_agreement()` are now
+  `compare_paired_spikes()` and `compare_spikes()` and return a `SpikeAgreement` instead of
+  `(roa, pair_idx, pair_lag)`: use `.roa`, `.pairs` and `.lag`. `fs` is a required keyword
+  (it defaulted to 2048) and `tol_train_ms` is `max_lag_ms`. `rate_of_agreement(None, spikes)`
+  (agreement within one set) is removed: use `find_duplicates()`.
+- **Breaking:** `spikes_dict_to_binary()` moved to `spikes.metrics`; importing it from
+  `adapt_decomp.spikes` still works.
+- `compare_spikes()` (was `rate_of_agreement()`) pairs the two sets with the Hungarian algorithm on RoA (or `metric`),
+  as MUniverse's evaluation does, instead of greedily on the raw cross-correlation, where a
+  unit firing more could take another's partner. It returns min(n_ref, n_test) pairs.
+  `load_example()` and `CBSSResult.select_supervised()` use it.
+- Spike trains are aligned from the differences of nearby spike pairs instead of the
+  cross-correlation of the full trains, with a symmetric kernel: about 15x faster, and the
+  lag is no longer off by one sample when spikes jitter (the RoA of such units rises).
+- Duplicate removal is greedy: the best unit (`duplicate_keep_by`) is kept and every unit
+  agreeing with it at or above `roa_th` (was: above) dropped, then the next best, so any number
+  of copies of one motor unit reduce to one (as in MUniverse). It used to remove one copy per
+  pair. CBSS results change on purpose.
+
 ### Deprecated
 
+- `spikes.rate_of_agreement_paired()` and `spikes.rate_of_agreement()`: thin wrappers over
+  `compare_paired_spikes()` and `compare_spikes()` keeping their 1.0.0 signatures (with the
+  new return type); they emit a `FutureWarning`.
 - `optimize_adapt_decomp_pooled_memory`, `optimize_adapt_decomp_pooled_disk` and their
   `_pareto` variants: thin wrappers over `optimize_adapt_decomp` (with `unit_selection=None`)
   keeping their 1.0.0 signatures and return shapes; they emit a `FutureWarning`.
+- Reading pickled `CBSSResult`s and `AdaptationResult`s: `load()` still reads them, with a
+  `DeprecationWarning`. Re-save one with `CBSSResult.load(path).save(new_path)`.
 
 ### Removed
 
+- `spikes.pair_ground_truth()`: use `compare_spikes()` and index the ground truth with
+  `.pairs[:, 0]`.
+- `spikes.remove_duplicates()`: use `find_duplicates()`, which returns the kept units' indices.
 - `configs/adapt_configs/default_{muniverse,neuromotion,wrist,forearm,fixed}.yaml`: moved into
   the package (`src/adapt_decomp/adaptation/presets/`); load them with
   `AdaptConfig.from_preset(name)`, or by path from there.
@@ -185,6 +245,17 @@ and this project follows [Semantic Versioning](https://semver.org/).
   like CBSS's, so `cov_th` filters apply to them correctly.
 - `adapt_decomp.__all__` listed six functions as objects rather than names, so
   `from adapt_decomp import *` raised `TypeError`.
+- `CBSSConfig.dtype` other than float32 found no units: peak detection compared the sources
+  with a float32-rounded copy of their window maxima. Peaks are now pooled in the sources' own
+  precision, and `CBSSConfig` raises for any dtype but float32, which is the only one supported.
+- Duplicate removal used `spike_min_dist_ms` (10 ms) as its spike tolerance, which made
+  independent units firing above about 25 Hz duplicates; it now uses `duplicate_tol_spike_ms`.
+- `rate_of_agreement()` ignored `tol_train_ms` between two sets, so it could align trains
+  any distance apart.
+- `rate_of_agreement_paired()` raised on a unit without spikes in both sets, on recordings
+  shorter than `tol_train_ms`, and on a spike tolerance below half a sample.
+- `load_example()` paired ground truth by index when the calibration had no spikes; its
+  `gt_full_bin` and `roa_calib` are now `None`.
 
 ## [1.0.0] - 2026-09-22
 

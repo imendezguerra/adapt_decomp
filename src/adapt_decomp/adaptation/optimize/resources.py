@@ -90,15 +90,15 @@ def _dataset_shape(dataset: PooledDataset) -> Tuple[int, int, int, int]:
         Tuple[int, int, int, int]: Its shape, with every calibration unit counted.
     """
     if isinstance(dataset, PooledDatasetMemory):
-        calibration, cbss_config = dataset.calibration, dataset.cbss_config
+        calibration = dataset.calibration
         n_samples, n_channels = dataset.emg.shape
     else:
-        calibration, cbss_config = load_calib(
+        calibration, _ = load_calib(
             dataset.path_calib, dataset.path_calib_config, dataset.calib_loader
         )
         n_samples, n_channels = emg_shape(dataset.path_emg, dataset.emg_loader)
         n_samples = len(range(n_samples)[dataset.start : dataset.stop])  # the samples adapted
-    return int(n_samples), int(n_channels), int(cbss_config.ext_fact), calibration.sources.shape[1]
+    return int(n_samples), int(n_channels), int(calibration.ext_fact), calibration.sources.shape[1]
 
 
 def _run_bytes(
@@ -211,20 +211,23 @@ def plan_search_resources(
         pool (Dict[str, PooledDataset]): Dataset name -> pool entry.
         n_trials_at_once (int): Most trials ever run together.
         n_jobs (int): Trials suggested together after the start-up trials.
-        n_cores (Optional[int]): Cores the search may use; None for all
-            available (available_cores()).
+        n_cores (Optional[int]): Cores the search may use; None for every
+            available one (available_cores()), with as many runs at once as
+            fit under the memory limit and the spare cores as torch threads.
         fifo_length (Optional[int], optional): The base config's fifo_length.
             Defaults to None (2 x D).
 
     Raises:
         ValueError: If n_jobs or n_cores is below 1, n_cores exceeds the
-            available cores, or the predicted peak memory exceeds the limit.
+            available cores, or the predicted peak memory exceeds the limit
+            (for n_cores=None, only when even one run at a time does not fit).
 
     Returns:
         Tuple[ResourcePlan, List[List[str]], int]: The plan, its shards and
         n_cores (resolved when None).
     """
     cores = available_cores()
+    fit_cores = n_cores is None  # only the default fits its runs to memory on its own
     n_cores = n_cores if n_cores is not None else cores
     if n_jobs < 1 or n_cores < 1:
         raise ValueError(
@@ -252,6 +255,18 @@ def plan_search_resources(
     plan, shards, peak_bytes = peak(n_cores)
     limit, available = available_memory()
     budget = limit - psutil.Process().memory_info().rss
+    if fit_cores and peak_bytes > budget:
+        # Fewer runs at once until they fit under the limit, planned as if on fewer
+        # cores; n_cores stays, so run_trials gives any spare cores to each run as threads
+        fitting = [c for c in range(n_cores - 1, 0, -1) if peak(c)[2] <= budget]
+        if fitting:
+            all_runs_bytes = peak_bytes
+            plan, shards, peak_bytes = peak(fitting[0])
+            logger.info(
+                f"Running fewer trials and datasets at once so the predicted peak memory "
+                f"({peak_bytes / _GB:.1f} GB, else {all_runs_bytes / _GB:.1f} GB) fits under "
+                f"the {limit / _GB:.1f} GB limit."
+            )
     if peak_bytes > budget:
         fitting = [c for c in range(n_cores - 1, 0, -1) if peak(c)[2] <= budget]
         suggestion = f"n_cores={fitting[0]} fits. " if fitting else "Even n_cores=1 does not fit. "
@@ -259,21 +274,23 @@ def plan_search_resources(
             f"Predicted peak memory {peak_bytes / _GB:.1f} GB exceeds the {budget / _GB:.1f} GB "
             f"left under the {limit / _GB:.1f} GB limit. {suggestion}{_MEMORY_GUIDANCE}"
         )
-    if peak_bytes > available:
+    # The default already fits the limit and the free memory, a snapshot, is not checked
+    if peak_bytes > available and not fit_cores:
         logger.warning(
             f"Predicted peak memory {peak_bytes / _GB:.1f} GB exceeds the {available / _GB:.1f} GB "
             f"currently free, so the search may swap or be killed. Close other memory-heavy "
             f"programs. {_MEMORY_GUIDANCE}"
         )
     if n_jobs > plan.n_groups:
-        logger.warning(
+        (logger.info if fit_cores else logger.warning)(
             f"n_jobs={n_jobs} trials per batch but only {plan.n_groups} fit at once on "
             f"n_cores={n_cores}, so batches run in waves. Raise n_cores or lower n_jobs "
             "(the search is the same either way, only slower)."
         )
+    n_threads = max(1, n_cores // (plan.n_groups * plan.workers_per_group))
     logger.info(
-        f"{plan.n_groups} trial(s) at once x {plan.workers_per_group} worker(s) on "
-        f"{n_cores} cores; predicted peak memory {peak_bytes / _GB:.1f} GB of "
-        f"{available / _GB:.1f} GB free"
+        f"{plan.n_groups} trial(s) at once x {plan.workers_per_group} worker(s) x "
+        f"{n_threads} thread(s) on {n_cores} cores; predicted peak memory "
+        f"{peak_bytes / _GB:.1f} GB of the {limit / _GB:.1f} GB limit"
     )
     return plan, shards, n_cores

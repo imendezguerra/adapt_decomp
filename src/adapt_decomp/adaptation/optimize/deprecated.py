@@ -108,7 +108,7 @@ def optimize_adapt_decomp_pooled_disk(
     Returns:
         (best_config, study); per-dataset results are reloaded from
         best_result_path, e.g. AdaptationResult.load(Path(best_result_path)
-        / f"{name}.pkl").
+        / f"{name}.h5").
     """
     result = _deprecated_search(
         "optimize_adapt_decomp_pooled_disk",
@@ -194,7 +194,7 @@ def optimize_adapt_decomp_pooled_disk_pareto(
     Returns:
         (best_config, pareto_front, study); front members' results are
         reloaded from best_result_path, e.g. AdaptationResult.load(
-        Path(best_result_path) / f"trial_{n}" / f"{name}.pkl").
+        Path(best_result_path) / f"trial_{n}" / f"{name}.h5").
     """
     objectives = tuple(objectives)
     _check_pareto_objectives(objectives)

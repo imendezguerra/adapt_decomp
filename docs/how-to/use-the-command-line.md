@@ -50,7 +50,8 @@ The files the commands read:
 | The EMG argument | `.npz` with key `emg`, of shape (samples, channels); `--emg_loader neuromotion` for a NeuroMotion HDF5 file |
 | `--gt` | `.npz` with key `spikes`: binary spike trains of shape (samples, units), or one array of spike indices per unit; `--gt_loader neuromotion` for a NeuroMotion HDF5 file |
 | `--cbss_config`, `--adapt_config` | YAML, as written by `CBSSConfig.to_yaml()` or `AdaptConfig.to_yaml()`; fields left out keep their defaults |
-| `--calibration`, `--calibration_config` | The `calibration.pkl` and `calibration_config.yaml` that `decompose` writes (`CBSSResult.save()`, `CBSSConfig.to_yaml()`) |
+| `--calibration` | The `calibration.h5` that `decompose` writes (`CBSSResult.save()`), with its config embedded |
+| `--calibration_config` | Optional: the config YAML of a `--calibration` saved without one (a legacy `.pkl`) |
 | `--data_config` | A [pool](../guide/optimisation.md#the-pool) YAML, e.g. [`configs/data_configs/fdsi_example.yaml`](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/data_configs/fdsi_example.yaml) |
 | `--search_config` | YAML of `optimize_adapt_decomp`'s search arguments, e.g. [`configs/sweep_configs/sweep_optuna.yaml`](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/sweep_configs/sweep_optuna.yaml) |
 
@@ -71,16 +72,16 @@ or the settings of `--cbss_config`. `--gt` keeps the units that match a ground-t
 a rate of agreement of at least `--roa_th` (0.9). Without ground truth, set `selection:
 unsupervised` and its thresholds (`selection_kwargs`) in the `--cbss_config` YAML instead (see
 [Keeping the reliable units](../guide/calibration.md#keeping-the-reliable-units)). It writes
-`calibration.pkl` and `calibration_config.yaml` into `--out_dir`.
+`calibration.h5`, with its config embedded, and that config as `calibration_config.yaml`, to
+share or log it, into `--out_dir`.
 
 ## Adapt: `process_data`
 
 ```sh
 adapt-decomp process_data $EMG \
-  --calibration data/fdsi_example/outputs/cli/calibration.pkl \
-  --calibration_config data/fdsi_example/outputs/cli/calibration_config.yaml \
+  --calibration data/fdsi_example/outputs/cli/calibration.h5 \
   --preset muniverse --start 10240 --source_fifo_from_calib \
-  --out data/fdsi_example/outputs/cli/adapted.pkl
+  --out data/fdsi_example/outputs/cli/adapted.h5
 ```
 
 It adapts the calibration over the samples from `--start` (here the calibration's end, with the
@@ -97,7 +98,7 @@ adapt-decomp calibrate_and_process $EMG --calib_stop 10240 --gt $GT --preset mun
 ```
 
 It calibrates on `--calib_start` to `--calib_stop`, keeps the matched units and adapts from the
-end of the window. `adapted.pkl` covers the whole recording: CBSS's output over the window,
+end of the window. `adapted.h5` covers the whole recording: CBSS's output over the window,
 then the adapted samples. `--adapt_from emg_start` adapts from the first sample instead (see
 [Where to start adapting](../guide/adaptation.md#where-to-start-adapting)). It also writes the
 calibration and its config, for `process_data` with other settings.

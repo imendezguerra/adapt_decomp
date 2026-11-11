@@ -20,7 +20,7 @@ flowchart LR
     P --> C["Whiten"]
     C --> D["ICA search\n(search_iter starts,\nica_iter iterations each,\nrefinement)"]
     D --> E["Keep reliable units\n(sil_th, min_spikes)"]
-    E --> F["Remove duplicates\n(roa_th)"]
+    E --> F["Remove duplicates\n(roa_th, duplicate_*)"]
     F --> G["Unit properties\n(SIL, CoV-ISI, PNR, DR, MUAPs)"]
     G --> H["Optional selection"]
     H --> I["CBSSResult"]
@@ -32,14 +32,19 @@ flowchart LR
 3. **Reduce (optional):** with `n_components` set, PCA keeps only that many components of the
    extended channels, which speeds up the following steps. The adaptation reuses the fitted
    PCA as it is.
-4. **Whiten:** the extended channels are decorrelated and scaled to unit variance.
+4. **Whiten:** the extended channels are decorrelated and scaled to unit variance. Their
+   covariance is badly conditioned, so it is eigendecomposed in float64; the rest of CBSS
+   runs in float32.
 5. **Search:** from `search_iter` starting points, fixed-point ICA looks for a separation
    vector whose source shows the spikes of one unit, for up to `ica_iter` iterations each (it
    stops earlier once the vector converges). A refinement loop then re-estimates the vector
    from the unit's own spikes.
 6. **Keep reliable units:** a unit is kept if its silhouette (SIL, how well its spikes stand
    out from the baseline) reaches `sil_th` and it has at least `min_spikes` spikes. Two units
-   whose spike trains agree above `roa_th` are duplicates, and one is dropped.
+   whose spike trains agree at or above `roa_th` (on `duplicate_metric`) are duplicates.
+   Removal is greedy: the best unit (lowest CoV-ISI or highest SIL, `duplicate_keep_by`) is
+   kept and all its duplicates dropped, then the next best remaining unit, and so on. Kept
+   units are pairwise below `roa_th`, so any number of copies of one motor unit reduce to one.
 7. **Describe the units:** the silhouette, the coefficient of variation of the inter-spike
    intervals (CoV-ISI), the pulse-to-noise ratio (PNR), the discharge rate and the MUAPs.
 
@@ -59,7 +64,11 @@ flowchart LR
 | `search_iter` | 100 | Starting points of the ICA search, each yielding at most one unit | Larger to find more units, at a higher cost |
 | `ica_iter` | 100 | Maximum fixed-point iterations per starting point; the search stops earlier once it converges | Larger if units fail to converge, smaller for speed |
 | `sil_th` | 0.9 | Minimum silhouette of a unit | Lower to keep more, less reliable units |
-| `roa_th` | 0.3 | Agreement above which two units are duplicates | |
+| `roa_th` | 0.3 | Agreement (on `duplicate_metric`) at or above which two units are duplicates | |
+| `duplicate_metric` | "roa" | Agreement score for duplicates: `"roa"`, `"f1"`, or `"match"` (common spikes over the larger spike count, as in MUniverse) | To match an evaluation's duplicate criterion |
+| `duplicate_keep_by` | "cov_isi" | Unit kept from each group of duplicates: lowest CoV-ISI or highest SIL (`"sil"`) | |
+| `duplicate_tol_spike_ms` | 0.5 | Spike coincidence tolerance for duplicates, in ms | |
+| `duplicate_tol_train_ms` | 40 | Largest lag searched between two units, in ms | |
 | `selection` | None | Unit selection at the end of `decompose()`: `"unsupervised"`, `"supervised"`, or None for none | See [below](#keeping-the-reliable-units) |
 | `selection_kwargs` | None | The thresholds, or the ground truth, the selection uses | See [below](#keeping-the-reliable-units) |
 | `random_seed` | 1909 | ICA starting order | None for a different decomposition on every run |
@@ -117,9 +126,12 @@ A `CBSSResult`, with `n_mu` units:
 | `whitening` | (dim, dim) | Whitening matrix, part of the model the adaptation starts from |
 | `gt_matched_indices` | (n_mu,) | The ground-truth unit each unit tracks, after `select_supervised` |
 | `roa` | (n_mu,) | Each unit's rate of agreement with that unit over the calibration window, after `select_supervised` |
+| `config` | | The `CBSSConfig` that produced it |
 
-Save it with `calibration.save(path)` and reload it with `CBSSResult.load(path)`. Save the
-config next to it (`cbss_config.to_yaml(path)`): building the adaptation needs both.
+Save it with `calibration.save(path)`, an HDF5 file with the config embedded, and reload it with
+`CBSSResult.load(path)`: building the adaptation needs nothing else. To share or log the config,
+write it as YAML too (`calibration.config.to_yaml(path)`). The ground truth in
+`selection_kwargs` is data, so it stays out of both.
 
 ## Reusing a calibration
 

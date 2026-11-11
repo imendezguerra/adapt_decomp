@@ -243,7 +243,19 @@ class AdaptConfig(_LegacyConfig):
             __post_init__ and every Literal-typed field validated.
         """
         with Path(path).open("r") as f:
-            data = yaml.safe_load(f) or {}
+            return cls.from_dict(yaml.safe_load(f) or {})
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AdaptConfig":
+        """Build an AdaptConfig from a dict written by to_dict().
+
+        Args:
+            data (Dict[str, Any]): Mapping of constructor field name to value.
+
+        Returns:
+            AdaptConfig: A new instance, with derived fields recomputed by
+            __post_init__.
+        """
         return cls(**data)
 
     @classmethod
