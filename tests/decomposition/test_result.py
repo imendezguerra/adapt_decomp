@@ -202,6 +202,7 @@ def test_load_reads_files_saved_under_the_cbss_result_format(tmp_path):
 def test_native_fields_roundtrip_and_follow_subset(tmp_path):
     """The native fields and contrast_exp are saved, loaded and sliced per unit."""
     result = _make_result(n_mu=3)
+    result.sep_vectors_native = np.random.randn(*result.sep_vectors.shape).astype(np.float32)
     result.sources_native = np.random.randn(*result.sources.shape).astype(np.float32)
     result.spikes_dict_native = {i: np.array([i, i + 5]) for i in range(3)}
     result.native_roa = np.array([1.0, 0.5, 0.9], dtype=np.float32)
@@ -210,12 +211,14 @@ def test_native_fields_roundtrip_and_follow_subset(tmp_path):
     path = tmp_path / "native.h5"
     result.save(path)
     loaded = DecompositionResult.load(path)
+    np.testing.assert_array_equal(loaded.sep_vectors_native, result.sep_vectors_native)
     np.testing.assert_array_equal(loaded.sources_native, result.sources_native)
     assert set(loaded.spikes_dict_native) == {0, 1, 2}
 
     kept = loaded.select_unsupervised(native_roa_th=0.8)
     np.testing.assert_allclose(kept.native_roa, [1.0, 0.9])
     np.testing.assert_array_equal(kept.sources_native, result.sources_native[:, [0, 2]])
+    np.testing.assert_array_equal(kept.sep_vectors_native, result.sep_vectors_native[:, [0, 2]])
     np.testing.assert_array_equal(kept.spikes_dict_native[1], [2, 7])
     np.testing.assert_allclose(kept.contrast_exp, [2.5, 4.0])
 
@@ -225,4 +228,5 @@ def test_method_specific_fields_default_to_none():
     result = _make_result()
     assert result.contrast_exp is None
     assert result.native_roa is None
+    assert result.sep_vectors_native is None
     assert result.subset(np.array([True, False, True])).contrast_exp is None

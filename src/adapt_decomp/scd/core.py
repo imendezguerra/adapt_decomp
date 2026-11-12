@@ -2,9 +2,10 @@
 
 The shared Decomposition pipeline preprocesses, extends and whitens the EMG; SCD's own
 search (swarm-optimised ICA with peel-off) then runs unmodified on the whitened EMG.
-Its filters are orthonormalised, since adaptation keeps separation vectors orthonormal,
-and the sources are reconstructed on the unpeeled whitened EMG, which is what
-adaptation sees online. SCD's own sources and spikes are kept as the native fields.
+Each unit's separation vector is the whitened EMG averaged at its SCD spikes,
+orthonormalised since adaptation keeps separation vectors orthonormal, and the sources
+are reconstructed on the unpeeled whitened EMG, which is what adaptation sees online.
+SCD's own filters, sources and spikes are kept as the native fields.
 """
 
 from __future__ import annotations
@@ -88,7 +89,7 @@ class SCD(Decomposition):
         return cfg
 
     def _extract(self, emg_wh: torch.Tensor, timestamps: torch.Tensor) -> Dict:
-        """Run SCD's search, orthonormalise its filters and reconstruct the sources.
+        """Run SCD's search, average the whitened EMG at its spikes, orthonormalise, and reconstruct.
 
         Args:
             emg_wh (torch.Tensor): Whitened, extended EMG with shape (samples, dim).
@@ -116,9 +117,20 @@ class SCD(Decomposition):
             logger.warning("SCD found no motor units.")
             return self._empty_result(dim)
 
-        # Orthonormal filters and sources on the unpeeled EMG, as adaptation uses them
+        # Separation vectors: the whitened EMG averaged at each unit's native spikes
         filters = torch.from_numpy(np.concatenate(out["filters"], axis=1)).to(emg_wh)
-        sep_vectors = orthonormalize_rows_symmetric(filters.T).T
+        sta = torch.stack(
+            [
+                emg_wh[torch.as_tensor(idx, device=emg_wh.device, dtype=torch.long)].mean(dim=0)
+                if len(idx)
+                else filters[:, i]
+                for i, idx in enumerate(out["timestamps"])
+            ],
+            dim=1,
+        )
+
+        # Orthonormal vectors and sources on the unpeeled EMG, as adaptation uses them
+        sep_vectors = orthonormalize_rows_symmetric(sta.T).T
         sources = emg_wh @ sep_vectors
         units: List[Dict[str, Any]] = []
         for i in range(sources.shape[1]):
@@ -158,6 +170,7 @@ class SCD(Decomposition):
                 [units[i]["spike_centr"] for i in keep], dtype=self._dtype
             ),
             "base_centr": torch.tensor([units[i]["base_centr"] for i in keep], dtype=self._dtype),
+            "sep_vectors_native": filters[:, idx].cpu(),
             "sources_native": torch.from_numpy(
                 np.concatenate(out["source"], axis=1)[:, keep]
             ).float(),

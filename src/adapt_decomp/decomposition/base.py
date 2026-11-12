@@ -225,8 +225,9 @@ class Decomposition(ABC):
         for key in ("sil", "cov_isi", "spikes_centr", "base_centr"):
             result[key] = result[key][idx]
         # Optional native fields (set by methods such as SCD)
-        if result.get("sources_native") is not None:
-            result["sources_native"] = result["sources_native"][:, idx]
+        for key in ("sep_vectors_native", "sources_native"):
+            if result.get(key) is not None:
+                result[key] = result[key][:, idx]
         for key in ("native_roa", "contrast_exp"):
             if result.get(key) is not None:
                 result[key] = result[key][idx]
@@ -252,6 +253,7 @@ class Decomposition(ABC):
             "muaps",
             "emg",
             "timestamps",
+            "sep_vectors_native",
             "sources_native",
             "native_roa",
             "contrast_exp",
@@ -277,7 +279,7 @@ class Decomposition(ABC):
             Dict: Per-unit "sources" (samples, n_mu), "spikes_dict", "sil",
             "cov_isi", "sep_vectors" (dim, n_mu), "spikes_centr" and
             "base_centr", as torch tensors on the CPU, optionally with the
-            native fields "sources_native", "spikes_dict_native" and
+            native fields "sep_vectors_native", "sources_native", "spikes_dict_native" and
             "native_roa", and "contrast_exp"; _empty_result(dim) when no unit is found.
         """
 
@@ -402,6 +404,7 @@ class Decomposition(ABC):
             muaps=d.get("muaps"),
             emg=d.get("emg"),
             timestamps=d.get("timestamps"),
+            sep_vectors_native=d.get("sep_vectors_native"),
             sources_native=d.get("sources_native"),
             spikes_dict_native=d.get("spikes_dict_native"),
             native_roa=d.get("native_roa"),

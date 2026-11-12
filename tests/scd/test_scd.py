@@ -54,6 +54,22 @@ def test_sep_vectors_are_orthonormal_so_adaptation_keeps_them(scd_calibration):
     torch.testing.assert_close(orthonormalize_rows_qr(sv).abs(), sv.abs(), atol=1e-5, rtol=0)
 
 
+def test_sep_vectors_are_the_orthonormalised_spike_triggered_averages(scd_calibration):
+    """sep_vectors = S (S^T S)^(-1/2) for S the whitened EMG averaged at the native spikes, so
+    the mean of source k at unit j's native spikes, (sep_vectors^T S)[k, j] = (S^T S)^(1/2),
+    is symmetric positive definite; SCD's own filters are kept in sep_vectors_native."""
+    result = scd_calibration
+    n_mu = result.sources.shape[1]
+    proj = np.stack(
+        [result.sources[result.spikes_dict_native[j]].mean(axis=0) for j in range(n_mu)], axis=1
+    ).astype(np.float64)
+
+    np.testing.assert_allclose(proj, proj.T, atol=1e-4 * np.abs(proj).max())
+    assert np.linalg.eigvalsh((proj + proj.T) / 2).min() > 0
+    assert result.sep_vectors_native.shape == result.sep_vectors.shape
+    assert not np.allclose(np.abs(result.sep_vectors_native), np.abs(result.sep_vectors), atol=1e-3)
+
+
 def test_adaptation_runs_from_an_scd_calibration(synthetic_recording, scd_calibration):
     rec = synthetic_recording
     adapter = AdaptDecomp.from_calibration(
@@ -82,7 +98,7 @@ def test_unknown_scd_kwargs_raise(synthetic_recording):
 def test_finds_the_same_units_as_vanilla_scd(synthetic_recording):
     """SCD on the shared whitening finds the units vanilla SCD (own extension and
     whitening) finds on the same EMG."""
-    from scd.config.structures import Config
+    from scd.config.structures import Config, set_random_seed
     from scd.models.scd import SwarmContrastiveDecomposition
 
     rec = synthetic_recording
@@ -94,6 +110,7 @@ def test_finds_the_same_units_as_vanilla_scd(synthetic_recording):
     )
     for key, value in FAST_SCD.items():
         setattr(vanilla_config, key, value)
+    set_random_seed(0)  # the same seed as ours, so the result does not depend on test order
     _, vanilla = SwarmContrastiveDecomposition().run(
         torch.as_tensor(emg, dtype=torch.float32), vanilla_config
     )

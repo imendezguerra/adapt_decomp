@@ -145,7 +145,7 @@ A `DecompositionResult`, with `n_mu` units:
 | `whitening` | (dim, dim) | Whitening matrix, part of the model the adaptation starts from |
 | `gt_matched_indices` | (n_mu,) | The ground-truth unit each unit tracks, after `select_supervised` |
 | `roa` | (n_mu,) | Each unit's rate of agreement with that unit over the calibration window, after `select_supervised` |
-| `sources_native`, `spikes_dict_native`, `native_roa` | (samples, n_mu), dict, (n_mu,) | SCD's own sources and spikes, and their agreement with `sources`/`spikes`; None for CBSS |
+| `sep_vectors_native`, `sources_native`, `spikes_dict_native`, `native_roa` | (dim, n_mu), (samples, n_mu), dict, (n_mu,) | SCD's own filters, sources and spikes, and the agreement of its spikes with `spikes`; None for CBSS |
 | `contrast_exp` | (n_mu,) | Exponent e of each unit's contrast G ∝ \|u\|^e: optimised per unit by SCD, the config's for CBSS (3 for `"square"`, 4 for `"cube"`); None for `"logcosh"` |
 | `config` | | The config (`CBSSConfig`, `SCDConfig`) that produced it |
 
@@ -197,17 +197,19 @@ What differs from CBSS:
   The options the shared config sets (sampling frequency, filters, extension, whitening,
   bad channels, device, verbosity) are rejected there. `sil_th` and the ICA fields of
   `CBSSConfig` do not exist: SCD accepts units on `acceptance_silhouette`.
-- **Orthonormal separation vectors.** SCD finds units one at a time and peels each off the
-  data, so its filters are not orthogonal. The adaptation orthonormalises the separation
-  vectors on every update, so SCD's filters are orthonormalised once at calibration, with the
+- **Separation vectors from SCD's spikes.** SCD finds units one at a time and peels each off
+  the data, so its filters are fitted to a residual that does not exist online, and they are
+  not orthogonal. Each unit's separation vector is instead the whitened, extended EMG averaged
+  at the unit's SCD spikes. The adaptation orthonormalises the separation vectors on every
+  update, so these vectors are orthonormalised once at calibration, with the
   order-independent symmetric transform: the first adaptation batch then starts from the
-  calibrated units instead of rotating them.
-- **Reconstructed sources.** SCD's own sources come from the peeled-off residual, which does
-  not exist online. `sources`, `spikes`, the centroids and `sil` are therefore recomputed from
-  the orthonormal vectors on the full whitened EMG, as the adaptation computes them. SCD's own
-  output is kept in `sources_native` and `spikes_dict_native`, and `native_roa` gives each
-  unit's agreement between the two. A low `native_roa` flags a unit that relied on the
-  peel-off: drop such units with `select_unsupervised(native_roa_th=0.9)`.
+  calibrated units instead of rotating them. SCD's filters are kept in `sep_vectors_native`.
+- **Reconstructed sources.** SCD's own sources come from the peeled-off residual. `sources`,
+  `spikes`, the centroids and `sil` are therefore recomputed from the orthonormal vectors on
+  the full whitened EMG, as the adaptation computes them. SCD's own output is kept in
+  `sources_native` and `spikes_dict_native`, and `native_roa` gives each unit's agreement
+  between the two. A low `native_roa` flags a unit that relied on the peel-off: drop such
+  units with `select_unsupervised(native_roa_th=0.9)`.
 - **Contrast exponents.** SCD's swarm optimises the contrast function's exponent per unit;
   `contrast_exp` keeps each unit's best one. CBSS stores its fixed exponent there on the same
   scale, so the two are comparable.

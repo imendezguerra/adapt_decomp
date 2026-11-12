@@ -125,9 +125,10 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - SCD calibration (`SCD`, `SCDConfig`), with the new `scd` extra
   (`pip install "adapt_decomp[scd]"`): the search of the
   [swarm-contrastive-decomposition](https://github.com/AgneGris/swarm-contrastive-decomposition)
-  package runs on the shared preprocessing and whitening. Its filters are orthonormalised and
-  its sources reconstructed on the unpeeled whitened EMG, as the adaptation uses them; SCD's own
-  output is kept in the new `DecompositionResult` fields `sources_native`,
+  package runs on the shared preprocessing and whitening. Each unit's separation vector is the
+  whitened EMG averaged at its SCD spikes, orthonormalised, and its sources are reconstructed
+  on the unpeeled whitened EMG, as the adaptation uses them; SCD's own output is kept in the
+  new `DecompositionResult` fields `sep_vectors_native`, `sources_native`,
   `spikes_dict_native` and `native_roa` (`select_unsupervised(native_roa_th=...)` filters on
   it). `scd_preset` and `scd_kwargs` set its search options.
 - `DecompositionResult.contrast_exp`: each unit's contrast exponent e (G ∝ |u|^e), optimised

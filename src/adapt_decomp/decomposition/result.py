@@ -66,6 +66,10 @@ class DecompositionResult:
         roa (Optional[np.ndarray]): Rate of agreement of each unit with its
             ground-truth unit with shape (n_mu,), as a fraction. Set by
             select_supervised().
+        sep_vectors_native (Optional[np.ndarray]): Separation vectors as the method
+            itself output them, with shape (dim, n_mu), e.g. SCD's filters, applied to
+            its peeled-off residual. Diagnostic only: adaptation uses sep_vectors. None
+            for CBSS.
         sources_native (Optional[np.ndarray]): Sources as the method itself output
             them, with shape (samples, n_mu), e.g. SCD's from the peeled-off residual.
             Diagnostic only: adaptation uses sources. None for CBSS.
@@ -103,6 +107,7 @@ class DecompositionResult:
     timestamps: Optional[np.ndarray] = None
     gt_matched_indices: Optional[np.ndarray] = None
     roa: Optional[np.ndarray] = None
+    sep_vectors_native: Optional[np.ndarray] = None
     sources_native: Optional[np.ndarray] = None
     spikes_dict_native: Optional[Dict[int, np.ndarray]] = None
     native_roa: Optional[np.ndarray] = None
@@ -145,6 +150,7 @@ class DecompositionResult:
             "timestamps",
             "gt_matched_indices",
             "roa",
+            "sep_vectors_native",
             "sources_native",
             "spikes_dict_native",
             "native_roa",
@@ -335,6 +341,7 @@ class DecompositionResult:
             timestamps=self.timestamps,
             gt_matched_indices=_sel1d(self.gt_matched_indices),
             roa=_sel1d(self.roa),
+            sep_vectors_native=_sel2d_axis1(self.sep_vectors_native),
             sources_native=_sel2d_axis1(self.sources_native),
             spikes_dict_native=_sel_dict(self.spikes_dict_native),
             native_roa=_sel1d(self.native_roa),
