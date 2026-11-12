@@ -102,7 +102,7 @@ From the shell, the [command line](../how-to/use-the-command-line.md) does the s
 ```sh
 adapt-decomp calibrate_and_process data/fdsi_example/data/sub-01/noisy/sub-01_FDSI_triangular-ramp40s_snr30dB_emg.npz \
   --calib_stop 10240 --gt data/fdsi_example/data/sub-01/clean/sub-01_FDSI_triangular-ramp40s_spikes.npz \
-  --cbss_config data/fdsi_example/outputs/docs-example/calibration_config.yaml \
+  --calib_config data/fdsi_example/outputs/docs-example/calibration_config.yaml \
   --preset muniverse --out_dir data/fdsi_example/outputs/cli
 ```
 

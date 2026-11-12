@@ -135,7 +135,10 @@ the same file resolves on Linux, macOS and Windows. With it:
   (`OMP_NUM_THREADS=1`, `MKL_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`,
   `torch.set_num_threads(1)`) when results must not depend on the machine's core count, as the
   FDSI benchmark does.
-- **GPUs** are not bit-for-bit deterministic. Use the CPU for results that must reproduce.
+- **GPUs** do not reproduce CPU results, nor each other's. A seeded calibration on CUDA uses
+  deterministic kernels (`utils.system.deterministic_algorithms`, with `CUBLAS_WORKSPACE_CONFIG`
+  set on import), so it repeats on the same GPU and software; adaptation on a GPU does not.
+  Use the CPU for results that must reproduce.
 
 Regenerate the reference (`make reference`) only when results are *meant* to change, and say
 so in `CHANGELOG.md`.

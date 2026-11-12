@@ -21,11 +21,11 @@ PROCESS_BASELINE_BYTES: int = 512 * 1024**2
 
 # Peak memory of one run is the larger of building the model and preprocessing the recording.
 # Both factors are properties of the code, not of the dataset (measured on FDSI recordings).
-# Building: the calibration windows Decomposition stacks at once (32 x fifo x D float32)
+# Building: the calibration windows AdaptState stacks at once (32 x fifo x D float32)
 MODEL_BUILD_OVERHEAD: float = 4.8
 # Preprocessing: the extended recording (samples x channels x ext_fact float32)
 RUN_OVERHEAD: float = 2.0
-_KL_CAL_WINDOWS = 32  # Decomposition._compute_mean_sigma_kl_cal's chunk of windows
+_KL_CAL_WINDOWS = 32  # AdaptState._compute_mean_sigma_kl_cal's chunk of windows
 
 _MEMORY_GUIDANCE = (
     "To fit, lower n_cores (fewer runs at once), use a smaller pool or shorter recordings, "

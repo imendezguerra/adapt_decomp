@@ -17,12 +17,12 @@ How fast the model changes is set by a few hyperparameters, the learning rates a
 ```mermaid
 flowchart LR
     EMG[("EMG\n(samples, channels)")]
-    CR["CBSSResult\n(units + model)"]
+    CR["DecompositionResult\n(units + model)"]
     AD["AdaptDecomp\n(model + its state)"]
     AR["AdaptationResult\n(spikes, sources, losses)"]
     OR["OptimisationResult\n(best AdaptConfig)"]
 
-    EMG -->|"CBSS(cbss_config).decompose(window)"| CR
+    EMG -->|"CBSS(cbss_config).decompose(window)\nor SCD(scd_config)"| CR
     CR -->|"AdaptDecomp.from_calibration(...)"| AD
     EMG --> AD
     AD -->|"process_data(emg)"| AR
@@ -35,8 +35,8 @@ flowchart LR
 
 | Object | Made by | Holds |
 |---|---|---|
-| `CBSSConfig` | you | The calibration settings |
-| `CBSSResult` | `CBSS.decompose()` | The units (sources, spikes, quality metrics) and the model |
+| `CBSSConfig`, `SCDConfig` | you | The calibration settings; the type picks the method |
+| `DecompositionResult` | `CBSS.decompose()`, `SCD.decompose()` | The units (sources, spikes, quality metrics) and the model |
 | `AdaptConfig` | you, a preset (`AdaptConfig.from_preset`) or a search | The adaptation settings |
 | `AdaptDecomp` | `AdaptDecomp.from_calibration()` | The model, and its state as it adapts |
 | `AdaptationResult` | `process_data()`, `AdaptDecomp.calibrate_and_process()` | Spikes and sources over the recording, losses, timings |
@@ -49,8 +49,8 @@ Results also read like dicts: `result["spikes"]` is `result.spikes`.
 
 | Use | When |
 |---|---|
-| `AdaptDecomp.from_calibration(calibration, adapt_config=adapt_config)` | You have a `CBSSResult`, just computed or loaded. The usual path. |
-| `AdaptDecomp.calibrate_and_process(emg, timestamps, calib_indices, cbss_config, adapt_config)` | One call that calibrates on a window, then adapts over the whole recording. Returns `(AdaptationResult, CBSSResult)`. |
+| `AdaptDecomp.from_calibration(calibration, adapt_config=adapt_config)` | You have a `DecompositionResult`, just computed or loaded. The usual path. |
+| `AdaptDecomp.calibrate_and_process(emg, timestamps, calib_indices, calib_config, adapt_config)` | One call that calibrates on a window, then adapts over the whole recording. Returns `(AdaptationResult, DecompositionResult)`. |
 | `AdaptDecomp(whitening=..., sep_vectors=..., ...)` | Your calibration comes from another tool. |
 
 ## Processing modes

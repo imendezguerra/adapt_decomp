@@ -17,6 +17,7 @@ __all__ = [
     "orthonormalize_rows",
     "orthonormalize_rows_gram_schmidt",
     "orthonormalize_rows_qr",
+    "orthonormalize_rows_symmetric",
     "stable_cov",
     "update_centroids_from_peaks",
     "update_sv_spike_gated",
@@ -34,7 +35,7 @@ def stable_cov(
     """Compute a symmetric, optionally shrunk, sample covariance matrix.
 
     Used wherever a covariance-with-shrinkage-toward-identity is needed --
-    e.g. Decomposition's Rz_cal/Rz computations in data_structures.py.
+    e.g. AdaptState's Rz_cal/Rz computations in data_structures.py.
     Accepts either a single 2-D matrix or a batch of them (leading batch
     dimension), so the same call covers both a one-off covariance and a
     batched sliding-window sweep (previously bmm'd inline).
@@ -141,15 +142,35 @@ def orthonormalize_rows_gram_schmidt(sv: torch.Tensor) -> torch.Tensor:
 
 
 @torch.no_grad()
+def orthonormalize_rows_symmetric(sv: torch.Tensor) -> torch.Tensor:
+    """Symmetric (Löwdin) row orthonormalization, (sv sv^T)^(-1/2) sv.
+
+    Order-independent: the orthonormal rows closest to sv in Frobenius norm, so no
+    row is privileged (unlike QR/Gram-Schmidt) and each keeps its direction and sign
+    as far as possible. Computed as U V^T from sv = U S V^T.
+
+    Args:
+        sv (torch.Tensor): Rows to orthonormalize, with shape (M, D), M <= D.
+
+    Returns:
+        torch.Tensor: Orthonormal rows with shape (M, D).
+    """
+    U, _, Vh = torch.linalg.svd(sv, full_matrices=False)
+    return U @ Vh
+
+
+@torch.no_grad()
 def orthonormalize_rows(
     sv: torch.Tensor,
-    method: Literal["qr", "gram_schmidt", "none"] = "qr",
+    method: Literal["qr", "gram_schmidt", "symmetric", "none"] = "qr",
 ) -> torch.Tensor:
     """Dispatcher for row orthonormalization. Use 'none' for ablations only."""
     if method == "qr":
         return orthonormalize_rows_qr(sv)
     if method == "gram_schmidt":
         return orthonormalize_rows_gram_schmidt(sv)
+    if method == "symmetric":
+        return orthonormalize_rows_symmetric(sv)
     if method == "none":
         return sv
     raise ValueError(f"Unknown orthonormalization method: {method!r}")

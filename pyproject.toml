@@ -83,6 +83,8 @@ adapt-decomp-data = "adapt_decomp.utils.download:app"   # alias of adapt-decomp 
 dev = ["pytest>=8.0", "ruff>=0.6", "pre-commit>=3", "ipykernel>=6.29"]
 # Logging adaptations and searches to wandb: adapt-decomp optimize_adapt_decomp --wandb_project, wandb_sweep
 wandb = ["wandb>=0.16.4"]
+# SCD calibration (adapt_decomp.SCD); the scd package supports Python <3.14
+scd = ["swarm-contrastive-decomposition>=0.2.4"]
 # The documentation site (mkdocs.yml): mkdocs build --strict
 docs = [
     "mkdocs>=1.6,<2",          # MkDocs 2 drops the plugin system the site relies on

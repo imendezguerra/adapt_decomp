@@ -78,6 +78,24 @@ def contrast_fn(
     return u**3, 3.0 * u**2
 
 
+def contrast_exponent(
+    fn: Literal["logcosh", "square", "cube", "smooth_abs"], contrast_exp: float = 3.0
+) -> Optional[float]:
+    """Exponent e of the contrast G ∝ |u|^e that contrast_fn's nonlinearity g = G' maximises.
+
+    On the same scale as SCD's swarm-optimised exponents.
+
+    Args:
+        fn (Literal["logcosh", "square", "cube", "smooth_abs"]): Contrast function name.
+        contrast_exp (float, optional): Exponent of "smooth_abs". Defaults to 3.0.
+
+    Returns:
+        Optional[float]: 3 for "square" (g = u²), 4 for "cube" (g = u³), contrast_exp
+        for "smooth_abs", and None for "logcosh", which is not a power.
+    """
+    return {"square": 3.0, "cube": 4.0, "smooth_abs": float(contrast_exp)}.get(fn)
+
+
 def _normalize(w: torch.Tensor, eps: float = 1e-12) -> torch.Tensor:
     norm = w.norm()
     return w / norm if norm > eps else w

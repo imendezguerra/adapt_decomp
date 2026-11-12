@@ -3,7 +3,7 @@
 # saves (python docs/snippets/workflow.py). Run from the repository root.
 
 root: '.'                                   # Paths below are relative to this directory
-loader: 'load_pooled_cbss_memory'           # Loading function to use
+loader: 'load_pooled_calib_memory'           # Loading function to use
 preprocess: true                            # Filter the EMG before extension
 
 datasets:

@@ -17,7 +17,7 @@ class _LegacyConfig:
 
     Exception: contrast_fun. Online adaptation's sv update always uses log_cosh
     (see adaptation/ops.py::update_sv_spike_gated and
-    adaptation/data_structures.py::Decomposition.init_sv_update, both import
+    adaptation/data_structures.py::AdaptState.init_sv_update, both import
     log_cosh directly from cbss.ica with no dispatch on this field) -- unlike
     CBSSConfig.contrast_fun, which is real and drives calibration's fixed-point
     ICA. Narrowed to a single-value Literal so a config can't silently claim a

@@ -16,7 +16,7 @@ The `muniverse` preset holds hyperparameters tuned on this dataset (see the
 
 To score the whole recording, prepend the calibration's own output over its window (here the
 first 5 s; for a window starting later, `CBSS(cbss_config).apply(emg[:b], calibration)` gives
-CBSS's output over every sample before its end `b`):
+the calibration's output over every sample before its end `b`):
 
 ```python
 --8<-- "workflow.py:prepend"

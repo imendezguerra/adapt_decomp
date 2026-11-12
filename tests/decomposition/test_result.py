@@ -1,4 +1,5 @@
-"""Tests for cbss/data_structure.py: CBSSResult save/load and to_adapt_tensors()."""
+"""Tests for decomposition/result.py: DecompositionResult (alias CBSSResult) save/load,
+subset and to_adapt_tensors()."""
 
 import pickle
 
@@ -6,10 +7,12 @@ import h5py
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from adapt_decomp import __version__
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.decomposition import DecompositionResult
 from adapt_decomp.utils import write_h5
 
 
@@ -161,7 +164,7 @@ def test_cbss_result_load_rejects_wrong_type(tmp_path):
     path = tmp_path / "not_a_result.h5"
     write_h5(path, {"sources": np.zeros(2)}, {"format": "AdaptationResult"})
 
-    with pytest.raises(ValueError, match="CBSSResult"):
+    with pytest.raises(ValueError, match="DecompositionResult"):
         CBSSResult.load(path)
 
 
@@ -178,3 +181,48 @@ def test_cbss_result_load_reads_legacy_pickle_with_deprecation_warning(tmp_path)
 
     np.testing.assert_array_equal(loaded.sources, result.sources)
     assert loaded.config is None
+
+
+def test_load_reads_files_saved_under_the_cbss_result_format(tmp_path):
+    """Files saved before the rename carry format="CBSSResult" and no config method;
+    they still load, with a CBSSConfig."""
+    result = _make_result()
+    result.config = CBSSConfig(ext_fact=2)
+    data = result.to_dict()
+    config = {k: v for k, v in result.config.to_dict().items() if k != "method"}
+    path = tmp_path / "legacy.h5"
+    write_h5(path, data, {"format": "CBSSResult", "config": yaml.safe_dump(config)})
+
+    loaded = DecompositionResult.load(path)
+
+    np.testing.assert_array_equal(loaded.sources, result.sources)
+    assert type(loaded.config) is CBSSConfig
+
+
+def test_native_fields_roundtrip_and_follow_subset(tmp_path):
+    """The native fields and contrast_exp are saved, loaded and sliced per unit."""
+    result = _make_result(n_mu=3)
+    result.sources_native = np.random.randn(*result.sources.shape).astype(np.float32)
+    result.spikes_dict_native = {i: np.array([i, i + 5]) for i in range(3)}
+    result.native_roa = np.array([1.0, 0.5, 0.9], dtype=np.float32)
+    result.contrast_exp = np.array([2.5, 3.0, 4.0], dtype=np.float32)
+
+    path = tmp_path / "native.h5"
+    result.save(path)
+    loaded = DecompositionResult.load(path)
+    np.testing.assert_array_equal(loaded.sources_native, result.sources_native)
+    assert set(loaded.spikes_dict_native) == {0, 1, 2}
+
+    kept = loaded.select_unsupervised(native_roa_th=0.8)
+    np.testing.assert_allclose(kept.native_roa, [1.0, 0.9])
+    np.testing.assert_array_equal(kept.sources_native, result.sources_native[:, [0, 2]])
+    np.testing.assert_array_equal(kept.spikes_dict_native[1], [2, 7])
+    np.testing.assert_allclose(kept.contrast_exp, [2.5, 4.0])
+
+
+def test_method_specific_fields_default_to_none():
+    """A result built without them keeps the native fields and contrast_exp None."""
+    result = _make_result()
+    assert result.contrast_exp is None
+    assert result.native_roa is None
+    assert result.subset(np.array([True, False, True])).contrast_exp is None

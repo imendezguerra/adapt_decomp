@@ -18,7 +18,7 @@ def extend_data(
     resulting extended-channel space lets a downstream whitening matrix
     capture temporal correlations across ext_fact consecutive samples in a
     single linear projection. Shared by both cbss (calibration) and
-    data_structures.Data/Decomposition (online adaptation).
+    data_structures.Data/AdaptState (online adaptation).
 
     Args:
         data (torch.Tensor): EMG data of shape (samples, channels).

@@ -24,7 +24,7 @@ result = adapter.process_data(emg[5 * 2048 :])  # after a 5 s calibration window
 ```
 
 The calibration's own config (`calibration.config`) sets the fields the adaptation must share
-with it. Pass `cbss_config=` only for a calibration saved without one (a legacy pickle); when
+with it. Pass `calib_config=` only for a calibration saved without one (a legacy pickle); when
 both are set, `calibration.config` wins, with a warning if they differ.
 
 ## How it adapts
@@ -61,8 +61,8 @@ on, and the adapted output is never scored on the calibration window itself.
 ### In one call
 
 `AdaptDecomp.calibrate_and_process` runs the calibration, its unit selection and the
-adaptation together. It decomposes `emg[calib_indices]` with `cbss_config`, keeps the units
-`cbss_config.selection` selects (see
+adaptation together. It decomposes `emg[calib_indices]` with `calib_config` (a `CBSSConfig`
+or `SCDConfig`), keeps the units `calib_config.selection` selects (see
 [Keeping the reliable units](calibration.md#keeping-the-reliable-units)), builds the model and
 adapts from the end of the window, seeding the source FIFO itself. It returns the adaptation's
 output over the whole recording and the calibration:
@@ -115,7 +115,7 @@ The alternatives of the last three exist for ablation studies, and need their ow
 field.
 
 **Settings shared with calibration.** The preprocessing, channel and extension settings, and
-`spike_det_exp`, must be the calibration's. `from_calibration` copies them from `cbss_config`
+`spike_det_exp`, must be the calibration's. `from_calibration` copies them from `calib_config`
 and warns about any it changed. An `ext_fact` that disagrees with the calibration's raises an
 error, since it means the wrong calibration was passed.
 
@@ -155,7 +155,7 @@ An `AdaptationResult`, with `M` units and one entry per batch for the per-batch 
 | `total_loss` | scalar | `wh_loss_total + sv_loss_total` |
 | `gt_matched_indices` | (M,) | The ground-truth unit each unit tracks, carried over from the calibration |
 | `config` | | The `AdaptConfig` that ran, after matching the calibration's |
-| `cbss_config` | | The calibration's `CBSSConfig` |
+| `calib_config` | | The calibration's config (`CBSSConfig` or `SCDConfig`) |
 
 Save it with `result.save(path)`, an HDF5 file with both configs embedded, and reload it with
 `AdaptationResult.load(path)`, or with `load_adapt(path)` from `adapt_decomp.utils`, which also

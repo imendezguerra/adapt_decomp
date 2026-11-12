@@ -14,10 +14,10 @@ base_config = AdaptConfig.from_preset("muniverse")
 base_config.device = "cpu"
 
 # --8<-- [start:pool]
-from adapt_decomp.utils import load_pooled_cbss_memory
+from adapt_decomp.utils import load_pooled_calib_memory
 
 DATA = "data/fdsi_example/data/sub-01"
-pool = load_pooled_cbss_memory(
+pool = load_pooled_calib_memory(
     {
         "root": ".",
         "datasets": [

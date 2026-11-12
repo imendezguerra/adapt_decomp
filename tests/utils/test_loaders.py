@@ -1,14 +1,14 @@
-"""Tests for utils/loaders.py: the CBSSResult-based data-loading contract.
+"""Tests for utils/loaders.py: the DecompositionResult-based data-loading contract.
 
 CBSSResult.to_adapt_tensors() and spikes.comparison.compare_spikes() have
 their own tests in tests/cbss/test_data_structure.py and
 tests/spikes/test_comparison.py respectively, and are exercised here only
-indirectly, through TestLoadPooledCbssMemory's integration test.
+indirectly, through TestLoadPooledCalibMemory's integration test.
 
 _cbss_result_from_jne_decomp/load_example's real-file paths (.mat/.hdf5) are
 integration-level and not covered here -- these target the pure/cheap-to-test
 pieces, plus a tmp_path-based end-to-end
-test of load_pooled_cbss_memory itself since building its on-disk inputs (a
+test of load_pooled_calib_memory itself since building its on-disk inputs (a
 CBSSResult HDF5 + two .npz files) is cheap.
 """
 
@@ -19,9 +19,12 @@ import torch
 
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.data_structures import AdaptationResult
+from adapt_decomp.adaptation.optimize.units import select_pool_units
 from adapt_decomp.cbss.config import CBSSConfig
 from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.scd.config import SCDConfig
 from adapt_decomp.utils.loaders import (
+    PooledDatasetDisk,
     PooledDatasetMemory,
     _load_bin_spikes_muniverse,
     load_adapt,
@@ -29,6 +32,8 @@ from adapt_decomp.utils.loaders import (
     load_data,
     load_emg,
     load_gt,
+    load_pooled_calib_disk,
+    load_pooled_calib_memory,
     load_pooled_cbss_disk,
     load_pooled_cbss_memory,
 )
@@ -37,7 +42,7 @@ from adapt_decomp.utils.loaders import (
 def _make_cbss_result(
     n_mu: int = 2, T: int = 20, D: int = 4, C: int = 2, ext_fact: int = 2
 ) -> CBSSResult:
-    """Small, valid CBSSResult for load_pooled_cbss_memory's integration test -- mirrors
+    """Small, valid CBSSResult for load_pooled_calib_memory's integration test -- mirrors
     tests/cbss/test_data_structure.py's construction, with emg/timestamps set
     (to_adapt_tensors requires emg; timestamps enables .fs)."""
     spikes = np.zeros((T, n_mu), dtype=np.int32)
@@ -124,23 +129,23 @@ class TestLoadCalib:
         result = _make_cbss_result()
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        config_path = tmp_path / "cbss_config.yaml"
+        config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(config_path)
 
-        cbss_result, cbss_config = load_calib(calib_path, config_path)
+        cbss_result, calib_config = load_calib(calib_path, config_path)
 
         assert cbss_result.sources.shape == result.sources.shape
-        assert cbss_config.ext_fact == result.ext_fact
+        assert calib_config.ext_fact == result.ext_fact
 
     def test_class_with_no_config_path_returns_none_config(self, tmp_path):
         result = _make_cbss_result()
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
 
-        cbss_result, cbss_config = load_calib(calib_path, None)
+        cbss_result, calib_config = load_calib(calib_path, None)
 
         assert cbss_result.sources.shape == result.sources.shape
-        assert cbss_config is None
+        assert calib_config is None
 
     def test_embedded_config_is_returned_without_a_config_path(self, tmp_path):
         result = _make_cbss_result()
@@ -148,23 +153,23 @@ class TestLoadCalib:
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
 
-        cbss_result, cbss_config = load_calib(calib_path)
+        cbss_result, calib_config = load_calib(calib_path)
 
-        assert cbss_config.fs == 1000.0
-        assert cbss_result.config is cbss_config
+        assert calib_config.fs == 1000.0
+        assert cbss_result.config is calib_config
 
     def test_embedded_config_wins_over_a_differing_config_path(self, tmp_path):
         result = _make_cbss_result()
         result.config = CBSSConfig(ext_fact=result.ext_fact, fs=1000.0)
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        config_path = tmp_path / "cbss_config.yaml"
+        config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact, fs=2000.0).to_yaml(config_path)
 
         with pytest.warns(UserWarning, match="fs"):
-            _, cbss_config = load_calib(calib_path, config_path)
+            _, calib_config = load_calib(calib_path, config_path)
 
-        assert cbss_config.fs == 1000.0
+        assert calib_config.fs == 1000.0
 
     def test_unknown_calib_loader_raises(self, tmp_path):
         result = _make_cbss_result()
@@ -191,26 +196,26 @@ class TestLoadAdapt:
     def test_returns_the_embedded_configs(self, tmp_path):
         path = tmp_path / "adapted.h5"
         self._make_adaptation_result(
-            config=AdaptConfig(device="cpu", ext_fact=3), cbss_config=CBSSConfig(ext_fact=3)
+            config=AdaptConfig(device="cpu", ext_fact=3), calib_config=CBSSConfig(ext_fact=3)
         ).save(path)
 
-        adapt_result, adapt_config, cbss_config = load_adapt(path)
+        adapt_result, adapt_config, calib_config = load_adapt(path)
 
-        assert adapt_config.ext_fact == 3 and cbss_config.ext_fact == 3
+        assert adapt_config.ext_fact == 3 and calib_config.ext_fact == 3
         assert adapt_result.config is adapt_config
-        assert adapt_result.cbss_config is cbss_config
+        assert adapt_result.calib_config is calib_config
 
     def test_config_paths_fill_in_configs_that_are_not_embedded(self, tmp_path):
         path = tmp_path / "adapted.h5"
         self._make_adaptation_result().save(path)
         AdaptConfig(device="cpu", ext_fact=4).to_yaml(tmp_path / "adapt_config.yaml")
-        CBSSConfig(ext_fact=4).to_yaml(tmp_path / "cbss_config.yaml")
+        CBSSConfig(ext_fact=4).to_yaml(tmp_path / "calib_config.yaml")
 
-        _, adapt_config, cbss_config = load_adapt(
-            path, tmp_path / "adapt_config.yaml", tmp_path / "cbss_config.yaml"
+        _, adapt_config, calib_config = load_adapt(
+            path, tmp_path / "adapt_config.yaml", tmp_path / "calib_config.yaml"
         )
 
-        assert adapt_config.ext_fact == 4 and cbss_config.ext_fact == 4
+        assert adapt_config.ext_fact == 4 and calib_config.ext_fact == 4
 
     def test_embedded_config_wins_over_a_differing_config_path(self, tmp_path):
         path = tmp_path / "adapted.h5"
@@ -218,10 +223,10 @@ class TestLoadAdapt:
         AdaptConfig(device="cpu", ext_fact=4).to_yaml(tmp_path / "adapt_config.yaml")
 
         with pytest.warns(UserWarning, match="ext_fact"):
-            _, adapt_config, cbss_config = load_adapt(path, tmp_path / "adapt_config.yaml")
+            _, adapt_config, calib_config = load_adapt(path, tmp_path / "adapt_config.yaml")
 
         assert adapt_config.ext_fact == 3
-        assert cbss_config is None
+        assert calib_config is None
 
 
 class TestLoadEmg:
@@ -281,7 +286,7 @@ class TestLoadGt:
             load_gt(path, n_samples=10, gt_loader="bogus")
 
 
-class TestLoadPooledCbssMemory:
+class TestLoadPooledCalibMemory:
     def test_builds_one_pooled_dataset_per_entry(self, tmp_path):
         n_mu, T, D, C = 2, 20, 4, 2
         result = _make_cbss_result(n_mu=n_mu, T=T, D=D, C=C)
@@ -304,7 +309,7 @@ class TestLoadPooledCbssMemory:
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_memory",
+            "loader": "load_pooled_calib_memory",
             "datasets": [
                 {
                     "name": "dataset_a",
@@ -331,7 +336,7 @@ class TestLoadPooledCbssMemory:
             D,
             n_mu,
         )  # CBSSResult's own [dim, n_mu] storage
-        assert dataset_a.cbss_config.ext_fact == result.ext_fact
+        assert dataset_a.calib_config.ext_fact == result.ext_fact
         assert dataset_a.preprocess is True  # default preprocess: true propagated
         assert dataset_a.gt_paired_bin is not None
         assert dataset_a.gt_paired_bin.shape[0] == n_full
@@ -346,7 +351,7 @@ class TestLoadPooledCbssMemory:
         n_mu, T, C, n_full = 2, 20, 2, 60
         result = _make_cbss_result(n_mu=n_mu, T=T, C=C)
         result.save(tmp_path / "cbss.h5")
-        CBSSConfig(ext_fact=result.ext_fact).to_yaml(tmp_path / "cbss_config.yaml")
+        CBSSConfig(ext_fact=result.ext_fact).to_yaml(tmp_path / "calib_config.yaml")
         emg_full = np.random.randn(n_full, C).astype(np.float32)
         np.savez(tmp_path / "emg.npz", emg=emg_full)
         gt_dense = np.zeros((n_full, n_mu), dtype=np.float32)
@@ -357,13 +362,13 @@ class TestLoadPooledCbssMemory:
             "name": "a",
             "path_emg": "emg.npz",
             "path_calib": "cbss.h5",
-            "path_calib_config": "cbss_config.yaml",
+            "path_calib_config": "calib_config.yaml",
             "path_gt": "spikes.npz",
             "start": T,
             "stop": 50,
         }
 
-        entry = load_pooled_cbss_memory({"root": str(tmp_path), "datasets": [dataset]})["a"]
+        entry = load_pooled_calib_memory({"root": str(tmp_path), "datasets": [dataset]})["a"]
 
         np.testing.assert_array_equal(entry.emg.numpy(), emg_full[T:50])
         assert entry.calibration.spikes.shape[1] == n_mu  # matched over [0, T)
@@ -373,7 +378,7 @@ class TestLoadPooledCbssMemory:
 
         dataset["start"] = n_full
         with pytest.raises(ValueError, match="selects no samples"):
-            load_pooled_cbss_memory({"root": str(tmp_path), "datasets": [dataset]})
+            load_pooled_calib_memory({"root": str(tmp_path), "datasets": [dataset]})
 
     def test_gt_match_narrows_calibration_and_gt_paired_bin_together(self, tmp_path):
         """A calibration unit with no correlated ground truth is dropped by
@@ -385,7 +390,7 @@ class TestLoadPooledCbssMemory:
         result.spikes[:, 1] = 0  # unit 1 never fires -- no GT will match it
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
 
         n_full = 60
@@ -399,7 +404,7 @@ class TestLoadPooledCbssMemory:
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_memory",
+            "loader": "load_pooled_calib_memory",
             "datasets": [
                 {
                     "name": "dataset_a",
@@ -417,18 +422,18 @@ class TestLoadPooledCbssMemory:
         assert dataset_a.calibration.spikes.shape[1] == 1  # unit 1 dropped
         assert dataset_a.gt_paired_bin.shape[1] == 1
 
-    def test_load_pooled_cbss_memory_matches_load_data_dispatch(self, tmp_path):
+    def test_load_pooled_calib_memory_matches_load_data_dispatch(self, tmp_path):
         result = _make_cbss_result()
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
         emg_path = tmp_path / "emg.npz"
         np.savez(emg_path, emg=np.random.randn(40, 2).astype(np.float32))
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_memory",
+            "loader": "load_pooled_calib_memory",
             "datasets": [
                 {
                     "name": "only",
@@ -439,7 +444,7 @@ class TestLoadPooledCbssMemory:
             ],
         }
 
-        direct = load_pooled_cbss_memory(data_config)
+        direct = load_pooled_calib_memory(data_config)
         via_dispatch = load_data(data_config)
         assert direct.keys() == via_dispatch.keys()
 
@@ -466,7 +471,7 @@ class TestLoadPooledCbssMemory:
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_memory",
+            "loader": "load_pooled_calib_memory",
             "datasets": [
                 {
                     "name": "dataset_npz",
@@ -490,15 +495,15 @@ class TestLoadPooledCbssMemory:
         assert pool["dataset_neuromotion"].emg.shape == (n_full, C)
 
 
-class TestLoadPooledCbssDisk:
+class TestLoadPooledCalibDisk:
     def test_builds_one_pooled_dataset_disk_per_entry_without_touching_any_paths(self, tmp_path):
-        """load_pooled_cbss_disk never reads a single file -- every path
+        """load_pooled_calib_disk never reads a single file -- every path
         (path_gt included) is just stored, resolved fresh per trial by
         optimize_adapt_decomp_pooled_disk instead. Every path below is
         nonexistent, for both datasets, to prove this directly."""
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_disk",
+            "loader": "load_pooled_calib_disk",
             "datasets": [
                 {
                     "name": "dataset_a",
@@ -536,18 +541,18 @@ class TestLoadPooledCbssDisk:
         assert dataset_b.path_calib == tmp_path / "does_not_exist_calib_b.h5"
         assert dataset_b.path_calib_config is None  # optional: the embedded config is used
 
-    def test_load_pooled_cbss_disk_matches_load_data_dispatch(self, tmp_path):
+    def test_load_pooled_calib_disk_matches_load_data_dispatch(self, tmp_path):
         result = _make_cbss_result()
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
         emg_path = tmp_path / "emg.npz"
         np.savez(emg_path, emg=np.random.randn(40, 2).astype(np.float32))
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_disk",
+            "loader": "load_pooled_calib_disk",
             "datasets": [
                 {
                     "name": "only",
@@ -558,7 +563,7 @@ class TestLoadPooledCbssDisk:
             ],
         }
 
-        direct = load_pooled_cbss_disk(data_config)
+        direct = load_pooled_calib_disk(data_config)
         via_dispatch = load_data(data_config)
         assert direct.keys() == via_dispatch.keys()
 
@@ -568,12 +573,12 @@ class TestLoadPooledCbssDisk:
         result = _make_cbss_result()
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
 
         data_config = {
             "root": str(tmp_path),
-            "loader": "load_pooled_cbss_disk",
+            "loader": "load_pooled_calib_disk",
             "datasets": [
                 {
                     "name": "only",
@@ -585,7 +590,7 @@ class TestLoadPooledCbssDisk:
             ],
         }
 
-        pool = load_pooled_cbss_disk(data_config)
+        pool = load_pooled_calib_disk(data_config)
 
         assert pool["only"].emg_loader == "neuromotion"
 
@@ -593,13 +598,13 @@ class TestLoadPooledCbssDisk:
 class TestPooledDatasetMemoryResolve:
     def test_resolve_passes_through_its_own_fields(self):
         result = _make_cbss_result()
-        cbss_config = CBSSConfig(ext_fact=result.ext_fact)
+        calib_config = CBSSConfig(ext_fact=result.ext_fact)
         emg = np.random.randn(10, 2).astype(np.float32)
         gt_paired_bin = np.zeros((10, 2), dtype=np.float32)
         dataset = PooledDatasetMemory(
             emg=emg,
             calibration=result,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
             preprocess=False,
             gt_paired_bin=gt_paired_bin,
         )
@@ -608,7 +613,7 @@ class TestPooledDatasetMemoryResolve:
 
         assert out_emg is emg
         assert out_calibration is result
-        assert out_cbss_config is cbss_config
+        assert out_cbss_config is calib_config
         assert out_preprocess is False
         assert out_gt is gt_paired_bin
 
@@ -618,7 +623,7 @@ class TestPooledDatasetDiskResolve:
         result = _make_cbss_result(n_mu=n_mu, T=T, D=D, C=C)
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
         emg_path = tmp_path / "emg.npz"
         np.savez(emg_path, emg=np.random.randn(60, C).astype(np.float32))
@@ -635,10 +640,10 @@ class TestPooledDatasetDiskResolve:
             dataset["fs"] = fs
         dataset.update(window)  # start/stop
 
-        pool = load_pooled_cbss_disk(
+        pool = load_pooled_calib_disk(
             {
                 "root": str(tmp_path),
-                "loader": "load_pooled_cbss_disk",
+                "loader": "load_pooled_calib_disk",
                 "datasets": [dataset],
             }
         )
@@ -647,11 +652,11 @@ class TestPooledDatasetDiskResolve:
     def test_resolve_loads_emg_calib_and_config_with_no_gt(self, tmp_path):
         entry, result = self._build_entry(tmp_path)
 
-        emg, calibration, cbss_config, preprocess, gt_paired_bin = entry.resolve()
+        emg, calibration, calib_config, preprocess, gt_paired_bin = entry.resolve()
 
         assert emg.shape == (60, 2)
         assert calibration.sources.shape[1] == 2
-        assert cbss_config.ext_fact == result.ext_fact
+        assert calib_config.ext_fact == result.ext_fact
         assert preprocess is True
         assert gt_paired_bin is None
 
@@ -706,7 +711,7 @@ class TestPooledDatasetDiskResolve:
         result.spikes[:, 1] = 0  # unit 1 never fires -- no GT will match it
         calib_path = tmp_path / "cbss.h5"
         result.save(calib_path)
-        cbss_config_path = tmp_path / "cbss_config.yaml"
+        cbss_config_path = tmp_path / "calib_config.yaml"
         CBSSConfig(ext_fact=result.ext_fact).to_yaml(cbss_config_path)
         emg_path = tmp_path / "emg.npz"
         np.savez(emg_path, emg=np.random.randn(60, C).astype(np.float32))
@@ -716,10 +721,10 @@ class TestPooledDatasetDiskResolve:
         gt_path = tmp_path / "spikes.npz"
         np.savez(gt_path, spikes=gt_dense)
 
-        pool = load_pooled_cbss_disk(
+        pool = load_pooled_calib_disk(
             {
                 "root": str(tmp_path),
-                "loader": "load_pooled_cbss_disk",
+                "loader": "load_pooled_calib_disk",
                 "datasets": [
                     {
                         "name": "only",
@@ -738,7 +743,7 @@ class TestPooledDatasetDiskResolve:
         assert gt_paired_bin.shape[1] == 1
 
     def test_resolve_touches_no_files_until_called(self, tmp_path):
-        """load_pooled_cbss_disk itself still touches nothing -- resolve() is
+        """load_pooled_calib_disk itself still touches nothing -- resolve() is
         where loading actually happens, called fresh each time."""
         entry, _ = self._build_entry(tmp_path)
         assert entry.path_calib.exists()  # sanity: the files really are there
@@ -747,3 +752,62 @@ class TestPooledDatasetDiskResolve:
         first = entry.resolve()
         second = entry.resolve()
         assert first[1].sources.shape == second[1].sources.shape
+
+
+class TestMethodAgnosticPools:
+    """CBSS and SCD calibrations load alike; old loader names still work."""
+
+    @staticmethod
+    def _write_pool(tmp_path):
+        """Write one CBSS and one SCD calibration (with native fields) plus their EMG.
+
+        Returns:
+            Dict: A pool data_config without "loader".
+        """
+        np.savez(tmp_path / "emg.npz", emg=np.random.randn(60, 2).astype(np.float32))
+        cbss = _make_cbss_result()
+        cbss.config = CBSSConfig(ext_fact=cbss.ext_fact)
+        cbss.save(tmp_path / "cbss.h5")
+        scd = _make_cbss_result()
+        scd.config = SCDConfig(ext_fact=scd.ext_fact, scd_kwargs={"max_iterations": 5})
+        scd.sources_native = scd.sources.copy()
+        scd.spikes_dict_native = dict(scd.spikes_dict)
+        scd.native_roa = np.array([1.0, 0.5], dtype=np.float32)
+        scd.save(tmp_path / "scd.h5")
+        return {
+            "root": str(tmp_path),
+            "datasets": [
+                {"name": m, "path_emg": "emg.npz", "path_calib": f"{m}.h5"} for m in ("cbss", "scd")
+            ],
+        }
+
+    @pytest.mark.parametrize("loader", ["load_pooled_calib_memory", "load_pooled_calib_disk"])
+    def test_scd_calibration_loads_with_its_config_and_native_fields(self, tmp_path, loader):
+        pool = load_data({**self._write_pool(tmp_path), "loader": loader})
+        _, calibration, calib_config, _, _ = pool["scd"].resolve()
+        assert isinstance(calib_config, SCDConfig)
+        assert calib_config.scd_kwargs == {"max_iterations": 5}
+        np.testing.assert_allclose(calibration.native_roa, [1.0, 0.5])
+        assert calibration.sources_native.shape == calibration.sources.shape
+        assert sorted(calibration.spikes_dict_native) == [0, 1]
+        assert isinstance(pool["cbss"].resolve()[2], CBSSConfig)
+
+    def test_native_roa_th_keeps_every_cbss_unit_in_a_mixed_pool(self, tmp_path):
+        pool = load_pooled_calib_memory(self._write_pool(tmp_path))
+        selected = select_pool_units(pool, "unsupervised", {"native_roa_th": 0.9})
+        assert selected["cbss"].calibration.sources.shape[1] == 2
+        assert selected["scd"].calibration.sources.shape[1] == 1
+
+    @pytest.mark.parametrize(
+        ("old", "new"),
+        [
+            (load_pooled_cbss_memory, PooledDatasetMemory),
+            (load_pooled_cbss_disk, PooledDatasetDisk),
+        ],
+    )
+    def test_deprecated_loader_names_still_load(self, tmp_path, old, new):
+        data_config = self._write_pool(tmp_path)
+        with pytest.warns(FutureWarning, match="load_pooled_calib_"):
+            assert isinstance(old(data_config)["scd"], new)
+        with pytest.warns(FutureWarning, match="load_pooled_calib_"):
+            assert isinstance(load_data({**data_config, "loader": old.__name__})["scd"], new)

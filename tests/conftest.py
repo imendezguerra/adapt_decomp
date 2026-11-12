@@ -1,7 +1,7 @@
 """Shared pytest fixtures for adapt_decomp's test suite.
 
 Factory fixtures (make_adapt_config/make_decomposition/make_adapter/
-make_optimize_kwargs) replace the near-identical AdaptConfig/Decomposition/
+make_optimize_kwargs) replace the near-identical AdaptConfig/AdaptState/
 AdaptDecomp-wiring boilerplate that used to be hand-copied into almost every
 test in the old tests/test_backend.py. Each is a plain factory function
 returned from a fixture (the standard pytest "factory as fixture" pattern),
@@ -17,7 +17,7 @@ import pytest
 import torch
 
 from adapt_decomp.adaptation.config import AdaptConfig
-from adapt_decomp.adaptation.data_structures import Decomposition
+from adapt_decomp.adaptation.data_structures import AdaptState
 from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
 from adapt_decomp.cbss import CBSS
 from adapt_decomp.cbss.config import CBSSConfig
@@ -68,10 +68,10 @@ def make_adapt_config():
 
 @pytest.fixture
 def make_decomposition(make_adapt_config):
-    """Factory fixture: build a Decomposition over synthetic calibration data.
+    """Factory fixture: build a AdaptState over synthetic calibration data.
 
     Returns:
-        Callable[..., Tuple[Decomposition, AdaptConfig]]: Call with
+        Callable[..., Tuple[AdaptState, AdaptConfig]]: Call with
         (M, ext_fact, raw_chs), optionally n_cal (default 500), spike_stride
         (default 50, i.e. spikes_cal[::spike_stride] = 1), whitening (default
         torch.eye(D)), orthonormal_sv (default True; False row-normalises sv
@@ -79,7 +79,7 @@ def make_decomposition(make_adapt_config):
         to use as-is), or any AdaptConfig field override -- forwarded to
         make_adapt_config(ext_fact=ext_fact, **cfg_overrides) when config is
         not given. Returns (decomposition, the config it was built with) --
-        the config is needed by make_adapter, since several of Decomposition's
+        the config is needed by make_adapter, since several of AdaptState's
         derived fields depend on it.
     """
 
@@ -113,7 +113,7 @@ def make_decomposition(make_adapt_config):
         spikes_cal = torch.zeros(n_cal, M, dtype=torch.int32)
         spikes_cal[::spike_stride] = 1
 
-        decomp = Decomposition(
+        decomp = AdaptState(
             wh,
             sv,
             base_cal,
@@ -131,12 +131,12 @@ def make_decomposition(make_adapt_config):
 @pytest.fixture
 def make_adapter():
     """Factory fixture: wire a bare AdaptDecomp directly to an existing
-    Decomposition, bypassing __init__ -- for tests exercising a single
+    AdaptState, bypassing __init__ -- for tests exercising a single
     internal step (e.g. _whiten) without running a full calibration-from-EMG
     pipeline.
 
     Returns:
-        Callable[[Decomposition, AdaptConfig], "AdaptDecomp"]: Call with the
+        Callable[[AdaptState, AdaptConfig], "AdaptDecomp"]: Call with the
         decomposition and the AdaptConfig it was built with (matching config
         matters -- several of decomp's derived fields depend on it). The
         returned adapter's wh_loss/sv_loss/wh_trace start as empty lists,
@@ -145,12 +145,12 @@ def make_adapter():
         _compute_losses() directly, overwrite them with tensors first.
     """
 
-    def _make(decomp: Decomposition, config: AdaptConfig):
+    def _make(decomp: AdaptState, config: AdaptConfig):
         from adapt_decomp.adaptation import AdaptDecomp
 
         adapter = AdaptDecomp.__new__(AdaptDecomp)
         adapter.config = config
-        adapter.decomp = decomp
+        adapter.state = decomp
         adapter.units = decomp.sep_vectors.shape[0]
         adapter.diagnostics = {}
         adapter.wh_loss = []
@@ -170,7 +170,7 @@ def make_optimize_kwargs():
         Callable[[], Tuple[Dict, int]]: Call with no arguments; reseeds
         torch.manual_seed(42) on every call, so repeated calls (e.g. building
         two pooled datasets) reproduce identical synthetic data. Returns
-        (kwargs, M): kwargs is emg/calibration/cbss_config/preprocess/
+        (kwargs, M): kwargs is emg/calibration/calib_config/preprocess/
         base_config -- exactly the pieces needed to build a
         PooledDatasetMemory (plus base_config, forwarded separately to
         optimize_adapt_decomp_pooled_memory's own base_config parameter);
@@ -214,12 +214,12 @@ def make_optimize_kwargs():
             ext_fact=ext_fact,
             emg=emg_calib.numpy(),
         )
-        cbss_config = CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True)
+        calib_config = CBSSConfig(ext_fact=ext_fact, fs=fs, save_emg=True)
 
         return dict(
             emg=emg_online,
             calibration=calibration,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
             preprocess=False,
             base_config=cfg,
         ), M
@@ -253,7 +253,7 @@ def make_memory_pool(make_optimize_kwargs):
             pool[name] = PooledDatasetMemory(
                 emg=common["emg"],
                 calibration=calibration,
-                cbss_config=common["cbss_config"],
+                calib_config=common["calib_config"],
                 preprocess=common["preprocess"],
                 gt_paired_bin=gt_paired_bin,
             )

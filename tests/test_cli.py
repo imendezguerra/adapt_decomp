@@ -20,11 +20,11 @@ def files(tmp_path, synthetic_recording, synthetic_cbss_config):
     paths = {
         "emg": tmp_path / "emg.npz",
         "gt": tmp_path / "spikes.npz",
-        "cbss_config": tmp_path / "cbss_config.yaml",
+        "calib_config": tmp_path / "calib_config.yaml",
     }
     np.savez(paths["emg"], emg=synthetic_recording.emg)
     np.savez(paths["gt"], spikes=synthetic_recording.spikes)
-    synthetic_cbss_config.to_yaml(paths["cbss_config"])
+    synthetic_cbss_config.to_yaml(paths["calib_config"])
     return paths
 
 
@@ -38,7 +38,7 @@ def invoke(*args):
 def test_decompose_then_process_data_from_the_calibration_end(tmp_path, files, synthetic_recording):
     n_cal = synthetic_recording.n_cal
     invoke(
-        "decompose", files["emg"], "--cbss_config", files["cbss_config"], "--stop", n_cal,
+        "decompose", files["emg"], "--calib_config", files["calib_config"], "--stop", n_cal,
         "--gt", files["gt"], "--out_dir", tmp_path / "calib",
     )  # fmt: skip
     calibration = CBSSResult.load(tmp_path / "calib" / "calibration.h5")
@@ -59,14 +59,14 @@ def test_decompose_then_process_data_from_the_calibration_end(tmp_path, files, s
         calibration.spikes.shape[1],
     )
     assert adapted.config.source_fifo_from_calib
-    assert adapted.cbss_config.to_dict() == calibration.config.to_dict()
+    assert adapted.calib_config.to_dict() == calibration.config.to_dict()
 
 
 def test_calibrate_and_process_covers_the_recording_and_saves_no_ground_truth(
     tmp_path, files, synthetic_recording
 ):
     invoke(
-        "calibrate_and_process", files["emg"], "--cbss_config", files["cbss_config"],
+        "calibrate_and_process", files["emg"], "--calib_config", files["calib_config"],
         "--calib_stop", synthetic_recording.n_cal, "--gt", files["gt"], "--preset", "muniverse",
         "--out_dir", tmp_path / "out",
     )  # fmt: skip
@@ -98,7 +98,7 @@ def pool_config(tmp_path, files, synthetic_recording):
     """A one-recording pool YAML, calibrated by decompose, adapted from the calibration end."""
     n_cal = synthetic_recording.n_cal
     invoke(
-        "decompose", files["emg"], "--cbss_config", files["cbss_config"], "--stop", n_cal,
+        "decompose", files["emg"], "--calib_config", files["calib_config"], "--stop", n_cal,
         "--out_dir", tmp_path / "calib",
     )  # fmt: skip
     data_config = tmp_path / "pool.yaml"

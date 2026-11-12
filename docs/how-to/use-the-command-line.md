@@ -49,13 +49,13 @@ The files the commands read:
 |---|---|
 | The EMG argument | `.npz` with key `emg`, of shape (samples, channels); `--emg_loader neuromotion` for a NeuroMotion HDF5 file |
 | `--gt` | `.npz` with key `spikes`: binary spike trains of shape (samples, units), or one array of spike indices per unit; `--gt_loader neuromotion` for a NeuroMotion HDF5 file |
-| `--cbss_config`, `--adapt_config` | YAML, as written by `CBSSConfig.to_yaml()` or `AdaptConfig.to_yaml()`; fields left out keep their defaults |
-| `--calibration` | The `calibration.h5` that `decompose` writes (`CBSSResult.save()`), with its config embedded |
+| `--calib_config`, `--adapt_config` | YAML, as written by `CBSSConfig.to_yaml()`/`SCDConfig.to_yaml()` (its `method` picks CBSS or SCD; none means CBSS) or `AdaptConfig.to_yaml()`; fields left out keep their defaults. `--cbss_config` is a deprecated alias of `--calib_config` |
+| `--calibration` | The `calibration.h5` that `decompose` writes (`DecompositionResult.save()`), with its config embedded |
 | `--calibration_config` | Optional: the config YAML of a `--calibration` saved without one (a legacy `.pkl`) |
 | `--data_config` | A [pool](../guide/optimisation.md#the-pool) YAML, e.g. [`configs/data_configs/fdsi_example.yaml`](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/data_configs/fdsi_example.yaml) |
 | `--search_config` | YAML of `optimize_adapt_decomp`'s search arguments, e.g. [`configs/sweep_configs/sweep_optuna.yaml`](https://github.com/imendezguerra/adapt_decomp/blob/main/configs/sweep_configs/sweep_optuna.yaml) |
 
-The outputs are the Python objects, saved: load them with `CBSSResult.load`,
+The outputs are the Python objects, saved: load them with `DecompositionResult.load`,
 `AdaptationResult.load` and `AdaptConfig.from_yaml`.
 
 ## Calibrate: `decompose`
@@ -68,9 +68,9 @@ adapt-decomp decompose $EMG --stop 10240 --gt $GT --out_dir data/fdsi_example/ou
 ```
 
 CBSS decomposes the first 5 s (`--start` 0 to `--stop` 10240) with `CBSSConfig()`'s defaults,
-or the settings of `--cbss_config`. `--gt` keeps the units that match a ground-truth unit with
+or the method and settings of `--calib_config`. `--gt` keeps the units that match a ground-truth unit with
 a rate of agreement of at least `--roa_th` (0.9). Without ground truth, set `selection:
-unsupervised` and its thresholds (`selection_kwargs`) in the `--cbss_config` YAML instead (see
+unsupervised` and its thresholds (`selection_kwargs`) in the `--calib_config` YAML instead (see
 [Keeping the reliable units](../guide/calibration.md#keeping-the-reliable-units)). It writes
 `calibration.h5`, with its config embedded, and that config as `calibration_config.yaml`, to
 share or log it, into `--out_dir`.

@@ -11,6 +11,8 @@ from adapt_decomp.utils.utils import (
 from adapt_decomp.utils.loaders import (
     load_data,
     load_example,
+    load_pooled_calib_memory,
+    load_pooled_calib_disk,
     load_pooled_cbss_memory,
     load_pooled_cbss_disk,
     load_adapt,
@@ -35,6 +37,8 @@ __all__ = [
     "write_h5",
     "load_data",
     "load_example",
+    "load_pooled_calib_memory",
+    "load_pooled_calib_disk",
     "load_pooled_cbss_memory",
     "load_pooled_cbss_disk",
     "load_adapt",

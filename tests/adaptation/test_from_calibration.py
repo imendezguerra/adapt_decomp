@@ -1,14 +1,14 @@
-"""Tests for AdaptDecomp.from_calibration()'s cbss_config (the calibration's
+"""Tests for AdaptDecomp.from_calibration()'s calib_config (the calibration's
 embedded config, or an explicit fallback) and the reconciliation it performs
 against adapt_config.
 
-cbss_config is treated as ground truth for every field in
-core._SHARED_CBSS_ADAPT_FIELDS (ext_fact, ext_mode, spike_det_exp, the
+calib_config is treated as ground truth for every field in
+core._SHARED_CALIB_ADAPT_FIELDS (ext_fact, ext_mode, spike_det_exp, the
 preprocessing/filter fields, and ch_mask/ch_map/replace_bad_channels): a
 disagreeing adapt_config is silently corrected, with one UserWarning naming
 what changed -- see reconcile_with_calib_config()'s own array-safe
 comparison tests below for the ch_mask/ch_map-specific cases (plain !=
-raises on ndarrays); a disagreeing (cbss_config, calibration) pairing
+raises on ndarrays); a disagreeing (calib_config, calibration) pairing
 (ext_fact) is a caller bug and raises immediately instead.
 """
 
@@ -31,7 +31,7 @@ def _make_cbss_result(
     spike_stride: int = 40,
 ) -> CBSSResult:
     """Small, valid CBSSResult -- mirrors utils/test_loaders.py's helper, with
-    D derived from C*ext_fact so a real Decomposition can be built from it."""
+    D derived from C*ext_fact so a real AdaptState can be built from it."""
     D = C * ext_fact
     spikes = np.zeros((T, n_mu), dtype=np.int32)
     spikes[::spike_stride] = 1
@@ -52,17 +52,17 @@ def _make_cbss_result(
 
 
 def test_missing_adapt_config_is_seeded_entirely_from_cbss_config():
-    """adapt_config=None must build one from every shared field's cbss_config
+    """adapt_config=None must build one from every shared field's calib_config
     value, not just ext_fact -- and must not emit the reconciliation warning
     (nothing was disagreed with)."""
     calibration = _make_cbss_result(ext_fact=3, C=2)
-    cbss_config = CBSSConfig(ext_fact=3, spike_det_exp=1.5, ext_mode="toeplitz")
+    calib_config = CBSSConfig(ext_fact=3, spike_det_exp=1.5, ext_mode="toeplitz")
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         adapter = AdaptDecomp.from_calibration(
             calibration=calibration,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
         )
 
     assert not any("adapt_config disagreed" in str(w.message) for w in caught)
@@ -72,21 +72,21 @@ def test_missing_adapt_config_is_seeded_entirely_from_cbss_config():
 
 
 def test_disagreeing_adapt_config_is_overwritten_and_warns():
-    """cbss_config wins on every shared field it disagrees with adapt_config
+    """calib_config wins on every shared field it disagrees with adapt_config
     on; the caller's own adapt_config instance is left untouched (a copy is
     reconciled, not mutated in place); exactly one warning names the field."""
     calibration = _make_cbss_result(ext_fact=2, C=2)
-    cbss_config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
+    calib_config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
     adapt_config = AdaptConfig(ext_fact=2, spike_det_exp=9.0, device="cpu")
 
     with pytest.warns(UserWarning, match="spike_det_exp"):
         adapter = AdaptDecomp.from_calibration(
             calibration=calibration,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
             adapt_config=adapt_config,
         )
 
-    assert adapter.config.spike_det_exp == 1.5  # cbss_config won
+    assert adapter.config.spike_det_exp == 1.5  # calib_config won
     assert adapt_config.spike_det_exp == 9.0  # caller's instance untouched
 
 
@@ -172,16 +172,16 @@ def test_reconcile_ch_mask_equal_arrays_do_not_warn():
 
 
 def test_cbss_config_calibration_ext_fact_mismatch_raises():
-    """A mismatched (cbss_config, calibration) pairing is a caller bug -- wrong
+    """A mismatched (calib_config, calibration) pairing is a caller bug -- wrong
     config handed in alongside the wrong result -- not a reconcilable drift,
     so it raises immediately rather than going through the warn-and-overwrite path."""
     calibration = _make_cbss_result(ext_fact=2)
-    cbss_config = CBSSConfig(ext_fact=5)
+    calib_config = CBSSConfig(ext_fact=5)
 
     with pytest.raises(ValueError, match="ext_fact"):
         AdaptDecomp.from_calibration(
             calibration=calibration,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
         )
 
 
@@ -194,24 +194,57 @@ def test_embedded_config_is_used_without_cbss_config():
     adapter = AdaptDecomp.from_calibration(calibration)
 
     assert adapter.config.spike_det_exp == 1.5
-    assert adapter.cbss_config is calibration.config
+    assert adapter.calib_config is calibration.config
 
 
 def test_embedded_config_wins_over_a_differing_cbss_config():
     """With both set, calibration.config is used and one UserWarning names
-    the fields the explicit cbss_config differs on."""
+    the fields the explicit calib_config differs on."""
     calibration = _make_cbss_result(ext_fact=2, C=2)
     calibration.config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
 
     with pytest.warns(UserWarning, match="spike_det_exp.*embedded one is used"):
         adapter = AdaptDecomp.from_calibration(
-            calibration, cbss_config=CBSSConfig(ext_fact=2, spike_det_exp=9.0)
+            calibration, calib_config=CBSSConfig(ext_fact=2, spike_det_exp=9.0)
         )
 
     assert adapter.config.spike_det_exp == 1.5
 
 
 def test_no_embedded_config_and_no_cbss_config_raises():
-    """A legacy calibration (no embedded config) needs an explicit cbss_config."""
+    """A legacy calibration (no embedded config) needs an explicit calib_config."""
     with pytest.raises(ValueError, match="no embedded config"):
         AdaptDecomp.from_calibration(_make_cbss_result())
+
+
+# ---------------------------------------------------------------------------
+# Deprecated names (cbss_config, from_cbss_config, decomp, adaptation.Decomposition)
+# ---------------------------------------------------------------------------
+
+
+def test_cbss_config_keyword_is_a_deprecated_alias_of_calib_config():
+    calibration = _make_cbss_result(ext_fact=3)
+    with pytest.warns(FutureWarning, match="pass calib_config"):
+        adapter = AdaptDecomp.from_calibration(calibration, cbss_config=CBSSConfig(ext_fact=3))
+    assert adapter.calib_config.ext_fact == 3
+
+    with pytest.raises(TypeError, match="calib_config only"):
+        AdaptDecomp.from_calibration(
+            calibration, CBSSConfig(ext_fact=3), cbss_config=CBSSConfig(ext_fact=3)
+        )
+
+
+def test_deprecated_adaptation_names_still_resolve():
+    """from_cbss_config, AdaptDecomp.decomp and adaptation.Decomposition keep working,
+    the last two with a FutureWarning."""
+    import adapt_decomp.adaptation as adaptation
+    from adapt_decomp.adaptation import AdaptState
+
+    assert SharedCalibFields.from_cbss_config == SharedCalibFields.from_config
+    adapter = AdaptDecomp.from_calibration(
+        _make_cbss_result(ext_fact=3), calib_config=CBSSConfig(ext_fact=3)
+    )
+    with pytest.warns(FutureWarning, match="use AdaptDecomp.state"):
+        assert adapter.decomp is adapter.state
+    with pytest.warns(FutureWarning, match="renamed AdaptState"):
+        assert adaptation.Decomposition is AdaptState

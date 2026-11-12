@@ -1,6 +1,8 @@
 __version__ = "1.1.0"
 
+from adapt_decomp.decomposition import Decomposition, DecompositionConfig, DecompositionResult
 from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
+from adapt_decomp.scd import SCD, SCDConfig
 from adapt_decomp.adaptation import (
     AdaptDecomp,
     AdaptationResult,
@@ -16,15 +18,22 @@ from adapt_decomp.utils.plots import (
 )
 from adapt_decomp.utils.loaders import (
     load_data,
+    load_pooled_calib_memory,
+    load_pooled_calib_disk,
     load_pooled_cbss_memory,
     load_pooled_cbss_disk,
 )
 
 __all__ = [
-    # CBSS calibration
+    # Calibration
+    "Decomposition",
+    "DecompositionConfig",
+    "DecompositionResult",
     "CBSS",
     "CBSSConfig",
     "CBSSResult",
+    "SCD",
+    "SCDConfig",
     # Online adaptation
     "AdaptDecomp",
     "AdaptationResult",
@@ -38,6 +47,8 @@ __all__ = [
     "plot_sep_vectors_diff",
     # Loaders
     "load_data",
+    "load_pooled_calib_memory",
+    "load_pooled_calib_disk",
     "load_pooled_cbss_memory",
     "load_pooled_cbss_disk",
 ]

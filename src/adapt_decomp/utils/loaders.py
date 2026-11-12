@@ -1,5 +1,6 @@
 """Data loaders"""
 
+import warnings
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +11,7 @@ import numpy as np
 import torch
 from scipy.io import loadmat
 
-from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.decomposition.result import DecompositionResult
 from adapt_decomp.preprocessing.extension import extend_data
 from adapt_decomp.spikes import compare_spikes, firings_to_spikes
 from adapt_decomp.utils.utils import resolve_config
@@ -18,7 +19,7 @@ from adapt_decomp.utils.utils import resolve_config
 if TYPE_CHECKING:
     from adapt_decomp.adaptation.config import AdaptConfig
     from adapt_decomp.adaptation.data_structures import AdaptationResult
-    from adapt_decomp.cbss.config import CBSSConfig
+    from adapt_decomp.decomposition.config import DecompositionConfig
 
 # ------------------------------------------------------------------
 # Loaders for dataset 1 (neuromotion)
@@ -71,8 +72,8 @@ def _load_neuromotion(path_file: str) -> Dict:
     return data
 
 
-def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> CBSSResult:
-    """Build a CBSSResult from example MATLAB decomposition.
+def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> DecompositionResult:
+    """Build a DecompositionResult from example MATLAB decomposition.
 
     Args:
         path_decomp (str): Path to the legacy .mat decomposition file.
@@ -82,11 +83,11 @@ def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> C
             Defaults to "block".
 
     Returns:
-        CBSSResult: Calibration result with sources, spikes, spikes_dict,
+        DecompositionResult: Calibration result with sources, spikes, spikes_dict,
         sep_vectors, whitening, extension_mean, spikes_centr, base_centr,
         sil, cov_isi, ext_fact, dr, pnr, emg, and timestamps populated.
         pca_components/pca_mean, muaps (ragged MATLAB cell array, doesn't
-        match CBSSResult's dense convention), and gt_matched_indices/roa are
+        match DecompositionResult's dense convention), and gt_matched_indices/roa are
         left None.
     """
     decomp = loadmat(path_decomp, simplify_cells=True)
@@ -106,7 +107,7 @@ def _cbss_result_from_mat_decomp(path_decomp: str, ext_mode: str = "block") -> C
         .astype(np.float32)
     )
 
-    return CBSSResult(
+    return DecompositionResult(
         sources=np.asarray(decomp["IPTs"].T, dtype=np.float32),
         spikes=np.asarray(spikes.T, dtype=np.int32),
         spikes_dict=spikes_dict,
@@ -132,7 +133,7 @@ def load_example(
     preprocess: bool,
     path_gt: Optional[str] = None,
 ) -> Dict:
-    """Load the legacy v1 (JNE 2024) simulated dataset via the CBSSResult contract.
+    """Load the legacy v1 (JNE 2024) simulated dataset via the DecompositionResult contract.
 
     Args:
         path_emg (str): Path to the neuromotion-format HDF5 recording (also
@@ -146,7 +147,7 @@ def load_example(
             second file read).
 
     Returns:
-        Dict: "cbss_result" (CBSSResult), "cbss_config" (CBSSConfig, a
+        Dict: "cbss_result" (DecompositionResult), "cbss_config" (CBSSConfig, a
         best-effort reconstruction), "emg" (torch.Tensor, shape
         (samples, channels)), "gt_spikes" (np.ndarray, shape (samples,
         simulated units), binary spike trains of every simulated motor unit),
@@ -232,7 +233,7 @@ def _load_bin_spikes_muniverse(path: Union[str, Path], n_samples: int) -> np.nda
 
 
 # ------------------------------------------------------------------
-# CBSSResult-based loader dispatch (calib_loader/emg_loader/gt_loader)
+# DecompositionResult-based loader dispatch (calib_loader/emg_loader/gt_loader)
 # ------------------------------------------------------------------
 
 CalibLoaderName = Literal["class"]
@@ -244,7 +245,7 @@ def load_calib(
     path_calib: Union[str, Path],
     path_calib_config: Optional[Union[str, Path]] = None,
     calib_loader: CalibLoaderName = "class",
-) -> Tuple[CBSSResult, Optional["CBSSConfig"]]:
+) -> Tuple[DecompositionResult, Optional["DecompositionConfig"]]:
     """Load a calibration result and its config by calib_loader's mechanism.
 
     The config embedded in the result wins; path_calib_config is only a
@@ -258,25 +259,27 @@ def load_calib(
             Defaults to None, which uses the embedded config only.
         calib_loader (CalibLoaderName, optional): Which mechanism loads
             path_calib/path_calib_config -- "class" delegates to
-            CBSSResult.load()/CBSSConfig.from_yaml(). Defaults to "class".
+            DecompositionResult.load()/DecompositionConfig.from_yaml(). Defaults to "class".
 
     Returns:
-        Tuple[CBSSResult, Optional[CBSSConfig]]: The loaded calibration
+        Tuple[DecompositionResult, Optional[DecompositionConfig]]: The loaded calibration
         result, with config set, and that config (None if the result has
         none embedded and path_calib_config was None).
 
     Raises:
         ValueError: If calib_loader is not "class".
     """
-    from adapt_decomp.cbss.config import CBSSConfig
+    from adapt_decomp.decomposition.config import DecompositionConfig
 
     if calib_loader == "class":
-        cbss_result = CBSSResult.load(path_calib)
-        cbss_result.config = resolve_config(
-            cbss_result.config,
-            CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None,
+        calib_result = DecompositionResult.load(path_calib)
+        calib_result.config = resolve_config(
+            calib_result.config,
+            DecompositionConfig.from_yaml(path_calib_config)
+            if path_calib_config is not None
+            else None,
         )
-        return cbss_result, cbss_result.config
+        return calib_result, calib_result.config
     raise ValueError(f"Unknown calib_loader: {calib_loader!r}. Expected 'class'.")
 
 
@@ -284,7 +287,7 @@ def load_adapt(
     path_adapt: Union[str, Path],
     path_adapt_config: Optional[Union[str, Path]] = None,
     path_calib_config: Optional[Union[str, Path]] = None,
-) -> Tuple["AdaptationResult", Optional["AdaptConfig"], Optional["CBSSConfig"]]:
+) -> Tuple["AdaptationResult", Optional["AdaptConfig"], Optional["DecompositionConfig"]]:
     """Load an adaptation result and the configs embedded in it.
 
     As in load_calib(), the embedded configs win; the YAML paths are only a
@@ -297,27 +300,27 @@ def load_adapt(
         path_adapt_config (Optional[Union[str, Path]], optional): Path to an
             AdaptConfig YAML from the same run. Defaults to None.
         path_calib_config (Optional[Union[str, Path]], optional): Path to the
-            CBSSConfig YAML of the calibration it adapted. Defaults to None.
+            DecompositionConfig YAML of the calibration it adapted. Defaults to None.
 
     Returns:
-        Tuple[AdaptationResult, Optional[AdaptConfig], Optional[CBSSConfig]]:
-        The loaded result, with config/cbss_config set, and those two configs
+        Tuple[AdaptationResult, Optional[AdaptConfig], Optional[DecompositionConfig]]:
+        The loaded result, with config/calib_config set, and those two configs
         (each None if neither embedded nor given).
     """
     from adapt_decomp.adaptation.config import AdaptConfig
     from adapt_decomp.adaptation.data_structures import AdaptationResult
-    from adapt_decomp.cbss.config import CBSSConfig
+    from adapt_decomp.decomposition.config import DecompositionConfig
 
     adapt_result = AdaptationResult.load(path_adapt)
     adapt_result.config = resolve_config(
         adapt_result.config,
         AdaptConfig.from_yaml(path_adapt_config) if path_adapt_config is not None else None,
     )
-    adapt_result.cbss_config = resolve_config(
-        adapt_result.cbss_config,
-        CBSSConfig.from_yaml(path_calib_config) if path_calib_config is not None else None,
+    adapt_result.calib_config = resolve_config(
+        adapt_result.calib_config,
+        DecompositionConfig.from_yaml(path_calib_config) if path_calib_config is not None else None,
     )
-    return adapt_result, adapt_result.config, adapt_result.cbss_config
+    return adapt_result, adapt_result.config, adapt_result.calib_config
 
 
 def load_emg(path_emg: Union[str, Path], emg_loader: EmgLoaderName = "npz") -> np.ndarray:
@@ -472,29 +475,31 @@ class PooledDatasetMemory:
     Attributes:
         emg (torch.Tensor): Online EMG to decompose, with shape
             (samples, channels).
-        calibration (CBSSResult): This dataset's calibration result, with
+        calibration (DecompositionResult): This dataset's calibration result, with
             calibration.emg set (see AdaptDecomp.from_calibration). Already
             narrowed to GT-matched units when gt_paired_bin is set.
-        cbss_config (CBSSConfig): The CBSSConfig that produced calibration.
+        calib_config (DecompositionConfig): The config that produced calibration.
         preprocess (bool, optional): Whether to preprocess emg before
             extension, for every dataset's AdaptDecomp. Defaults to True.
         gt_paired_bin (Optional[np.ndarray]): Ground-truth binary spike
             train over the same samples as emg, matched and reordered to
-            calibration's units (see CBSSResult.select_supervised), with
+            calibration's units (see DecompositionResult.select_supervised), with
             shape (samples, M). Required when
             optimize_adapt_decomp(compute_roa=True) is used;
             ignored otherwise. Defaults to None.
     """
 
     emg: torch.Tensor
-    calibration: CBSSResult
-    cbss_config: "CBSSConfig"
+    calibration: DecompositionResult
+    calib_config: "DecompositionConfig"
     preprocess: bool = True
     gt_paired_bin: Optional[np.ndarray] = None
 
     def resolve(
         self,
-    ) -> Tuple[torch.Tensor, CBSSResult, "CBSSConfig", bool, Optional[np.ndarray]]:
+    ) -> Tuple[
+        torch.Tensor, DecompositionResult, "DecompositionConfig", bool, Optional[np.ndarray]
+    ]:
         """Return this dataset's already-loaded inputs, unchanged.
 
         Trivial passthrough -- matches PooledDatasetDisk.resolve()'s return
@@ -502,10 +507,10 @@ class PooledDatasetMemory:
         trial loop.
 
         Returns:
-            Tuple[torch.Tensor, CBSSResult, CBSSConfig, bool, Optional[np.ndarray]]:
-            (emg, calibration, cbss_config, preprocess, gt_paired_bin).
+            Tuple[Tensor, DecompositionResult, DecompositionConfig, bool, Optional[ndarray]]:
+            (emg, calibration, calib_config, preprocess, gt_paired_bin).
         """
-        return self.emg, self.calibration, self.cbss_config, self.preprocess, self.gt_paired_bin
+        return self.emg, self.calibration, self.calib_config, self.preprocess, self.gt_paired_bin
 
 
 @dataclass
@@ -514,13 +519,13 @@ class PooledDatasetDisk:
     PooledDatasetMemory, for optimize_adapt_decomp().
 
     Attributes:
-        path_calib (Path): Calibration result (e.g. a CBSSResult HDF5
-            written by CBSSResult.save()), with .emg set.
+        path_calib (Path): Calibration result (e.g. a DecompositionResult HDF5
+            written by DecompositionResult.save()), with .emg set.
         path_emg (Path): .npz file, key "emg", with shape
             (samples, channels) -- the full online recording for this
             dataset.
         path_calib_config (Optional[Path]): Calibration config YAML written
-            by CBSSConfig.to_yaml(), only needed when path_calib has no
+            by DecompositionConfig.to_yaml(), only needed when path_calib has no
             embedded config (e.g. a legacy file). Defaults to None.
         calib_loader (CalibLoaderName, optional): Mechanism loading
             path_calib/path_calib_config, resolved via load_calib() each
@@ -559,11 +564,11 @@ class PooledDatasetDisk:
 
     def resolve(
         self,
-    ) -> Tuple[np.ndarray, CBSSResult, "CBSSConfig", bool, Optional[np.ndarray]]:
+    ) -> Tuple[np.ndarray, DecompositionResult, "DecompositionConfig", bool, Optional[np.ndarray]]:
         """Load this dataset's calibration/EMG/ground truth fresh from disk.
 
         Matches ground truth to calibration units via
-        CBSSResult.select_supervised() when path_gt is set, narrowing
+        DecompositionResult.select_supervised() when path_gt is set, narrowing
         calibration to GT-matched units in the process, on the full
         recording; then slices emg and gt_paired_bin to [start, stop).
         Nothing is cached -- call this once per trial.
@@ -572,11 +577,11 @@ class PooledDatasetDisk:
             ValueError: If [start, stop) selects no samples of the recording.
 
         Returns:
-            Tuple[np.ndarray, CBSSResult, CBSSConfig, bool, Optional[np.ndarray]]:
-            (emg, calibration, cbss_config, preprocess, gt_paired_bin), matching
+            Tuple[np.ndarray, DecompositionResult, DecompositionConfig, bool, Optional[np.ndarray]]:
+            (emg, calibration, calib_config, preprocess, gt_paired_bin), matching
             PooledDatasetMemory.resolve()'s shape.
         """
-        calibration, cbss_config = load_calib(
+        calibration, calib_config = load_calib(
             self.path_calib, self.path_calib_config, self.calib_loader
         )
         emg = load_emg(self.path_emg, self.emg_loader)
@@ -593,21 +598,21 @@ class PooledDatasetDisk:
             )
             gt_paired_bin = spikes_gt_full[window, calibration.gt_matched_indices]
 
-        return emg[window], calibration, cbss_config, self.preprocess, gt_paired_bin
+        return emg[window], calibration, calib_config, self.preprocess, gt_paired_bin
 
 
 # One entry of an optimize_adapt_decomp pool, in memory or on disk
 PooledDataset = Union[PooledDatasetMemory, PooledDatasetDisk]
 
 
-def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
+def load_pooled_calib_memory(data_config: Dict) -> Dict[str, Any]:
     """Load a pooled data_config into optimize_adapt_decomp()'s pool= input.
 
     data_config format::
 
         name: <label>
         root: <base dir; every path below is relative to it>
-        loader: load_pooled_cbss_memory
+        loader: load_pooled_calib_memory
         preprocess: true            # default for every dataset, overridable per-dataset
         calib_loader: class         # default for every dataset, overridable per-dataset
         emg_loader: npz             # default for every dataset, overridable per-dataset
@@ -615,21 +620,21 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
         datasets:
           - name: <pool key, e.g. a dataset/recording label>
             path_emg: <emg_loader format, e.g. .npz key "emg", shape (samples, channels)>
-            path_calib: <calib_loader format, e.g. CBSSResult HDF5 written by CBSSResult.save()>
-            path_calib_config: <optional -- CBSSConfig YAML written by CBSSConfig.to_yaml(),
+            path_calib: <calib_loader format, e.g. HDF5 written by DecompositionResult.save()>
+            path_calib_config: <optional -- YAML written by DecompositionConfig.to_yaml(),
                                  only for results without an embedded config>
             path_gt: <optional -- gt_loader format, e.g. .npz key "spikes">
             preprocess: <optional per-dataset override>
             calib_loader: <optional per-dataset override>
             emg_loader: <optional per-dataset override>
             gt_loader: <optional per-dataset override>
-            fs: <optional -- defaults to CBSSResult.fs (needs timestamps set)>
+            fs: <optional -- defaults to DecompositionResult.fs (needs timestamps set)>
             start: <optional -- first sample adapted and scored, e.g. the calibration's end;
                     defaults to 0>
             stop: <optional -- one past the last sample adapted and scored; defaults to the end>
 
     Ground truth (if given) is matched to each dataset's calibration via
-    CBSSResult.select_supervised() -- the calibration itself (and therefore
+    DecompositionResult.select_supervised() -- the calibration itself (and therefore
     the resulting PooledDatasetMemory) is narrowed to only GT-matched
     units. Matching compares the calibration with the first samples of the
     full ground truth, so the calibration window must start at sample 0;
@@ -658,7 +663,7 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
     for dataset in data_config["datasets"]:
         calib_loader, emg_loader, gt_loader = _resolve_pool_loaders(dataset, defaults)
         path_calib_config = dataset.get("path_calib_config")
-        cbss_result, cbss_config = load_calib(
+        calib_result, calib_config = load_calib(
             root / dataset["path_calib"],
             root / path_calib_config if path_calib_config is not None else None,
             calib_loader,
@@ -670,36 +675,36 @@ def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
         gt_paired_bin = None
         if dataset.get("path_gt") is not None:
             spikes_gt_full = load_gt(root / dataset["path_gt"], emg_full.shape[0], gt_loader)
-            fs = int(dataset["fs"]) if "fs" in dataset else int(cbss_result.fs)
-            cbss_result = cbss_result.select_supervised(
-                spikes_gt_full[: cbss_result.sources.shape[0]],
+            fs = int(dataset["fs"]) if "fs" in dataset else int(calib_result.fs)
+            calib_result = calib_result.select_supervised(
+                spikes_gt_full[: calib_result.sources.shape[0]],
                 fs=fs,
             )
-            gt_paired_bin = spikes_gt_full[window, cbss_result.gt_matched_indices]
+            gt_paired_bin = spikes_gt_full[window, calib_result.gt_matched_indices]
 
         pool[dataset["name"]] = PooledDatasetMemory(
             emg=torch.from_numpy(emg_full[window].copy()),  # a copy: the full recording is freed
-            calibration=cbss_result,
-            cbss_config=cbss_config,
+            calibration=calib_result,
+            calib_config=calib_config,
             preprocess=dataset.get("preprocess", default_preprocess),
             gt_paired_bin=gt_paired_bin,
         )
     return pool
 
 
-def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
+def load_pooled_calib_disk(data_config: Dict) -> Dict[str, Any]:
     """Load a pooled data_config into optimize_adapt_decomp()'s pool= input.
 
-    The lazy counterpart to load_pooled_cbss_memory: builds a
+    The lazy counterpart to load_pooled_calib_memory: builds a
     Dict[str, PooledDatasetDisk] of on-disk paths and loader names,
     touching no files at all -- every path is resolved and loaded fresh per
     trial by optimize_adapt_decomp().
 
-    data_config format:: (same shape as load_pooled_cbss_memory's)
+    data_config format:: (same shape as load_pooled_calib_memory's)
 
         name: <label>
         root: <base dir; every path below is relative to it>
-        loader: load_pooled_cbss_disk
+        loader: load_pooled_calib_disk
         preprocess: true            # default for every dataset, overridable per-dataset
         calib_loader: class         # default for every dataset, overridable per-dataset
         emg_loader: npz             # default for every dataset, overridable per-dataset
@@ -707,8 +712,8 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
         datasets:
           - name: <pool key, e.g. a dataset/recording label>
             path_emg: <emg_loader format, e.g. .npz key "emg", shape (samples, channels)>
-            path_calib: <calib_loader format, e.g. CBSSResult HDF5 written by CBSSResult.save()>
-            path_calib_config: <optional -- CBSSConfig YAML written by CBSSConfig.to_yaml(),
+            path_calib: <calib_loader format, e.g. HDF5 written by DecompositionResult.save()>
+            path_calib_config: <optional -- YAML written by DecompositionConfig.to_yaml(),
                                  only for results without an embedded config>
             path_gt: <optional -- gt_loader format, e.g. .npz key "spikes">
             preprocess: <optional per-dataset override>
@@ -760,6 +765,48 @@ def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
     return pool
 
 
+# Names before the CBSS/SCD generalisation; load_data() also accepts them as loader: values
+_LEGACY_LOADERS = {
+    "load_pooled_cbss_memory": "load_pooled_calib_memory",
+    "load_pooled_cbss_disk": "load_pooled_calib_disk",
+}
+
+
+def _warn_legacy_loader(old: str) -> None:
+    """Warn that a pool loader name is deprecated.
+
+    Args:
+        old (str): The deprecated name, a key of _LEGACY_LOADERS.
+    """
+    warnings.warn(f"{old} is deprecated; use {_LEGACY_LOADERS[old]}.", FutureWarning, stacklevel=3)
+
+
+def load_pooled_cbss_memory(data_config: Dict) -> Dict[str, Any]:
+    """Deprecated alias of load_pooled_calib_memory().
+
+    Args:
+        data_config (Dict): See load_pooled_calib_memory().
+
+    Returns:
+        Dict[str, Any]: See load_pooled_calib_memory().
+    """
+    _warn_legacy_loader("load_pooled_cbss_memory")
+    return load_pooled_calib_memory(data_config)
+
+
+def load_pooled_cbss_disk(data_config: Dict) -> Dict[str, Any]:
+    """Deprecated alias of load_pooled_calib_disk().
+
+    Args:
+        data_config (Dict): See load_pooled_calib_disk().
+
+    Returns:
+        Dict[str, Any]: See load_pooled_calib_disk().
+    """
+    _warn_legacy_loader("load_pooled_cbss_disk")
+    return load_pooled_calib_disk(data_config)
+
+
 # ------------------------------------------------------------------
 # Main loader
 # ------------------------------------------------------------------
@@ -775,15 +822,19 @@ def load_data(data_config: Dict) -> Dict:
 
     Returns:
         Dict: load_example()'s return shape for loader == "load_example";
-        load_pooled_cbss_memory()'s return shape (Dict[str,
-        PooledDatasetMemory]) for loader == "load_pooled_cbss_memory" --
-        one dataset or many alike; load_pooled_cbss_disk()'s return shape
-        (Dict[str, PooledDatasetDisk]) for loader == "load_pooled_cbss_disk".
+        load_pooled_calib_memory()'s return shape (Dict[str,
+        PooledDatasetMemory]) for loader == "load_pooled_calib_memory" --
+        one dataset or many alike; load_pooled_calib_disk()'s return shape
+        (Dict[str, PooledDatasetDisk]) for loader == "load_pooled_calib_disk".
+        The deprecated load_pooled_cbss_* names still dispatch, with a FutureWarning.
 
     Raises:
         ValueError: If data_config["loader"] is not a known loader name.
     """
     loader = data_config["loader"]
+    if loader in _LEGACY_LOADERS:
+        _warn_legacy_loader(loader)
+        loader = _LEGACY_LOADERS[loader]
     if loader == "load_example":
         root = Path(data_config.get("root", "."))
         path_gt = data_config.get("path_gt")
@@ -793,10 +844,10 @@ def load_data(data_config: Dict) -> Dict:
             data_config["preprocess"],
             path_gt=str(root / path_gt) if path_gt is not None else None,
         )
-    elif loader == "load_pooled_cbss_memory":
-        data = load_pooled_cbss_memory(data_config)
-    elif loader == "load_pooled_cbss_disk":
-        data = load_pooled_cbss_disk(data_config)
+    elif loader == "load_pooled_calib_memory":
+        data = load_pooled_calib_memory(data_config)
+    elif loader == "load_pooled_calib_disk":
+        data = load_pooled_calib_disk(data_config)
     else:
         raise ValueError(f"Unknown data loader: {loader}")
     return data

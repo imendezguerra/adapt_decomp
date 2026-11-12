@@ -1,4 +1,4 @@
-"""Tests for adaptation/data_structures.py: Decomposition's calibration-time
+"""Tests for adaptation/data_structures.py: AdaptState's calibration-time
 state, Data's channel selection, RawData's minimal batch-serving contract,
 and AdaptationResult's save/load contract.
 """
@@ -136,7 +136,7 @@ def test_wh_mode_kl_to_cal_nonzero_on_drift(make_decomposition):
 # the KL/whitening-error formula inline, and its main assertion
 # (assert_close(e_v_raw, K - K_cal)) is tautological by construction. Kept
 # as-is (unit-test-shaped documentation of the formula) rather than rewired
-# to call Decomposition directly, since that's a behavioural change beyond
+# to call AdaptState directly, since that's a behavioural change beyond
 # this reorganisation -- worth revisiting separately.
 # ---------------------------------------------------------------------------
 
@@ -161,12 +161,12 @@ def test_whitening_error_computation():
 
 
 # ---------------------------------------------------------------------------
-# ext_mode is honoured by Decomposition, not silently defaulted to "block"
+# ext_mode is honoured by AdaptState, not silently defaulted to "block"
 # ---------------------------------------------------------------------------
 
 
 def test_decomposition_uses_configured_ext_mode(make_decomposition):
-    """Decomposition.init_wh_update must extend emg_calib with AdaptConfig.ext_mode,
+    """AdaptState.init_wh_update must extend emg_calib with AdaptConfig.ext_mode,
     not silently fall back to 'block' -- verified via the FIFO buffer it seeds."""
     ext_fact = 2
     decomp, _ = make_decomposition(
@@ -280,7 +280,7 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
         wh_loss_total=torch.tensor(0.5),
         roa=np.array([0.9, 0.8, 0.7], dtype=np.float32),
         config=AdaptConfig(device="cpu"),
-        cbss_config=CBSSConfig(ext_fact=4),
+        calib_config=CBSSConfig(ext_fact=4),
     )
 
     path = tmp_path / "adaptation_result.h5"
@@ -294,7 +294,32 @@ def test_adaptation_result_save_load_roundtrip(tmp_path):
     assert isinstance(loaded.roa, np.ndarray)
     assert loaded.wh_loss is None
     assert loaded.config.to_dict() == result.config.to_dict()
-    assert loaded.cbss_config.ext_fact == 4
+    assert loaded.calib_config.ext_fact == 4
+
+
+def test_adaptation_result_loads_the_legacy_cbss_config_attribute(tmp_path):
+    """Files saved before the calib_config rename store the calibration config as
+    "cbss_config"; it loads into calib_config, and the old attribute warns."""
+    import yaml
+
+    from adapt_decomp.adaptation.data_structures import AdaptationResult
+    from adapt_decomp.utils import write_h5
+
+    attrs = {
+        "format": "AdaptationResult",
+        "cbss_config": yaml.safe_dump(CBSSConfig(ext_fact=4).to_dict()),
+    }
+    data = {"spikes": np.zeros((2, 1), dtype=np.int32), "sources": np.zeros((2, 1))}
+    for key in ("preprocess_time_ms", "wh_time_ms", "sv_time_ms", "sd_time_ms", "total_time_ms"):
+        data[key] = np.zeros(2)
+    path = tmp_path / "legacy.h5"
+    write_h5(path, data, attrs)
+
+    loaded = AdaptationResult.load(path)
+
+    assert loaded.calib_config.ext_fact == 4
+    with pytest.warns(FutureWarning, match="use calib_config"):
+        assert loaded.cbss_config is loaded.calib_config
 
 
 def test_adaptation_result_load_rejects_wrong_type(tmp_path):
@@ -351,7 +376,7 @@ def test_adaptation_result_sil_defaults_none_for_legacy_pickle(tmp_path):
         preprocess_time_ms=torch.zeros(batches),
         total_time_ms=torch.rand(batches),
     )
-    for key in ("sil", "config", "cbss_config"):
+    for key in ("sil", "config", "calib_config"):
         del result.__dict__[key]  # simulate an instance pickled before these fields existed
 
     path = tmp_path / "legacy_result.pkl"
@@ -363,12 +388,12 @@ def test_adaptation_result_sil_defaults_none_for_legacy_pickle(tmp_path):
 
     assert loaded.sil is None
     assert "sil" not in loaded.to_dict()
-    assert loaded.config is None and loaded.cbss_config is None
+    assert loaded.config is None and loaded.calib_config is None
 
 
 def test_decomposition_ipts_calib_deprecated_alias_warns():
-    """Decomposition(..., ipts_calib=...) still works but raises FutureWarning."""
-    from adapt_decomp.adaptation.data_structures import Decomposition
+    """AdaptState(..., ipts_calib=...) still works but raises FutureWarning."""
+    from adapt_decomp.adaptation.data_structures import AdaptState
     from adapt_decomp.adaptation.ops import orthonormalize_rows_qr
 
     M, raw_chs, ext_fact, n_cal = 2, 2, 2, 50
@@ -383,7 +408,7 @@ def test_decomposition_ipts_calib_deprecated_alias_warns():
     cfg = AdaptConfig(ext_fact=ext_fact)
 
     with pytest.warns(FutureWarning, match="ipts_calib"):
-        decomp = Decomposition(
+        decomp = AdaptState(
             wh,
             sv,
             base_cal,

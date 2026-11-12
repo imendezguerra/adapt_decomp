@@ -23,8 +23,8 @@ from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.core import AdaptDecomp
 from adapt_decomp.adaptation.data_structures import AdaptationResult
 from adapt_decomp.adaptation.optimize.units import UnitSelection, select_units
-from adapt_decomp.cbss.config import CBSSConfig
-from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.decomposition.config import DecompositionConfig
+from adapt_decomp.decomposition.result import DecompositionResult
 from adapt_decomp.spikes.comparison import compare_paired_spikes
 from adapt_decomp.utils import validate_literals
 from adapt_decomp.utils.loaders import PooledDataset
@@ -197,8 +197,8 @@ def build_trial_config(run_config: AdaptConfig, overrides: dict) -> AdaptConfig:
 
 def _run_one_dataset(
     emg: Union[torch.Tensor, np.ndarray],
-    calibration: CBSSResult,
-    cbss_config: CBSSConfig,
+    calibration: DecompositionResult,
+    calib_config: DecompositionConfig,
     preprocess: bool,
     gt_paired_bin: Optional[np.ndarray],
     trial_config: AdaptConfig,
@@ -210,8 +210,8 @@ def _run_one_dataset(
     Args:
         emg (Union[torch.Tensor, np.ndarray]): Online EMG to decompose, with
             shape (samples, channels).
-        calibration (CBSSResult): This dataset's calibration result.
-        cbss_config (CBSSConfig): The CBSSConfig that produced calibration.
+        calibration (DecompositionResult): This dataset's calibration result.
+        calib_config (DecompositionConfig): The DecompositionConfig that produced calibration.
         preprocess (bool): Whether to preprocess emg before extension.
         gt_paired_bin (Optional[np.ndarray]): Ground-truth binary spike
             train matched to calibration's units, with shape (samples, M).
@@ -230,7 +230,7 @@ def _run_one_dataset(
     """
     adapter = AdaptDecomp.from_calibration(
         calibration=calibration,
-        cbss_config=cbss_config,
+        calib_config=calib_config,
         adapt_config=trial_config,
     )
     outputs = adapter.process_data(emg, preprocess=preprocess)
@@ -275,14 +275,14 @@ def score_dataset(
     Returns:
         Dict[str, Any]: This dataset's losses; see _run_one_dataset.
     """
-    emg, calibration, cbss_config, preprocess, gt_paired_bin = dataset.resolve()
+    emg, calibration, calib_config, preprocess, gt_paired_bin = dataset.resolve()
     calibration, gt_paired_bin = select_units(
         calibration, gt_paired_bin, unit_selection, unit_selection_kwargs
     )
     outputs, losses = _run_one_dataset(
         emg,
         calibration,
-        cbss_config,
+        calib_config,
         preprocess,
         gt_paired_bin,
         build_trial_config(run_config, overrides),

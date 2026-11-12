@@ -1,7 +1,7 @@
 """The adapt-decomp command: calibrate, adapt and tune from the shell.
 
 Each command wraps the public function it is named after, with options named after that
-function's arguments: decompose (CBSS.decompose), process_data (AdaptDecomp.process_data),
+function's arguments: decompose (Decomposition.decompose), process_data (AdaptDecomp.process_data),
 calibrate_and_process (AdaptDecomp.calibrate_and_process) and optimize_adapt_decomp. data
 downloads the datasets, and wandb_sweep runs a wandb sweep (with the wandb extra).
 """
@@ -21,10 +21,17 @@ from adapt_decomp.adaptation import PRESETS, AdaptationResult, AdaptConfig, Adap
 from adapt_decomp.adaptation import optimize_adapt_decomp as _optimize_adapt_decomp
 from adapt_decomp.adaptation.optimize import DEFAULT_PARAM_SPACE
 from adapt_decomp.adaptation.optimize.units import has_gt
-from adapt_decomp.cbss import CBSS, CBSSConfig, CBSSResult
+from adapt_decomp.cbss import CBSSConfig
+from adapt_decomp.decomposition import Decomposition, DecompositionConfig, DecompositionResult
 from adapt_decomp.spikes import compare_paired_spikes
 from adapt_decomp.utils import download
-from adapt_decomp.utils.loaders import PooledDataset, load_data, load_emg, load_gt
+from adapt_decomp.utils.loaders import (
+    _LEGACY_LOADERS,
+    PooledDataset,
+    load_data,
+    load_emg,
+    load_gt,
+)
 
 app = typer.Typer(
     help="Adaptive EMG decomposition: calibrate, adapt and tune hyperparameters.",
@@ -82,13 +89,15 @@ EmgArgument = Annotated[
         exists=True, dir_okay=False, help="EMG recording, (samples, channels); see --emg_loader."
     ),
 ]
-CbssConfigOption = Annotated[
+CalibConfigOption = Annotated[
     Optional[Path],
     typer.Option(
+        "--calib_config",
         "--cbss_config",
         exists=True,
         dir_okay=False,
-        help="CBSSConfig YAML (CBSSConfig.to_yaml). Omit for CBSSConfig()'s defaults.",
+        help="Calibration config YAML (DecompositionConfig.to_yaml); its method key picks "
+        "CBSS or SCD. Omit for CBSSConfig()'s defaults. --cbss_config is a deprecated alias.",
     ),
 ]
 PresetOption = Annotated[
@@ -146,7 +155,7 @@ DataConfigOption = Annotated[
         exists=True,
         dir_okay=False,
         help="Recordings and their calibrations, as a pool YAML "
-        "(load_pooled_cbss_memory's format; loader: load_pooled_cbss_disk loads them per run).",
+        "(load_pooled_calib_memory's format; loader: load_pooled_calib_disk loads them per run).",
     ),
 ]
 
@@ -171,16 +180,16 @@ def _read_yaml(path: Optional[Path]) -> Dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def _cbss_config(path: Optional[Path]) -> CBSSConfig:
-    """Load a CBSSConfig from YAML, or CBSSConfig() for no file.
+def _calib_config(path: Optional[Path]) -> DecompositionConfig:
+    """Load a calibration config from YAML, or CBSSConfig() for no file.
 
     Args:
-        path (Optional[Path]): CBSSConfig YAML, or None.
+        path (Optional[Path]): Calibration config YAML, or None.
 
     Returns:
-        CBSSConfig: The config.
+        DecompositionConfig: The config, of the subclass its method names.
     """
-    return CBSSConfig.from_yaml(path) if path is not None else CBSSConfig()
+    return DecompositionConfig.from_yaml(path) if path is not None else CBSSConfig()
 
 
 def _adapt_config(
@@ -227,21 +236,23 @@ def _timestamps(n_samples: int, fs: float) -> np.ndarray:
     return np.arange(n_samples) / fs
 
 
-def _save_calibration(calibration: CBSSResult, cbss_config: CBSSConfig, out_dir: Path) -> None:
-    """Save a calibration, with cbss_config embedded, and cbss_config's YAML side by side.
+def _save_calibration(
+    calibration: DecompositionResult, calib_config: DecompositionConfig, out_dir: Path
+) -> None:
+    """Save a calibration, with calib_config embedded, and calib_config's YAML side by side.
 
     Args:
-        calibration (CBSSResult): The calibration.
-        cbss_config (CBSSConfig): The config that produced it.
+        calibration (DecompositionResult): The calibration.
+        calib_config (DecompositionConfig): The config that produced it.
         out_dir (Path): Folder to write calibration.h5 and calibration_config.yaml into.
 
     Returns:
         None
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    calibration.config = cbss_config
+    calibration.config = calib_config
     calibration.save(out_dir / CALIBRATION_FILE)
-    cbss_config.to_yaml(out_dir / CALIBRATION_CONFIG_FILE)
+    calib_config.to_yaml(out_dir / CALIBRATION_CONFIG_FILE)
 
 
 def _describe(result: AdaptationResult) -> str:
@@ -264,7 +275,7 @@ def _load_pool(data_config: Path) -> Dict[str, PooledDataset]:
     """Load a pool YAML into optimize_adapt_decomp's pool.
 
     Args:
-        data_config (Path): The pool YAML. Its loader defaults to load_pooled_cbss_memory.
+        data_config (Path): The pool YAML. Its loader defaults to load_pooled_calib_memory.
 
     Raises:
         typer.BadParameter: If its loader is not a pooled one.
@@ -273,11 +284,12 @@ def _load_pool(data_config: Path) -> Dict[str, PooledDataset]:
         Dict[str, PooledDataset]: Dataset name -> its pool entry.
     """
     config = _read_yaml(data_config)
-    config.setdefault("loader", "load_pooled_cbss_memory")
-    if config["loader"] not in ("load_pooled_cbss_memory", "load_pooled_cbss_disk"):
+    config.setdefault("loader", "load_pooled_calib_memory")
+    pooled = ("load_pooled_calib_memory", "load_pooled_calib_disk", *_LEGACY_LOADERS)
+    if config["loader"] not in pooled:
         raise typer.BadParameter(
-            f"loader: {config['loader']} is not supported; use load_pooled_cbss_memory or "
-            "load_pooled_cbss_disk.",
+            f"loader: {config['loader']} is not supported; use load_pooled_calib_memory or "
+            "load_pooled_calib_disk.",
             param_hint="--data_config",
         )
     return load_data(config)
@@ -389,7 +401,7 @@ def decompose(
             help=f"Folder to write {CALIBRATION_FILE} and {CALIBRATION_CONFIG_FILE} into.",
         ),
     ],
-    cbss_config: CbssConfigOption = None,
+    calib_config: CalibConfigOption = None,
     start: Annotated[
         int, typer.Option("--start", help="First sample of the calibration window.")
     ] = 0,
@@ -402,11 +414,11 @@ def decompose(
     emg_loader: EmgLoaderOption = FileFormat.npz,
     gt_loader: GtLoaderOption = FileFormat.npz,
 ) -> None:
-    """Calibrate: find the motor units in a window of a recording (CBSS.decompose)."""
-    config = _cbss_config(cbss_config)
+    """Calibrate: find the motor units in a window of a recording (Decomposition.decompose)."""
+    config = _calib_config(calib_config)
     emg_data = load_emg(emg, emg_loader.value)
     window = slice(start, stop)
-    calibration = CBSS(config).decompose(
+    calibration = Decomposition.from_config(config).decompose(
         emg_data[window], _timestamps(emg_data.shape[0], config.fs)[window]
     )
     if gt is not None:
@@ -422,7 +434,10 @@ def process_data(
     calibration: Annotated[
         Path,
         typer.Option(
-            "--calibration", exists=True, dir_okay=False, help="CBSSResult (CBSSResult.save)."
+            "--calibration",
+            exists=True,
+            dir_okay=False,
+            help="Calibration (DecompositionResult.save).",
         ),
     ],
     out: Annotated[
@@ -434,7 +449,7 @@ def process_data(
             "--calibration_config",
             exists=True,
             dir_okay=False,
-            help="The CBSSConfig YAML that produced --calibration. Only needed when "
+            help="The calibration config YAML that produced --calibration. Only needed when "
             "--calibration has no embedded config (a legacy file).",
         ),
     ] = None,
@@ -453,8 +468,10 @@ def process_data(
 ) -> None:
     """Adapt a calibration over a recording, batch by batch (AdaptDecomp.process_data)."""
     adapter = AdaptDecomp.from_calibration(
-        calibration=CBSSResult.load(calibration),
-        cbss_config=CBSSConfig.from_yaml(calibration_config) if calibration_config else None,
+        calibration=DecompositionResult.load(calibration),
+        calib_config=DecompositionConfig.from_yaml(calibration_config)
+        if calibration_config
+        else None,
         adapt_config=_adapt_config(preset, adapt_config, source_fifo_from_calib),
     )
     result = adapter.process_data(
@@ -482,14 +499,15 @@ def calibrate_and_process(
     calib_start: Annotated[
         int, typer.Option("--calib_start", help="First sample of the calibration window.")
     ] = 0,
-    cbss_config: CbssConfigOption = None,
+    calib_config: CalibConfigOption = None,
     preset: PresetOption = None,
     adapt_config: AdaptConfigOption = None,
     adapt_from: Annotated[
         AdaptFrom,
         typer.Option(
             "--adapt_from",
-            help="calib_end adapts after the calibration window, with CBSS's output before it; "
+            help="calib_end adapts after the calibration window, with the calibration's output "
+            "before it; "
             "emg_start adapts the whole recording.",
         ),
     ] = AdaptFrom.calib_end,
@@ -500,7 +518,7 @@ def calibrate_and_process(
     gt_loader: GtLoaderOption = FileFormat.npz,
 ) -> None:
     """Calibrate on a window, then adapt over the recording (AdaptDecomp.calibrate_and_process)."""
-    config = _cbss_config(cbss_config)
+    config = _calib_config(calib_config)
     emg_data = load_emg(emg, emg_loader.value)
     window = slice(calib_start, calib_stop)
     run_config = config
@@ -515,7 +533,7 @@ def calibrate_and_process(
         emg_data,
         timestamps=_timestamps(emg_data.shape[0], config.fs),
         calib_indices=window,
-        cbss_config=run_config,
+        calib_config=run_config,
         adapt_config=_adapt_config(preset, adapt_config),
         processing_mode=processing_mode.value,
         adapt_from=adapt_from.value,
@@ -670,9 +688,11 @@ def wandb_sweep(
         config = dataclasses.replace(base_config, **overrides)
         outputs, roa = {}, {}
         for name, dataset in pool.items():
-            emg, calibration, cbss_config, preprocess, gt_paired = dataset.resolve()
+            emg, calibration, calib_config, preprocess, gt_paired = dataset.resolve()
             outputs[name] = AdaptDecomp.from_calibration(
-                calibration=calibration, cbss_config=cbss_config, adapt_config=copy.deepcopy(config)
+                calibration=calibration,
+                calib_config=calib_config,
+                adapt_config=copy.deepcopy(config),
             ).process_data(emg, preprocess=preprocess)
             roa[name] = (
                 compare_paired_spikes(

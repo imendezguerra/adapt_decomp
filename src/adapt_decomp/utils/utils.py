@@ -14,7 +14,7 @@ def validate_literals(obj) -> None:
     """Raise ValueError if any Literal[...]-typed dataclass field holds a value
     outside its declared choices.
 
-    AdaptConfig/CBSSConfig fields are set via plain setattr() in several places
+    AdaptConfig/DecompositionConfig fields are set via plain setattr() in several places
     (config_overrides, base_config, categorical Optuna search spaces), which
     bypasses dataclass construction entirely -- a typo'd value would otherwise
     silently fall through whatever == checks read that field downstream
@@ -39,7 +39,7 @@ def validate_literals(obj) -> None:
 def to_yaml_safe(value: Any) -> Any:
     """Coerce a single config field value to a plain, YAML-safe type.
 
-    Shared by CBSSConfig.to_dict() and AdaptConfig.to_dict() so both configs'
+    Shared by DecompositionConfig.to_dict() and AdaptConfig.to_dict() so both configs'
     to_yaml()/from_yaml() round-trip the same non-YAML-native value types
     (numpy arrays, torch dtypes/devices, Path) the same way.
 
@@ -87,7 +87,7 @@ def resolve_config(embedded: Optional[Any], explicit: Optional[Any]) -> Optional
     legacy result with none embedded) is only a fallback.
 
     Args:
-        embedded (Optional[Any]): The result's own config (CBSSConfig or
+        embedded (Optional[Any]): The result's own config (DecompositionConfig or
             AdaptConfig), or None if it has none.
         explicit (Optional[Any]): A config of the same type given by the caller,
             or None.

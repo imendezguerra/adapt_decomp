@@ -64,7 +64,7 @@ def run_tutorial_adaptation() -> Dict[str, np.ndarray]:
 
     adapter = AdaptDecomp.from_calibration(
         calibration=cbss_result,
-        cbss_config=data["cbss_config"],
+        calib_config=data["cbss_config"],
         adapt_config=config,
     )
     outputs = adapter.process_data(data["emg"], preprocess=data["preprocess"])
@@ -78,8 +78,8 @@ def run_tutorial_adaptation() -> Dict[str, np.ndarray]:
         "roa_gt": np.asarray(roa_gt, dtype=np.float64),
         "wh_loss": outputs["wh_loss"].numpy(),
         "sv_loss": outputs["sv_loss"].numpy(),
-        "whitening_norm": np.float64(torch.linalg.norm(adapter.decomp.whitening.cpu())),
-        "sep_vectors_norm": np.float64(torch.linalg.norm(adapter.decomp.sep_vectors.cpu())),
+        "whitening_norm": np.float64(torch.linalg.norm(adapter.state.whitening.cpu())),
+        "sep_vectors_norm": np.float64(torch.linalg.norm(adapter.state.sep_vectors.cpu())),
         "fs": np.int64(data["fs"]),
     }
 

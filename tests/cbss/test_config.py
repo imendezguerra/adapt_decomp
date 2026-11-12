@@ -19,7 +19,7 @@ def test_cbss_config_to_yaml_from_yaml_roundtrip(tmp_path):
         device="cpu",
     )
 
-    path = tmp_path / "cbss_config.yml"
+    path = tmp_path / "calib_config.yml"
     cfg.to_yaml(path)
     loaded = CBSSConfig.from_yaml(path)
 

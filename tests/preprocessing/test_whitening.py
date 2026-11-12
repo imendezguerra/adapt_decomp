@@ -1,9 +1,9 @@
-"""Tests for cbss/whitening.py: float64 covariance and eigendecomposition, float32 output."""
+"""Tests for preprocessing/whitening.py: float64 covariance and eigendecomposition, float32 output."""
 
 import pytest
 import torch
 
-from adapt_decomp.cbss.whitening import whiten
+from adapt_decomp.preprocessing import whiten
 
 
 def _ill_conditioned(samples: int = 20000, dim: int = 64) -> torch.Tensor:

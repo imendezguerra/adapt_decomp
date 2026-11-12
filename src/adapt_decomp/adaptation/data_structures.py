@@ -17,7 +17,7 @@ from torch.utils.data import Dataset
 from adapt_decomp import __version__
 from adapt_decomp.adaptation.config import AdaptConfig
 from adapt_decomp.adaptation.ops import stable_cov
-from adapt_decomp.cbss.config import CBSSConfig
+from adapt_decomp.decomposition.config import DecompositionConfig
 from adapt_decomp.preprocessing import extend_data as _extend_data
 from adapt_decomp.preprocessing import filter_kwargs, validate_channel_selection
 from adapt_decomp.preprocessing import preprocess_emg as preprocess_emg_fn
@@ -149,7 +149,7 @@ class Data(Dataset):
             emg (torch.Tensor): EMG data with shape (samples, channels).
             ext_fact (int): Extension factor.
             ext_mode (Literal["block", "toeplitz"], optional): Extension
-                mode, must match the CBSSConfig.ext_mode used to produce the
+                mode, must match the DecompositionConfig.ext_mode used to produce the
                 calibration this instance is paired with. Defaults to "block".
 
         Returns:
@@ -188,7 +188,7 @@ class RawData(Dataset):
         return self.emg[idx, :], self.labels[idx]
 
 
-class Decomposition:
+class AdaptState:
     """Precalibrated decomposition model with adaptive online state."""
 
     def __init__(
@@ -246,7 +246,7 @@ class Decomposition:
                 sources_calib nor ipts_calib is given.
 
         Notes:
-            pca_components/pca_mean (from CBSSResult, when CBSSConfig.n_components was
+            pca_components/pca_mean (from DecompositionResult, when DecompositionConfig.n_components was
             set): if given, every extended-EMG batch is projected through this fitted
             PCA transform: (X_ext - pca_mean) @ pca_components.T following CBSS
             pipeline: center -> extend -> PCA -> whiten order.
@@ -317,7 +317,7 @@ class Decomposition:
                     f"{self.emg_calib.shape[-1]} calibration channels gives an extended "
                     f"dimension of {expected_ext_D}, but pca_components' input dimension "
                     f"is {self.pca_components.shape[1]}. Check that AdaptConfig.ext_fact matches "
-                    "the CBSSConfig.ext_fact used to produce this calibration."
+                    "the DecompositionConfig.ext_fact used to produce this calibration."
                 )
             if self.pca_components.shape[0] != self.n:
                 raise ValueError(
@@ -329,7 +329,7 @@ class Decomposition:
                 f"ext_fact mismatch: AdaptConfig.ext_fact={self.ext_fact} on "
                 f"{self.emg_calib.shape[-1]} calibration channels gives an extended "
                 f"dimension of {expected_ext_D}, but the whitening matrix has dimension "
-                f"{self.n}. Check that AdaptConfig.ext_fact matches the CBSSConfig.ext_fact "
+                f"{self.n}. Check that AdaptConfig.ext_fact matches the DecompositionConfig.ext_fact "
                 "used to produce this calibration."
             )
 
@@ -711,10 +711,10 @@ class Decomposition:
 class AdaptationResult:
     """Per-batch outputs of a full AdaptDecomp.process_data() over an online recording.
 
-    Structural sibling of adapt_decomp.cbss.data_structure.CBSSResult (same
+    Structural sibling of adapt_decomp.decomposition.result.DecompositionResult (same
     to_dict()-for-IO convention), but not the same class -- adaptation results
     and calibration results have different shapes and don't need to interoperate
-    beyond AdaptDecomp.from_calibration() reading a CBSSResult's fields.
+    beyond AdaptDecomp.from_calibration() reading a DecompositionResult's fields.
 
     Attributes:
         spikes (torch.Tensor): Binary spike train with shape (samples, M),
@@ -759,7 +759,7 @@ class AdaptationResult:
             supervised calibration.
         roa (Optional[np.ndarray]): Rate of agreement against a ground-truth
             spike train, with shape (M,). Mirrors
-            adapt_decomp.cbss.data_structure.CBSSResult.roa's convention
+            adapt_decomp.decomposition.result.DecompositionResult.roa's convention
             (per-unit, not built here) -- callers set it after computing
             their own comparison (e.g.
             adapt_decomp.spikes.comparison.compare_paired_spikes), such
@@ -771,17 +771,17 @@ class AdaptationResult:
             set it after computing their own score (e.g.
             adapt_decomp.spikes.metrics.get_sil). Same within/between
             silhouette formula as
-            adapt_decomp.cbss.data_structure.CBSSResult.sil, with the spike
+            adapt_decomp.decomposition.result.DecompositionResult.sil, with the spike
             cluster taken from the already-known spike labels instead of
             re-clustering -- see get_sil for the exact construction.
         ipts (Optional[torch.Tensor]): Deprecated alias for sources, accepted
             as a construction-time keyword only. Defaults to None. Raises
             FutureWarning when given.
         config (Optional[AdaptConfig]): The adaptation config that produced this
-            result, after reconciliation with cbss_config. Set by
+            result, after reconciliation with calib_config. Set by
             AdaptDecomp.process_data(); None for legacy files.
-        cbss_config (Optional[CBSSConfig]): The config of the calibration this
-            result adapted. Set when the instance was built via
+        calib_config (Optional[DecompositionConfig]): The config of the calibration
+            this result adapted. Set when the instance was built via
             AdaptDecomp.from_calibration(); None for legacy files.
     """
 
@@ -823,7 +823,7 @@ class AdaptationResult:
     sources: Optional[torch.Tensor] = None
     ipts: Optional[torch.Tensor] = None  # deprecated alias for sources
     config: Optional[AdaptConfig] = None
-    cbss_config: Optional[CBSSConfig] = None
+    calib_config: Optional[DecompositionConfig] = None
 
     def __post_init__(self) -> None:
         """Resolve the deprecated ipts alias into sources.
@@ -900,7 +900,7 @@ class AdaptationResult:
             None
         """
         attrs = {"format": "AdaptationResult", "format_version": 1, "package_version": __version__}
-        for key in ("config", "cbss_config"):
+        for key in ("config", "calib_config"):
             if getattr(self, key) is not None:
                 attrs[key] = yaml.safe_dump(getattr(self, key).to_dict(), sort_keys=True)
         data = {k: v for k, v in self.to_dict().items() if k != "diagnostics"}
@@ -936,6 +936,8 @@ class AdaptationResult:
                 raise ValueError(
                     f"{path} does not contain an AdaptationResult (got {type(obj).__name__})."
                 )
+            if "cbss_config" in obj.__dict__:  # pickled before the calib_config rename
+                obj.calib_config = obj.__dict__.pop("cbss_config")
             return obj
 
         data, attrs = read_h5(path)
@@ -951,9 +953,20 @@ class AdaptationResult:
         }
         if "config" in attrs:
             data["config"] = AdaptConfig.from_dict(yaml.safe_load(attrs["config"]))
-        if "cbss_config" in attrs:
-            data["cbss_config"] = CBSSConfig.from_dict(yaml.safe_load(attrs["cbss_config"]))
+        calib_key = "calib_config" if "calib_config" in attrs else "cbss_config"  # legacy name
+        if calib_key in attrs:
+            data["calib_config"] = DecompositionConfig.from_dict(yaml.safe_load(attrs[calib_key]))
         return cls(**data)
+
+    @property
+    def cbss_config(self) -> Optional[DecompositionConfig]:
+        """Deprecated alias of calib_config."""
+        warnings.warn(
+            "AdaptationResult.cbss_config is deprecated; use calib_config.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return self.calib_config
 
     def __getitem__(self, key: str) -> Any:
         """Dict-style subscript access, delegating to to_dict().

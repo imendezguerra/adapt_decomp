@@ -46,3 +46,39 @@ def test_available_memory_is_capped_by_the_cgroup_limit(no_scheduler, monkeypatc
     limit, available = system.available_memory()
     assert limit == 1024
     assert available <= 1024
+
+
+def test_set_cublas_workspace_sets_the_deterministic_value(monkeypatch):
+    monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
+    system.set_cublas_workspace()
+    assert system.os.environ["CUBLAS_WORKSPACE_CONFIG"] == system.CUBLAS_WORKSPACE
+
+
+def test_set_cublas_workspace_keeps_a_value_the_user_set(monkeypatch):
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":16:8")
+    system.set_cublas_workspace()
+    assert system.os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":16:8"
+
+
+def _torch_flags():
+    torch = system.torch
+    return (
+        torch.are_deterministic_algorithms_enabled(),
+        torch.is_deterministic_algorithms_warn_only_enabled(),
+        torch.backends.cudnn.deterministic,
+        torch.backends.cudnn.benchmark,
+    )
+
+
+def test_deterministic_algorithms_switches_on_then_restores_even_on_error():
+    before = _torch_flags()
+    with pytest.raises(RuntimeError, match="inside"), system.deterministic_algorithms(True):
+        assert _torch_flags() == (True, True, True, False)
+        raise RuntimeError("inside")
+    assert _torch_flags() == before
+
+
+def test_deterministic_algorithms_disabled_changes_nothing():
+    before = _torch_flags()
+    with system.deterministic_algorithms(False):
+        assert _torch_flags() == before

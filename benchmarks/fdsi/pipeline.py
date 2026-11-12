@@ -298,7 +298,7 @@ def search_one(cfg: Dict[str, Any], name: str) -> None:
         pool[rec.cond] = PooledDatasetMemory(
             emg=torch.from_numpy(emg[n_cal:].copy()),
             calibration=calibration,
-            cbss_config=cbss_config(cfg),
+            calib_config=cbss_config(cfg),
             gt_paired_bin=gt[n_cal:],
         )
 
@@ -350,7 +350,7 @@ def apply_one(cfg: Dict[str, Any], branch: str, rec: Recording) -> None:
     with _one_thread():
         adapter = AdaptDecomp.from_calibration(
             calibration=calibration,
-            cbss_config=cbss_config(cfg),
+            calib_config=cbss_config(cfg),
             adapt_config=applied_config(cfg, branch),
         )
         outputs = adapter.process_data(emg[n_cal:])

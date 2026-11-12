@@ -1,6 +1,6 @@
 """Pure-tensor unit tests for adaptation/ops.py's per-batch update primitives.
 
-No torch device/IO/Decomposition setup needed -- these are the cheapest,
+No torch device/IO/AdaptState setup needed -- these are the cheapest,
 fastest tests in the suite and the ones to run on every change.
 """
 

@@ -225,7 +225,7 @@ def optimize_adapt_decomp(
     Args:
         pool (Dict[str, PooledDataset]): Dataset name -> its pool entry, all
             PooledDatasetMemory (preloaded) or all PooledDatasetDisk (loaded
-            fresh each trial via resolve()). Each dataset's cbss_config wins
+            fresh each trial via resolve()). Each dataset's calib_config wins
             over base_config's shared fields on disagreement, see
             adaptation.core.reconcile_with_calib_config.
         objectives (Union[ObjectiveName, Tuple[ObjectiveName, ...]], optional):
@@ -254,7 +254,7 @@ def optimize_adapt_decomp(
         unit_selection (UnitSelection, optional): Which calibration units
             the search adapts and scores: None keeps every unit;
             "unsupervised" keeps units passing
-            CBSSResult.unsupervised_mask(**unit_selection_kwargs), leaving
+            DecompositionResult.unsupervised_mask(**unit_selection_kwargs), leaving
             out datasets with none, and is recommended for recordings
             without ground truth; "supervised" requires every dataset's
             ground truth (its loader already narrowed the calibration to

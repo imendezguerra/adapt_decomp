@@ -30,10 +30,10 @@ def _roa(rec, calibration, spikes, start=0):
     return roa
 
 
-def _preset(name, cbss_config):
+def _preset(name, calib_config):
     config = AdaptConfig.from_preset(name)
     config.device = "cpu"
-    config.ext_fact = cbss_config.ext_fact
+    config.ext_fact = calib_config.ext_fact
     config.__post_init__()
     return config
 
@@ -71,7 +71,7 @@ def test_adaptation_tracks_the_units_the_fixed_decomposition_loses(
 ):
     """calibrate_and_process end to end, offline and online (streaming) modes."""
     rec = synthetic_recording
-    cbss_config = replace(
+    calib_config = replace(
         synthetic_cbss_config,
         selection="supervised",
         selection_kwargs={"gt_spikes": rec.spikes[: rec.n_cal], "tol_spike_ms": TOL_SPIKE_MS},
@@ -82,8 +82,8 @@ def test_adaptation_tracks_the_units_the_fixed_decomposition_loses(
             rec.emg,
             timestamps=np.arange(len(rec.emg)) / rec.fs,
             calib_indices=slice(0, rec.n_cal),
-            cbss_config=cbss_config,
-            adapt_config=_preset(preset, cbss_config),
+            calib_config=calib_config,
+            adapt_config=_preset(preset, calib_config),
             processing_mode=processing_mode,
         )
 
@@ -116,7 +116,7 @@ def test_search_picks_the_parameters_that_track_the_drift(
         "synthetic": PooledDatasetMemory(
             emg=rec.emg[rec.n_cal :],
             calibration=cal,
-            cbss_config=synthetic_cbss_config,
+            calib_config=synthetic_cbss_config,
             preprocess=True,
             gt_paired_bin=rec.spikes[rec.n_cal :, cal.gt_matched_indices],
         )

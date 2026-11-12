@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from adapt_decomp.adaptation.config import AdaptConfig
-from adapt_decomp.adaptation.data_structures import AdaptationResult, Data, Decomposition, RawData
+from adapt_decomp.adaptation.data_structures import AdaptationResult, AdaptState, Data, RawData
 from adapt_decomp.adaptation.io import H5ParamsBatchWriter
 from adapt_decomp.adaptation.ops import (
     classify_peaks_from_adaptive_centroids,
@@ -23,8 +23,7 @@ from adapt_decomp.adaptation.ops import (
     update_sv_spike_gated,
 )
 from adapt_decomp.cbss.config import CBSSConfig
-from adapt_decomp.cbss.core import CBSS
-from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.decomposition import Decomposition, DecompositionConfig, DecompositionResult
 from adapt_decomp.preprocessing import (
     extend_data,
     filter_kwargs,
@@ -45,36 +44,41 @@ class AdaptDecomp:
     @classmethod
     def from_calibration(
         cls,
-        calibration: CBSSResult,
-        cbss_config: Optional[CBSSConfig] = None,
+        calibration: DecompositionResult,
+        calib_config: Optional[DecompositionConfig] = None,
         adapt_config: Optional[AdaptConfig] = None,
         save_path: Optional[str] = None,
+        *,
+        cbss_config: Optional[DecompositionConfig] = None,
     ) -> "AdaptDecomp":
-        """Build AdaptDecomp from a CBSSResult. Call process_data(emg, ...) next.
+        """Build AdaptDecomp from a DecompositionResult. Call process_data(emg, ...) next.
 
         Args:
-            calibration (CBSSResult): Calibration result from
+            calibration (DecompositionResult): Calibration result from
                 calibrate_and_process(). calibration.emg must be set
                 (guaranteed there, which forces save_emg=True).
-            cbss_config (Optional[CBSSConfig], optional): The CBSSConfig that
-                produced calibration, only needed when calibration.config is
-                None (e.g. a legacy file); calibration.config wins when both
+            calib_config (Optional[DecompositionConfig], optional): The config
+                (CBSSConfig, SCDConfig, ...) that produced calibration, only
+                needed when calibration.config is None (e.g. a legacy file);
+                calibration.config wins when both
                 are set, warning if they differ. Treated as ground truth for
                 every field it shares with AdaptConfig (ext_fact, ext_mode,
                 spike_det_exp, and the preprocessing/filter fields); see
                 Notes. Defaults to None.
             adapt_config (Optional[AdaptConfig], optional): Online adaptation
                 configuration. Defaults to None, which builds an AdaptConfig
-                seeded entirely from cbss_config's shared fields.
+                seeded entirely from calib_config's shared fields.
             save_path (Optional[str], optional): Path to save per-batch
                 parameters during process_data(), used when
                 adapt_config.save_params is True. Defaults to None.
+            cbss_config (Optional[DecompositionConfig], optional): Deprecated
+                alias of calib_config. Defaults to None.
 
         Raises:
-            TypeError: If calibration is not a CBSSResult.
+            TypeError: If calibration is not a DecompositionResult.
             ValueError: If calibration.emg is None, if neither
-                calibration.config nor cbss_config is set, or if
-                cbss_config.ext_fact does not match calibration.ext_fact
+                calibration.config nor calib_config is set, or if
+                calib_config.ext_fact does not match calibration.ext_fact
                 (they must come from the same calibration run).
 
         Returns:
@@ -85,36 +89,37 @@ class AdaptDecomp:
             calibration.gt_matched_indices (if present) is stored on the
             instance and propagated through _format_outputs().
             calibration.pca_components/pca_mean (set when
-            CBSSConfig.n_components was used) are threaded through to
-            Decomposition; see Decomposition._apply_pca.
-            When adapt_config disagrees with cbss_config on any of
-            _SHARED_CBSS_ADAPT_FIELDS, cbss_config wins and a single
+            DecompositionConfig.n_components was used) are threaded through to
+            AdaptState; see AdaptState._apply_pca.
+            When adapt_config disagrees with calib_config on any of
+            _SHARED_CALIB_ADAPT_FIELDS, calib_config wins and a single
             UserWarning lists what changed; see reconcile_with_calib_config.
         """
-        if not isinstance(calibration, CBSSResult):
-            raise TypeError(f"calibration must be a CBSSResult, got {type(calibration)}")
+        calib_config = _renamed_kwarg(calib_config, cbss_config)
+        if not isinstance(calibration, DecompositionResult):
+            raise TypeError(f"calibration must be a DecompositionResult, got {type(calibration)}")
         if calibration.emg is None:
             raise ValueError(
                 "calibration.emg is None. Use calibrate_and_process() which sets save_emg=True."
             )
-        cbss_config = resolve_config(calibration.config, cbss_config)
-        if cbss_config is None:
+        calib_config = resolve_config(calibration.config, calib_config)
+        if calib_config is None:
             raise ValueError(
-                "calibration has no embedded config (e.g. a legacy file); pass cbss_config."
+                "calibration has no embedded config (e.g. a legacy file); pass calib_config."
             )
-        if cbss_config.ext_fact != calibration.ext_fact:
+        if calib_config.ext_fact != calibration.ext_fact:
             raise ValueError(
-                f"cbss_config.ext_fact={cbss_config.ext_fact} does not match "
+                f"calib_config.ext_fact={calib_config.ext_fact} does not match "
                 f"calibration.ext_fact={calibration.ext_fact}; these must come from "
                 "the same calibration run."
             )
         if adapt_config is None:
             adapt_config = AdaptConfig(
-                **{field: getattr(cbss_config, field) for field in _SHARED_CBSS_ADAPT_FIELDS}
+                **{field: getattr(calib_config, field) for field in _SHARED_CALIB_ADAPT_FIELDS}
             )
         else:
             adapt_config = reconcile_with_calib_config(
-                adapt_config, SharedCalibFields.from_cbss_config(cbss_config)
+                adapt_config, SharedCalibFields.from_config(calib_config)
             )
 
         tensors = calibration.to_adapt_tensors()
@@ -133,7 +138,7 @@ class AdaptDecomp:
             pca_mean=tensors["pca_mean"],
         )
         instance.gt_matched_indices = calibration.gt_matched_indices  # None if unsupervised
-        instance.cbss_config = cbss_config
+        instance.calib_config = calib_config
         return instance
 
     @classmethod
@@ -142,14 +147,16 @@ class AdaptDecomp:
         emg: Union[torch.Tensor, np.ndarray],
         timestamps: Union[torch.Tensor, np.ndarray],
         calib_indices: Union[slice, np.ndarray],
-        cbss_config: Optional[CBSSConfig] = None,
+        calib_config: Optional[DecompositionConfig] = None,
         adapt_config: Optional[AdaptConfig] = None,
         preprocess: bool = True,
         processing_mode: Literal["offline", "online"] = "offline",
         save_path: Optional[str] = None,
         adapt_from: Literal["calib_end", "emg_start"] = "calib_end",
-    ) -> Tuple[AdaptationResult, CBSSResult]:
-        """Run CBSS on emg[calib_indices], then AdaptDecomp over the rest of emg.
+        *,
+        cbss_config: Optional[DecompositionConfig] = None,
+    ) -> Tuple[AdaptationResult, DecompositionResult]:
+        """Calibrate on emg[calib_indices], then run AdaptDecomp over the rest of emg.
 
         Args:
             emg (Union[torch.Tensor, np.ndarray]): Full EMG recording, with
@@ -160,13 +167,14 @@ class AdaptDecomp:
             calib_indices (Union[slice, np.ndarray]): Which samples to use
                 for calibration: a slice, an integer index array, or a
                 boolean mask.
-            cbss_config (Optional[CBSSConfig], optional): CBSS configuration.
+            calib_config (Optional[DecompositionConfig], optional): Calibration
+                config; its type picks the method (CBSSConfig, SCDConfig, ...).
                 Defaults to CBSSConfig(). save_emg is forced to True
                 regardless. Set selection/selection_kwargs on this to filter
-                units (see CBSSConfig.selection).
+                units (see DecompositionConfig.selection).
             adapt_config (Optional[AdaptConfig], optional): Online adaptation
                 configuration. Defaults to None, which builds an AdaptConfig
-                seeded entirely from cbss_config's shared fields; see
+                seeded entirely from calib_config's shared fields; see
                 from_calibration.
             preprocess (bool, optional): Forwarded to init_data(). Defaults
                 to True.
@@ -180,25 +188,29 @@ class AdaptDecomp:
                 "calib_end" adapts emg[b:] from the end of the calibration
                 window [a, b), which must be contiguous, with the source
                 FIFO seeded from the calibration's tail, and fills [0, b)
-                with CBSS's output: the calibration's own when a is 0, else
-                CBSS.apply() over emg[:b]. "emg_start" adapts over the
+                with the calibration's output: its own when a is 0, else
+                Decomposition.apply() over emg[:b]. "emg_start" adapts over the
                 entire emg from its first sample, calibration window
                 included. Defaults to "calib_end".
+            cbss_config (Optional[DecompositionConfig], optional): Deprecated
+                alias of calib_config. Defaults to None.
 
         Raises:
             ValueError: If emg/timestamps are malformed, adapt_from is
                 unknown, the calibration window is too short or, with
-                adapt_from="calib_end", not contiguous, CBSS finds no units,
-                or cbss_config.selection is set and keeps no units (see
-                CBSS.decompose()).
+                adapt_from="calib_end", not contiguous, calibration finds no
+                units, or calib_config.selection is set and keeps no units (see
+                Decomposition.decompose()).
 
         Returns:
-            Tuple[AdaptationResult, CBSSResult]: outputs, this run's typed
+            Tuple[AdaptationResult, DecompositionResult]: outputs, this run's typed
             result, with spikes and sources over the entire emg and the
             per-batch arrays and loss totals of the adapted samples only;
-            calibration, the CBSSResult CBSS produced on the calibration
+            calibration, the DecompositionResult produced on the calibration
             window.
         """
+
+        calib_config = _renamed_kwarg(calib_config, cbss_config)
 
         # Format data
         emg_np = _to_numpy(emg)
@@ -217,7 +229,7 @@ class AdaptDecomp:
 
         if emg_calib.shape[0] < 2:
             raise ValueError(
-                f"Calibration window has only {emg_calib.shape[0]} samples — too short for CBSS."
+                f"Calibration window has only {emg_calib.shape[0]} samples — too short to calibrate."
             )
         if adapt_from not in ("calib_end", "emg_start"):
             raise ValueError(
@@ -227,22 +239,22 @@ class AdaptDecomp:
             a, b = _calib_bounds(calib_indices, emg_np.shape[0])
 
         # Set config
-        cbss_config = copy(cbss_config) if cbss_config is not None else CBSSConfig()
-        cbss_config.save_emg = True  # required for from_calibration()
+        calib_config = copy(calib_config) if calib_config is not None else CBSSConfig()
+        calib_config.save_emg = True  # required for from_calibration()
 
-        # Run CBSS decomposition on the calibration window
-        calibration = CBSS(cbss_config).decompose(emg_calib, ts_calib)
+        # Calibrate on the calibration window
+        calibration = Decomposition.from_config(calib_config).decompose(emg_calib, ts_calib)
 
         if calibration.sources.shape[1] == 0:
             raise ValueError(
-                "CBSS found no motor units in the calibration window. "
-                "Try relaxing sil_th or increasing search_iter and ica_iter in CBSSConfig."
+                f"{type(calib_config).__name__} found no motor units in the calibration "
+                "window. Relax its acceptance thresholds or search longer."
             )
 
         # Build the model
         instance = cls.from_calibration(
             calibration,
-            cbss_config=cbss_config,
+            calib_config=calib_config,
             adapt_config=adapt_config,
             save_path=save_path,
         )
@@ -255,14 +267,16 @@ class AdaptDecomp:
             return outputs, calibration
 
         # Adapt from the end of the calibration window, seeding the source FIFO from its tail
-        instance.decomp.seed_source_fifo(instance.decomp.sources_calib)
+        instance.state.seed_source_fifo(instance.state.sources_calib)
         outputs = instance.process_data(
             emg_np[b:], preprocess=preprocess, processing_mode=processing_mode
         )
 
-        # CBSS's output over [0, b): the calibration's own, or re-applied from the first sample
+        # Calibration output over [0, b): its own, or re-applied from the first sample
         head = (
-            calibration if a == 0 else CBSS(cbss_config).apply(emg_np[:b], calibration, ts_np[:b])
+            calibration
+            if a == 0
+            else Decomposition.from_config(calib_config).apply(emg_np[:b], calibration, ts_np[:b])
         )
         outputs.spikes = torch.cat(
             [torch.as_tensor(head.spikes, dtype=outputs.spikes.dtype), outputs.spikes]
@@ -271,6 +285,21 @@ class AdaptDecomp:
             [torch.as_tensor(head.sources, dtype=outputs.sources.dtype), outputs.sources]
         )
         return outputs, calibration
+
+    @property
+    def decomp(self) -> AdaptState:
+        """Deprecated alias of state."""
+        warnings.warn(
+            "AdaptDecomp.decomp is deprecated; use AdaptDecomp.state.", FutureWarning, stacklevel=2
+        )
+        return self.state
+
+    @decomp.setter
+    def decomp(self, value: AdaptState) -> None:
+        warnings.warn(
+            "AdaptDecomp.decomp is deprecated; use AdaptDecomp.state.", FutureWarning, stacklevel=2
+        )
+        self.state = value
 
     def __init__(
         self,
@@ -356,7 +385,7 @@ class AdaptDecomp:
                 self.config.device = "cpu"
 
         # Build decomposition object
-        self.decomp = Decomposition(
+        self.state = AdaptState(
             whitening,
             sep_vectors,
             base_centr,
@@ -377,7 +406,7 @@ class AdaptDecomp:
         # directly right after construction (full-online mode: no
         # process_data()/init_data() call at all); process_data() resets
         # these again at the start of its own run.
-        self._init_outputs(units=self.decomp.sep_vectors.shape[0])
+        self._init_outputs(units=self.state.sep_vectors.shape[0])
         self._init_losses()
         self._init_exe_time()
 
@@ -476,7 +505,7 @@ class AdaptDecomp:
             self.data, batch_size=self.config.batch_size, shuffle=False, drop_last=False
         )
 
-        self._init_outputs(units=self.decomp.sep_vectors.shape[0])
+        self._init_outputs(units=self.state.sep_vectors.shape[0])
         self._init_losses()
         self._init_exe_time()
 
@@ -486,9 +515,9 @@ class AdaptDecomp:
         if self.config.save_params:
             self.saver = H5ParamsBatchWriter(
                 path=self.save_path,
-                wh_shape=self.decomp.whitening.shape,
-                sv_shape=self.decomp.sep_vectors.shape,
-                sd_shape=self.decomp.spikes_centr.shape,
+                wh_shape=self.state.whitening.shape,
+                sv_shape=self.state.sep_vectors.shape,
+                sd_shape=self.state.spikes_centr.shape,
                 batches=len(dataset),
                 dtype="float32",
             )
@@ -499,10 +528,10 @@ class AdaptDecomp:
             if self.config.save_params:
                 self.saver._append(
                     {
-                        "whitening": self.decomp.whitening.cpu().numpy(),
-                        "sep_vectors": self.decomp.sep_vectors.cpu().numpy(),
-                        "base_centr": self.decomp.base_centr.cpu().numpy(),
-                        "spikes_centr": self.decomp.spikes_centr.cpu().numpy(),
+                        "whitening": self.state.whitening.cpu().numpy(),
+                        "sep_vectors": self.state.sep_vectors.cpu().numpy(),
+                        "base_centr": self.state.base_centr.cpu().numpy(),
+                        "spikes_centr": self.state.spikes_centr.cpu().numpy(),
                     }
                 )
 
@@ -602,7 +631,7 @@ class AdaptDecomp:
         self._apply_wh_sv_coupling(coupling_matrix)
 
         # Estimate sources
-        sources = Z @ self.decomp.sep_vectors.T  # [N, M]
+        sources = Z @ self.state.sep_vectors.T  # [N, M]
 
         # Spike detection
         spike_mask, peak_mask = self._detect_spikes(sources, N)
@@ -612,8 +641,8 @@ class AdaptDecomp:
             trusted_spike_mask = gate_spikes_by_iqr(
                 sources,
                 spike_mask,
-                self.decomp.Q75_cal,
-                self.decomp.IQR_cal,
+                self.state.Q75_cal,
+                self.state.IQR_cal,
                 gate_factor=3.0,
                 peak_power=self.config.spike_det_exp,
                 use_abs_for_detection=True,
@@ -633,11 +662,11 @@ class AdaptDecomp:
 
         # --- Pad back to N_called rows ---
         spikes_out = torch.zeros(
-            N_called, self.decomp.sep_vectors.shape[0], dtype=torch.int32, device=self.config.device
+            N_called, self.state.sep_vectors.shape[0], dtype=torch.int32, device=self.config.device
         )
         sources_out = torch.zeros(
             N_called,
-            self.decomp.sep_vectors.shape[0],
+            self.state.sep_vectors.shape[0],
             dtype=torch.float32,
             device=self.config.device,
         )
@@ -665,7 +694,7 @@ class AdaptDecomp:
                 config.ch_map unset, or config.ch_mask's length disagrees
                 with emg_batch's raw channel count.
         """
-        if self.decomp.zi is None:
+        if self.state.zi is None:
             # Only checkable once the raw channel count is known, on the
             # first batch; later batches can't change it mid-run.
             validate_channel_selection(
@@ -676,9 +705,9 @@ class AdaptDecomp:
             )
 
         emg_np, zi_new = preprocess_emg_stateful(
-            emg_batch.cpu().numpy(), self.config.fs, zi=self.decomp.zi, **filter_kwargs(self.config)
+            emg_batch.cpu().numpy(), self.config.fs, zi=self.state.zi, **filter_kwargs(self.config)
         )
-        self.decomp.zi = zi_new
+        self.state.zi = zi_new
 
         emg_np = select_channels(
             emg_np, self.config.ch_mask, self.config.ch_map, self.config.replace_bad_channels
@@ -702,25 +731,25 @@ class AdaptDecomp:
             output with.
         """
         ext_fact = self.config.ext_fact
-        if self.decomp.ext_fifo is not None:
-            window = torch.cat([self.decomp.ext_fifo, emg_batch], dim=0)
+        if self.state.ext_fifo is not None:
+            window = torch.cat([self.state.ext_fifo, emg_batch], dim=0)
         else:
             window = emg_batch
 
         batch_mean = emg_batch.mean(0, keepdim=True)
-        self.decomp.ema_mean_online = (
+        self.state.ema_mean_online = (
             batch_mean.detach()
-            if self.decomp.ema_mean_online is None
+            if self.state.ema_mean_online is None
             else (
-                self.config.ema_alpha * self.decomp.ema_mean_online
+                self.config.ema_alpha * self.state.ema_mean_online
                 + (1 - self.config.ema_alpha) * batch_mean
             ).detach()
         )
-        window = window - self.decomp.ema_mean_online
+        window = window - self.state.ema_mean_online
 
         window_ext = extend_data(window, ext_fact, ext_mode=self.config.ext_mode)
 
-        if self.decomp.ext_fifo is None:
+        if self.state.ext_fifo is None:
             # First call: no prior context, so the leading ext_fact rows
             # genuinely lack history and must be zero-padded by the caller.
             pad_offset = ext_fact
@@ -731,7 +760,7 @@ class AdaptDecomp:
             pad_offset = 0
         window_ext = window_ext[ext_fact:]
 
-        self.decomp.ext_fifo = emg_batch[-ext_fact:]
+        self.state.ext_fifo = emg_batch[-ext_fact:]
         return window_ext, pad_offset
 
     # ------------------------------------------------------------------
@@ -764,7 +793,7 @@ class AdaptDecomp:
         """
 
         # Apply the precomputed PCA transform if provided
-        X = self.decomp._apply_pca(X)
+        X = self.state._apply_pca(X)
 
         # Only run if adapt_wh or compute_loss is True
         coupling_matrix = None
@@ -786,7 +815,7 @@ class AdaptDecomp:
                 if self.config.debug:
                     idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
                     self.diagnostics.setdefault(idx, {})["wh_skip_invalid_slogdet"] = True
-                return X @ self.decomp.whitening.T, None
+                return X @ self.state.whitening.T, None
             K_online, e_wh, direction = self._compute_kl_error(Rz, logdet)
 
             # If Rz is positive definite, log the actual error
@@ -804,18 +833,18 @@ class AdaptDecomp:
                     d.update(
                         {
                             "K": K_online.item(),
-                            "K_cal": self.decomp.kl_div_calib_mean.item(),
+                            "K_cal": self.state.kl_div_calib_mean.item(),
                             "whitening_error": e_wh.item(),
                             "delta_wh_norm": wh_diag["delta_wh_norm"],
                             "delta_wh_raw_norm": wh_diag["delta_wh_raw_norm"],
                             "Rz_trace": Rz.trace().item(),
                             "Rz_logdet": logdet.item(),
-                            "wh_norm": torch.linalg.norm(self.decomp.whitening).item(),
+                            "wh_norm": torch.linalg.norm(self.state.whitening).item(),
                         }
                     )
 
         # Return whitened data and wh-sv coupling update (init to None)
-        return X @ self.decomp.whitening.T, coupling_matrix
+        return X @ self.state.whitening.T, coupling_matrix
 
     @torch.no_grad()
     def _compute_wh_covariance(self, X: torch.Tensor) -> torch.Tensor:
@@ -828,8 +857,8 @@ class AdaptDecomp:
         Returns:
             torch.Tensor: Regularised whitened covariance Rz, with shape (n, n).
         """
-        self.decomp._update_fifo_cov(X)
-        return self.decomp._compute_Rz_from_fifo()
+        self.state._update_fifo_cov(X)
+        return self.state._compute_Rz_from_fifo()
 
     @torch.no_grad()
     def _compute_kl_error(
@@ -855,20 +884,20 @@ class AdaptDecomp:
         """
 
         if self.config.wh_mode == "kl_to_identity":
-            K_online = 0.5 * (Rz.trace() - logdet - self.decomp.n)
-            K_ref = self.decomp.kl_div_calib_mean
+            K_online = 0.5 * (Rz.trace() - logdet - self.state.n)
+            K_ref = self.state.kl_div_calib_mean
             e_wh_raw = K_online - K_ref
-            direction = Rz - self.decomp.I
+            direction = Rz - self.state.I
         else:  # kl_to_cal
-            A = self.decomp.Rz_cal_inv @ Rz
-            logdet_A = logdet - self.decomp.logdet_cal
-            K_online = 0.5 * (A.trace() - logdet_A - self.decomp.n)
-            K_ref = self.decomp.kl_div_calib_mean
+            A = self.state.Rz_cal_inv @ Rz
+            logdet_A = logdet - self.state.logdet_cal
+            K_online = 0.5 * (A.trace() - logdet_A - self.state.n)
+            K_ref = self.state.kl_div_calib_mean
             e_wh_raw = K_online - K_ref
-            direction = A.T - self.decomp.I  # exact steepest direction, not A - I; see Notes above
+            direction = A.T - self.state.I  # exact steepest direction, not A - I; see Notes above
 
         # Z-score the whitening error so eta_wh is scale-free across contractions.
-        sigma_K = getattr(self.decomp, "kl_div_calib_std", None)
+        sigma_K = getattr(self.state, "kl_div_calib_std", None)
         e_wh = e_wh_raw / sigma_K.clamp_min(self.config.eps) if sigma_K is not None else e_wh_raw
         return K_online, e_wh, direction
 
@@ -905,36 +934,36 @@ class AdaptDecomp:
 
         else:  # Relative error
             # Compute the norm of the whitening and update (via exponential moving average) for scaling
-            M_wh = direction @ self.decomp.whitening
+            M_wh = direction @ self.state.whitening
             M_wh_norm = torch.linalg.norm(M_wh)
-            self.decomp.ema_dirnorm_wh = (
+            self.state.ema_dirnorm_wh = (
                 M_wh_norm.detach()
-                if self.decomp.ema_dirnorm_wh is None
+                if self.state.ema_dirnorm_wh is None
                 else (
-                    self.config.ema_alpha * self.decomp.ema_dirnorm_wh
+                    self.config.ema_alpha * self.state.ema_dirnorm_wh
                     + (1 - self.config.ema_alpha) * M_wh_norm
                 ).detach()
             )
-            wh_norm = torch.linalg.norm(self.decomp.whitening)
+            wh_norm = torch.linalg.norm(self.state.whitening)
 
             # Compute the direction of the whitening update using the relative error and the scaling
             dir_coeff = (
                 -self.config.wh_learning_rate
                 * wh_norm
                 * e_wh
-                / (self.decomp.ema_dirnorm_wh + self.config.eps)
+                / (self.state.ema_dirnorm_wh + self.config.eps)
                 * direction
             )
 
         # Clip whitening update within tolerance region
-        delta_wh_target = dir_coeff @ self.decomp.whitening
+        delta_wh_target = dir_coeff @ self.state.whitening
         eff_max_rel_delta_wh = self.config.safety_clip_multiplier_wh * self.config.wh_learning_rate
         delta_wh = clip_global_delta(
-            delta_wh_target, self.decomp.whitening, eff_max_rel_delta_wh, self.config.eps
+            delta_wh_target, self.state.whitening, eff_max_rel_delta_wh, self.config.eps
         )
 
         # Update whitening
-        self.decomp.whitening = self.decomp.whitening + delta_wh
+        self.state.whitening = self.state.whitening + delta_wh
 
         coupling_matrix = None
         if self.config.wh_sv_coupling:
@@ -976,16 +1005,16 @@ class AdaptDecomp:
             return
 
         # Get coupling delta
-        delta_sv_coupling = self.decomp.sep_vectors @ coupling_matrix
+        delta_sv_coupling = self.state.sep_vectors @ coupling_matrix
 
         # Clip coupling delta
         eff_max_rel_delta_sv = self.config.safety_clip_multiplier_sv * self.config.sv_learning_rate
         delta_sv_coupling = clip_global_delta(
-            delta_sv_coupling, self.decomp.sep_vectors, eff_max_rel_delta_sv, self.config.eps
+            delta_sv_coupling, self.state.sep_vectors, eff_max_rel_delta_sv, self.config.eps
         )
 
         # Update separation vectors
-        self.decomp.sep_vectors = self.decomp.sep_vectors + delta_sv_coupling
+        self.state.sep_vectors = self.state.sep_vectors + delta_sv_coupling
 
     # ------------------------------------------------------------------
     # Spike detection (edge-aware via source FIFO)
@@ -1009,8 +1038,8 @@ class AdaptDecomp:
         """
 
         # Append new sources to previous batch to avoid missing spikes at the edges
-        if self.decomp.source_fifo is not None:
-            sources_full = torch.cat([self.decomp.source_fifo, sources], dim=0)
+        if self.state.source_fifo is not None:
+            sources_full = torch.cat([self.state.source_fifo, sources], dim=0)
         else:
             sources_full = sources
 
@@ -1026,8 +1055,8 @@ class AdaptDecomp:
         spike_mask_full = classify_peaks_from_adaptive_centroids(
             sources_det_full,
             peak_mask_full,
-            self.decomp.spikes_centr,
-            self.decomp.base_centr,
+            self.state.spikes_centr,
+            self.state.base_centr,
         )
 
         # Keep only the current batch data
@@ -1036,12 +1065,10 @@ class AdaptDecomp:
 
         # Update source FIFO (keep at most source_fifo_batches * N rows)
         max_fifo = self.config.source_fifo_batches * N
-        if self.decomp.source_fifo is not None:
-            self.decomp.source_fifo = torch.cat([self.decomp.source_fifo, sources], dim=0)[
-                -max_fifo:
-            ]
+        if self.state.source_fifo is not None:
+            self.state.source_fifo = torch.cat([self.state.source_fifo, sources], dim=0)[-max_fifo:]
         else:
-            self.decomp.source_fifo = sources[-max_fifo:]
+            self.state.source_fifo = sources[-max_fifo:]
 
         return spike_mask, peak_mask
 
@@ -1074,12 +1101,12 @@ class AdaptDecomp:
         """
         # Update centroids using the trusted spikes only
         if self.config.adapt_sd:
-            self.decomp.spikes_centr, self.decomp.base_centr = update_centroids_from_peaks(
+            self.state.spikes_centr, self.state.base_centr = update_centroids_from_peaks(
                 sources,
                 peak_mask,
                 trusted_spike_mask,
-                self.decomp.spikes_centr,
-                self.decomp.base_centr,
+                self.state.spikes_centr,
+                self.state.base_centr,
                 peak_power=self.config.spike_det_exp,
                 centroid_momentum=self.config.centroid_momentum,
                 min_spikes_for_centroid=1,
@@ -1092,15 +1119,15 @@ class AdaptDecomp:
         if self.config.debug:
             idx = batch_idx.item() if hasattr(batch_idx, "item") else batch_idx
             d = self.diagnostics.setdefault(idx, {})
-            sep_t = self.decomp.spikes_centr - self.decomp.base_centr
-            sep_cal = self.decomp.spikes_centr_cal - self.decomp.base_centr_cal
+            sep_t = self.state.spikes_centr - self.state.base_centr
+            sep_cal = self.state.spikes_centr_cal - self.state.base_centr_cal
             d.update(
                 {
-                    "base_centroids": self.decomp.base_centr.clone(),
-                    "spike_centroids": self.decomp.spikes_centr.clone(),
-                    "base_centroids_cal": self.decomp.base_centr_cal.clone(),
-                    "spike_centroids_cal": self.decomp.spikes_centr_cal.clone(),
-                    "centroid_drift": (self.decomp.spikes_centr - self.decomp.spikes_centr_cal)
+                    "base_centroids": self.state.base_centr.clone(),
+                    "spike_centroids": self.state.spikes_centr.clone(),
+                    "base_centroids_cal": self.state.base_centr_cal.clone(),
+                    "spike_centroids_cal": self.state.spikes_centr_cal.clone(),
+                    "centroid_drift": (self.state.spikes_centr - self.state.spikes_centr_cal)
                     .abs()
                     .mean(),
                     "centroid_separation": (sep_t / sep_cal.clamp_min(self.config.eps) - 1.0) ** 2,
@@ -1149,14 +1176,14 @@ class AdaptDecomp:
         """
 
         if self.config.adapt_sv:
-            sv_curr = self.decomp.sep_vectors
+            sv_curr = self.state.sep_vectors
             sources_curr = sources
             first_sv_diag = None
             # Define clipping region and norm
             eff_max_rel_delta_sv = (
                 self.config.safety_clip_multiplier_sv * self.config.sv_learning_rate
             )
-            ema_gradnorm_sv_batch = self.decomp.ema_gradnorm_sv  # carried over from last batch
+            ema_gradnorm_sv_batch = self.state.ema_gradnorm_sv  # carried over from last batch
 
             # Apply update for requested epochs
             for it in range(self.config.sv_epochs):
@@ -1164,12 +1191,12 @@ class AdaptDecomp:
                     sv=sv_curr,
                     Z=Z,
                     sources=sources_curr,
-                    kappa_cal=self.decomp.contrast_calib_mean,
+                    kappa_cal=self.state.contrast_calib_mean,
                     spike_mask=spike_mask,
                     max_rel_delta_sv=eff_max_rel_delta_sv,
                     contrast_scope=self.config.contrast_scope,
                     eps=self.config.eps,
-                    sigma_kappa_cal=getattr(self.decomp, "contrast_calib_std", None),
+                    sigma_kappa_cal=getattr(self.state, "contrast_calib_std", None),
                     lr_sv=self.config.sv_learning_rate,
                     lr_mode=self.config.lr_mode,
                     ema_gradnorm_sv=ema_gradnorm_sv_batch,
@@ -1180,7 +1207,7 @@ class AdaptDecomp:
                 if first_sv_diag is None:
                     first_sv_diag = sv_diag
                     ema_gradnorm_sv_batch = sv_diag["ema_gradnorm_sv"]
-                    self.decomp.ema_gradnorm_sv = ema_gradnorm_sv_batch
+                    self.state.ema_gradnorm_sv = ema_gradnorm_sv_batch
 
                 # Check for convergence (before sv_curr is overwritten)
                 delta_rel = torch.linalg.norm(sv_new - sv_curr) / (
@@ -1193,7 +1220,7 @@ class AdaptDecomp:
 
                 if delta_rel < self.config.sv_tol:
                     break
-            self.decomp.sep_vectors = sv_curr
+            self.state.sep_vectors = sv_curr
         else:
             # Still compute contrast for loss tracking even when not adapting
             sv_diag = self._compute_sv_diag(sources, spike_mask)
@@ -1211,7 +1238,7 @@ class AdaptDecomp:
             d.update(
                 {
                     **sv_diag,
-                    "kappa_cal": self.decomp.contrast_calib_mean.clone(),
+                    "kappa_cal": self.state.contrast_calib_mean.clone(),
                 }
             )
             if "delta_sv_raw_norm" in first_sv_diag:
@@ -1234,9 +1261,9 @@ class AdaptDecomp:
         kappa, e_sv, active, spike_counts = compute_contrast_error(
             sources,
             spike_mask,
-            self.decomp.contrast_calib_mean,
+            self.state.contrast_calib_mean,
             self.config.contrast_scope,
-            getattr(self.decomp, "contrast_calib_std", None),
+            getattr(self.state, "contrast_calib_std", None),
             self.config.eps,
         )
         _nan = torch.tensor(float("nan"), device=sources.device, dtype=sources.dtype)
@@ -1361,7 +1388,7 @@ class AdaptDecomp:
             wh_loss has any NaN or the wh_trace/trace_cal ratio indicates
             whitening diverged.
         """
-        trace_ratio = (self.wh_trace / self.decomp.trace_cal).median()
+        trace_ratio = (self.wh_trace / self.state.trace_cal).median()
         if torch.any(torch.isnan(self.wh_loss)) or not (0.1 < trace_ratio.item() < 50.0):
             invalid = torch.tensor(1e10, device=self.config.device)
             return invalid, invalid, invalid
@@ -1425,8 +1452,8 @@ class AdaptDecomp:
             result.diagnostics = self.diagnostics
         if hasattr(self, "gt_matched_indices"):
             result.gt_matched_indices = self.gt_matched_indices
-        if hasattr(self, "cbss_config"):
-            result.cbss_config = copy(self.cbss_config)
+        if hasattr(self, "calib_config"):
+            result.calib_config = copy(self.calib_config)
         result.config = copy(self.config)
         return result
 
@@ -1435,10 +1462,10 @@ class AdaptDecomp:
 # Config reconciliation
 # ---------------------------------------------------------------------------
 
-# Fields with identical names on both CBSSConfig and AdaptConfig that must
+# Fields with identical names on both DecompositionConfig and AdaptConfig that must
 # agree for a calibration to be tracked correctly online; see
 # from_calibration()/reconcile_with_calib_config() below.
-_SHARED_CBSS_ADAPT_FIELDS = (
+_SHARED_CALIB_ADAPT_FIELDS = (
     "ext_fact",
     "ext_mode",
     "spike_det_exp",
@@ -1462,8 +1489,8 @@ class SharedCalibFields:
     """The subset of calibration config that online adaptation must agree with.
 
     Same 15 field names/types as AdaptConfig's own; see
-    _SHARED_CBSS_ADAPT_FIELDS. Lets reconcile_with_calib_config() work from
-    any calibration source, not just a CBSSConfig.
+    _SHARED_CALIB_ADAPT_FIELDS. Lets reconcile_with_calib_config() work from
+    any calibration source, not just a DecompositionConfig.
     """
 
     ext_fact: int
@@ -1483,20 +1510,22 @@ class SharedCalibFields:
     replace_bad_channels: bool
 
     @classmethod
-    def from_cbss_config(cls, cbss_config: CBSSConfig) -> "SharedCalibFields":
-        """Extract this wrapper's fields from a real CBSSConfig.
+    def from_config(cls, calib_config: DecompositionConfig) -> "SharedCalibFields":
+        """Extract this wrapper's fields from a calibration config.
 
         Args:
-            cbss_config (CBSSConfig): Calibration config to read from.
+            calib_config (DecompositionConfig): Calibration config to read from.
 
         Returns:
             SharedCalibFields: This calibration's shared-field values.
         """
-        return cls(**{field: getattr(cbss_config, field) for field in _SHARED_CBSS_ADAPT_FIELDS})
+        return cls(**{field: getattr(calib_config, field) for field in _SHARED_CALIB_ADAPT_FIELDS})
+
+    from_cbss_config = from_config  # deprecated name
 
 
 def _fields_differ(adapt_val: Any, cbss_val: Any) -> bool:
-    """Compare one shared field's adapt_config/cbss_config values, array-safe.
+    """Compare one shared field's adapt_config/calib_config values, array-safe.
 
     Plain != raises ValueError ("truth value of an array is ambiguous") when
     either side is an np.ndarray (ch_mask/ch_map); use np.array_equal for
@@ -1519,7 +1548,7 @@ def _fields_differ(adapt_val: Any, cbss_val: Any) -> bool:
 def reconcile_with_calib_config(
     adapt_config: AdaptConfig, shared: SharedCalibFields
 ) -> AdaptConfig:
-    """Copy adapt_config, overwriting any of _SHARED_CBSS_ADAPT_FIELDS that
+    """Copy adapt_config, overwriting any of _SHARED_CALIB_ADAPT_FIELDS that
     disagree with shared: the calibration's own values, treated as ground truth.
 
     Never mutates the caller's adapt_config in place. Warns once (not once per
@@ -1537,7 +1566,7 @@ def reconcile_with_calib_config(
     """
     adapt_config = copy(adapt_config)
     changed = []
-    for field in _SHARED_CBSS_ADAPT_FIELDS:
+    for field in _SHARED_CALIB_ADAPT_FIELDS:
         cbss_val, adapt_val = getattr(shared, field), getattr(adapt_config, field)
         if _fields_differ(adapt_val, cbss_val):
             changed.append((field, adapt_val, cbss_val))
@@ -1545,8 +1574,8 @@ def reconcile_with_calib_config(
     if changed:
         lines = "\n".join(f"  {f}: {old!r} -> {new!r}" for f, old, new in changed)
         warnings.warn(
-            f"adapt_config disagreed with cbss_config on {len(changed)} shared field(s); "
-            f"cbss_config is treated as ground truth and these were overwritten:\n{lines}\n"
+            f"adapt_config disagreed with calib_config on {len(changed)} shared field(s); "
+            f"calib_config is treated as ground truth and these were overwritten:\n{lines}\n"
             "Update how you construct AdaptConfig to match self.config to silence this.",
             UserWarning,
             stacklevel=3,
@@ -1557,6 +1586,27 @@ def reconcile_with_calib_config(
 # ---------------------------------------------------------------------------
 # Module-level utilities
 # ---------------------------------------------------------------------------
+
+
+def _renamed_kwarg(calib_config: Any, cbss_config: Any) -> Any:
+    """Resolve calib_config and its deprecated alias cbss_config.
+
+    Args:
+        calib_config (Any): The value passed as calib_config.
+        cbss_config (Any): The value passed as the deprecated cbss_config.
+
+    Returns:
+        Any: calib_config, or cbss_config (with a FutureWarning) when only it is set.
+
+    Raises:
+        TypeError: If both are set.
+    """
+    if cbss_config is None:
+        return calib_config
+    if calib_config is not None:
+        raise TypeError("Pass calib_config only; cbss_config is its deprecated alias.")
+    warnings.warn("cbss_config is deprecated; pass calib_config.", FutureWarning, stacklevel=3)
+    return cbss_config
 
 
 def _calib_bounds(calib_indices: Union[slice, np.ndarray], n_samples: int) -> Tuple[int, int]:

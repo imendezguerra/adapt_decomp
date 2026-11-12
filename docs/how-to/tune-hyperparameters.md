@@ -16,7 +16,7 @@ truth alike: here from the end of the 5 s calibration window, so the search scor
 of the recording as [adapting from the calibration end](adapt-from-calibration-end.md).
 `source_fifo_from_calib` starts each trial's source FIFO from the calibration's last sources.
 
-For pools too large to keep in memory, `load_pooled_cbss_disk` takes the same `datasets` list
+For pools too large to keep in memory, `load_pooled_calib_disk` takes the same `datasets` list
 and loads each recording per trial instead.
 
 ## One objective

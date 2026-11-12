@@ -46,5 +46,7 @@ dependencies:
       - mkdocstrings==1.0.6
       - mkdocstrings-python==2.0.9
       - mkdocs-jupyter==0.26.3
-      # The package itself, with its dev and docs extras (the pins above already satisfy them).
-      - "-e .[dev,docs,wandb]"
+      # SCD calibration (pyproject's scd extra), from PyPI only
+      - swarm-contrastive-decomposition==0.2.4
+      # The package itself, with its extras (the pins above already satisfy them).
+      - "-e .[dev,docs,wandb,scd]"

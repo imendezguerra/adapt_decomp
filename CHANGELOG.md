@@ -18,8 +18,8 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `Makefile` with common tasks.
 - `AdaptConfig.source_fifo_from_calib`: seed the source FIFO with the calibration's tail, for
   EMG that starts where calibration ends (e.g. `process_data(emg[b:])` after a calibration
-  window `[a, b)`). `Decomposition.seed_source_fifo()` seeds it from given sources.
-- Pooled data configs (`load_pooled_cbss_memory`, `load_pooled_cbss_disk`) take optional `start`
+  window `[a, b)`). `AdaptState.seed_source_fifo()` seeds it from given sources.
+- Pooled data configs (`load_pooled_calib_memory`, `load_pooled_calib_disk`) take optional `start`
   and `stop` per dataset: the samples every trial adapts and scores, EMG and ground truth alike,
   e.g. from the end of the calibration window. Ground truth is still matched to the calibration
   on the full recording first. `PooledDatasetDisk` gains the same two fields.
@@ -122,6 +122,31 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `CBSSConfig.duplicate_metric` (`"roa"`, `"f1"` or `"match"`), `duplicate_keep_by`
   (`"cov_isi"` or `"sil"`), `duplicate_tol_spike_ms` (0.5) and `duplicate_tol_train_ms` (40):
   the duplicate criterion and which unit of a group is kept.
+- SCD calibration (`SCD`, `SCDConfig`), with the new `scd` extra
+  (`pip install "adapt_decomp[scd]"`): the search of the
+  [swarm-contrastive-decomposition](https://github.com/AgneGris/swarm-contrastive-decomposition)
+  package runs on the shared preprocessing and whitening. Its filters are orthonormalised and
+  its sources reconstructed on the unpeeled whitened EMG, as the adaptation uses them; SCD's own
+  output is kept in the new `DecompositionResult` fields `sources_native`,
+  `spikes_dict_native` and `native_roa` (`select_unsupervised(native_roa_th=...)` filters on
+  it). `scd_preset` and `scd_kwargs` set its search options.
+- `DecompositionResult.contrast_exp`: each unit's contrast exponent e (G ∝ |u|^e), optimised
+  per unit by SCD. CBSS stores its fixed one on the same scale (3 for `"square"`, 4 for
+  `"cube"`, `contrast_exp` for `"smooth_abs"`; `cbss.ica.contrast_exponent()`), and None for
+  `"logcosh"`.
+- `Decomposition`, the calibration base class: shared preprocessing, extension, PCA,
+  whitening, duplicate removal, properties, selection and `apply()` around each method's unit
+  search. `DecompositionConfig` holds the shared fields; its YAML records the `method`, and
+  `DecompositionConfig.from_dict()`/`from_yaml()` and `Decomposition.from_config()` build the
+  method it names. `AdaptDecomp.calibrate_and_process` and the command line accept either
+  method's config.
+- `adaptation.ops.orthonormalize_rows_symmetric` (also `orthonormalize_rows(method="symmetric")`):
+  order-independent row orthonormalisation.
+- Deterministic seeded calibrations on CUDA: a seeded `decompose()`/`apply()` on a CUDA device
+  uses PyTorch's deterministic kernels (restoring the previous settings afterwards), and
+  `import adapt_decomp` sets `CUBLAS_WORKSPACE_CONFIG=:4096:8` unless it is already set, so the
+  run repeats on the same GPU and software. CPU runs are unchanged. Helpers:
+  `utils.system.deterministic_algorithms()` and `set_cublas_workspace()`.
 
 ### Changed
 
@@ -203,6 +228,23 @@ and this project follows [Semantic Versioning](https://semver.org/).
   agreeing with it at or above `roa_th` (was: above) dropped, then the next best, so any number
   of copies of one motor unit reduce to one (as in MUniverse). It used to remove one copy per
   pair. CBSS results change on purpose.
+- `CBSSResult` is renamed `DecompositionResult` (`CBSSResult` stays an alias, and files saved
+  as `CBSSResult` load); `whiten` and `pca_reduction` moved from `cbss` to `preprocessing`
+  (the old modules re-export them). CBSS results are unchanged.
+- **Breaking:** the online model `adaptation.Decomposition` is renamed `AdaptState`, and
+  `AdaptDecomp.decomp` is `AdaptDecomp.state`; `Decomposition` now names the calibration base
+  class. `adapt_decomp.adaptation.Decomposition` and `AdaptDecomp.decomp` still resolve, with a
+  `FutureWarning`; importing `Decomposition` from `adaptation.data_structures` fails.
+- `cbss_config` is renamed `calib_config`: in `AdaptDecomp.from_calibration`,
+  `calibrate_and_process`, `AdaptationResult` (saved under the new name; older files load),
+  the command line (`--calib_config`) and, without an alias, the `PooledDatasetMemory` field.
+  `SharedCalibFields.from_config` replaces `from_cbss_config`.
+- `load_pooled_cbss_memory` and `load_pooled_cbss_disk` are renamed `load_pooled_calib_memory`
+  and `load_pooled_calib_disk`, including as a pool YAML's `loader:`. They load CBSS and SCD
+  calibrations alike, so a pool can mix both.
+- `unsupervised_mask(native_roa_th=...)` keeps every unit of a result without `native_roa`
+  (e.g. CBSS) instead of raising, so a mixed pool can filter its SCD units.
+- CI's full test run installs the `scd` extra.
 
 ### Deprecated
 
@@ -214,6 +256,12 @@ and this project follows [Semantic Versioning](https://semver.org/).
   keeping their 1.0.0 signatures and return shapes; they emit a `FutureWarning`.
 - Reading pickled `CBSSResult`s and `AdaptationResult`s: `load()` still reads them, with a
   `DeprecationWarning`. Re-save one with `CBSSResult.load(path).save(new_path)`.
+- The `cbss_config` keyword (`from_calibration`, `calibrate_and_process`), the
+  `--cbss_config` option, `AdaptationResult.cbss_config`, `AdaptDecomp.decomp`,
+  `adaptation.Decomposition` and `SharedCalibFields.from_cbss_config`: aliases of their new
+  names; the Python ones emit a `FutureWarning`.
+- `load_pooled_cbss_memory` and `load_pooled_cbss_disk` (functions and `loader:` values):
+  aliases of `load_pooled_calib_*`, with a `FutureWarning`.
 
 ### Removed
 

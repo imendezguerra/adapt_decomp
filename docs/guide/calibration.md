@@ -11,6 +11,23 @@ cbss_config = CBSSConfig(fs=2048, ext_fact=10)
 calibration = CBSS(cbss_config).decompose(emg_window, timestamps)  # emg_window: (samples, channels)
 ```
 
+## Methods
+
+Two methods find the units, both on the same pipeline (`Decomposition`): preprocessing,
+extension, optional PCA and whitening are shared, and so are duplicate removal, unit
+properties, selection and `apply()`. Only the search for units differs.
+
+| Method | Config | Search | Needs |
+|---|---|---|---|
+| `CBSS` | `CBSSConfig` | Fixed-point ICA with deflation and a refinement loop | Nothing extra |
+| `SCD` | `SCDConfig` | Swarm-Contrastive Decomposition: swarm-optimised ICA with peel-off ([scd](https://github.com/AgneGris/swarm-contrastive-decomposition)) | The `scd` extra: `pip install "adapt_decomp[scd]"` |
+
+The config's type picks the method: `Decomposition.from_config(config)` builds `CBSS` or
+`SCD`, and `AdaptDecomp.calibrate_and_process(..., calib_config=config)` and the command line
+(`--calib_config`, whose YAML records the `method`) do the same. Both return a
+`DecompositionResult` (`CBSSResult` is its former name), so the adaptation takes either.
+The steps below describe CBSS; [SCD](#scd) lists what it does differently.
+
 ## How it works
 
 ```mermaid
@@ -23,7 +40,7 @@ flowchart LR
     E --> F["Remove duplicates\n(roa_th, duplicate_*)"]
     F --> G["Unit properties\n(SIL, CoV-ISI, PNR, DR, MUAPs)"]
     G --> H["Optional selection"]
-    H --> I["CBSSResult"]
+    H --> I["DecompositionResult"]
 ```
 
 1. **Preprocess:** the EMG is band-pass filtered and the powerline frequency notched out.
@@ -85,7 +102,8 @@ there, so not every source it returns is a reliable unit, and not every motor un
 Some sources mix two units, follow noise or fire irregularly. `decompose()` returns every unit
 that passed `sil_th`, `min_spikes` and duplicate removal, and the
 [adaptation](adaptation.md) then tracks every unit it is given: it never drops one. Select the
-reliable units after calibrating, with one of two filters, each returning a new `CBSSResult`:
+reliable units after calibrating, with one of two filters, each returning a new
+`DecompositionResult`:
 
 - **Unsupervised**, on real recordings: keep the units whose quality metrics pass thresholds
   (silhouette, pulse-to-noise ratio, CoV-ISI, discharge rate).
@@ -100,10 +118,11 @@ calibration = calibration.select_unsupervised(sil_th=0.9, cov_th=0.3, pnr_th=30)
 calibration = calibration.select_supervised(gt_spikes, roa_th=0.9, fs=2048)
 ```
 
-`select_unsupervised` takes any of `sil_th`, `pnr_th` (dB), `cov_th`, `dr_min` and `dr_max`
-(Hz). `select_supervised` records the ground-truth unit each kept unit tracks in
+`select_unsupervised` takes any of `sil_th`, `pnr_th` (dB), `cov_th`, `dr_min`, `dr_max`
+(Hz) and, for SCD, `native_roa_th` (CBSS units, which have no `native_roa`, pass it).
+`select_supervised` records the ground-truth unit each kept unit tracks in
 `gt_matched_indices`, and its rate of agreement in `roa`. To apply either inside
-`decompose()`, set `CBSSConfig.selection` to `"unsupervised"` or `"supervised"` and pass the
+`decompose()`, set the config's `selection` to `"unsupervised"` or `"supervised"` and pass the
 arguments in `selection_kwargs` (`AdaptDecomp.calibrate_and_process` uses it the same way).
 
 Reliable units matter most in a [hyperparameter search](optimisation.md#unit-selection): its
@@ -111,7 +130,7 @@ losses are averaged over the units, so noisy units can steer it towards a poor s
 
 ## What you get back
 
-A `CBSSResult`, with `n_mu` units:
+A `DecompositionResult`, with `n_mu` units:
 
 | Field | Shape | Holds |
 |---|---|---|
@@ -126,18 +145,21 @@ A `CBSSResult`, with `n_mu` units:
 | `whitening` | (dim, dim) | Whitening matrix, part of the model the adaptation starts from |
 | `gt_matched_indices` | (n_mu,) | The ground-truth unit each unit tracks, after `select_supervised` |
 | `roa` | (n_mu,) | Each unit's rate of agreement with that unit over the calibration window, after `select_supervised` |
-| `config` | | The `CBSSConfig` that produced it |
+| `sources_native`, `spikes_dict_native`, `native_roa` | (samples, n_mu), dict, (n_mu,) | SCD's own sources and spikes, and their agreement with `sources`/`spikes`; None for CBSS |
+| `contrast_exp` | (n_mu,) | Exponent e of each unit's contrast G ∝ \|u\|^e: optimised per unit by SCD, the config's for CBSS (3 for `"square"`, 4 for `"cube"`); None for `"logcosh"` |
+| `config` | | The config (`CBSSConfig`, `SCDConfig`) that produced it |
 
 Save it with `calibration.save(path)`, an HDF5 file with the config embedded, and reload it with
-`CBSSResult.load(path)`: building the adaptation needs nothing else. To share or log the config,
+`DecompositionResult.load(path)`: building the adaptation needs nothing else. To share or log the config,
 write it as YAML too (`calibration.config.to_yaml(path)`). The ground truth in
 `selection_kwargs` is data, so it stays out of both.
 
 ## Reusing a calibration
 
-- `CBSS(cbss_config).apply(new_emg, calibration, timestamps)` applies a calibration's model to
-  other EMG without searching again, for example to score it on another recording.
-- A calibration from another tool can be used by building a `CBSSResult` from its fields
+- `Decomposition.from_config(calibration.config).apply(new_emg, calibration, timestamps)`
+  applies a calibration's model to other EMG without searching again, for example to score it
+  on another recording.
+- A calibration from another tool can be used by building a `DecompositionResult` from its fields
   (`sources`, `spikes`, `sep_vectors`, `whitening`, `extension_mean`, the centroids, `sil`,
   `cov_isi`, `ext_fact`, and the calibration `emg` and `timestamps`), or by building the
   adaptation directly (see [Building the adaptation](overview.md#building-the-adaptation)).
@@ -148,7 +170,52 @@ With the same `random_seed`, EMG and config, `decompose()` gives the same units 
 the same number of threads. Another thread count, or a GPU, changes the order of floating-point
 sums, which can change which borderline units are kept. Calibrate on the CPU, with the threads
 pinned (see [Run on a cluster](../how-to/run-on-a-cluster.md#reproducibility)), when the
-calibration must be reproduced exactly.
+calibration must be reproduced exactly. The same holds for SCD.
+
+On a CUDA GPU, a seeded `decompose()` or `apply()` uses PyTorch's deterministic kernels, and
+`import adapt_decomp` sets `CUBLAS_WORKSPACE_CONFIG` (unless you set it) for deterministic
+matrix products, so the run repeats on the same GPU and software. It is somewhat slower, still
+differs from a CPU run and from other GPUs, and an operation with no deterministic kernel warns.
+Import `adapt_decomp` before running any CUDA code, or set `CUBLAS_WORKSPACE_CONFIG=:4096:8`
+yourself, since PyTorch reads it on its first CUDA matrix product.
+
+## SCD
+
+`SCD` runs the search of the [scd](https://github.com/AgneGris/swarm-contrastive-decomposition)
+package unchanged on the whitened EMG of the shared pipeline: its own filtering, extension and
+whitening are not used, so the adaptation sees exactly the preprocessing the calibration did.
+
+```python
+--8<-- "calibrate_scd.py:calibrate"
+```
+
+What differs from CBSS:
+
+- **Search options** are scd's own: start from one of its parameter sets with `scd_preset`
+  (`"default"`, `"surface"` or `"intramuscular"`) and override any `scd.Config` search option
+  in `scd_kwargs` (`max_iterations`, `acceptance_silhouette`, `peel_off`, `swarm_*`, ...).
+  The options the shared config sets (sampling frequency, filters, extension, whitening,
+  bad channels, device, verbosity) are rejected there. `sil_th` and the ICA fields of
+  `CBSSConfig` do not exist: SCD accepts units on `acceptance_silhouette`.
+- **Orthonormal separation vectors.** SCD finds units one at a time and peels each off the
+  data, so its filters are not orthogonal. The adaptation orthonormalises the separation
+  vectors on every update, so SCD's filters are orthonormalised once at calibration, with the
+  order-independent symmetric transform: the first adaptation batch then starts from the
+  calibrated units instead of rotating them.
+- **Reconstructed sources.** SCD's own sources come from the peeled-off residual, which does
+  not exist online. `sources`, `spikes`, the centroids and `sil` are therefore recomputed from
+  the orthonormal vectors on the full whitened EMG, as the adaptation computes them. SCD's own
+  output is kept in `sources_native` and `spikes_dict_native`, and `native_roa` gives each
+  unit's agreement between the two. A low `native_roa` flags a unit that relied on the
+  peel-off: drop such units with `select_unsupervised(native_roa_th=0.9)`.
+- **Contrast exponents.** SCD's swarm optimises the contrast function's exponent per unit;
+  `contrast_exp` keeps each unit's best one. CBSS stores its fixed exponent there on the same
+  scale, so the two are comparable.
+- **Fixed setting:** `spike_det_exp` must be 2 (SCD detects spikes on squared sources). PCA
+  (`n_components`) runs in the shared pipeline, before SCD.
+- **Cost:** SCD searches far longer than CBSS. The adaptation's cost grows with the whitened
+  dimension (channels × `ext_fact`), so set `ext_fact` explicitly rather than following SCD's
+  own rule of about 1000 extended channels.
 
 ## Recipes
 

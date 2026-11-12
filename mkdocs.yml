@@ -131,7 +131,7 @@ nav:
       - Running the benchmark: benchmarks/fdsi/running.md
   - API reference:
       - reference/index.md
-      - Calibration (cbss): reference/cbss.md
+      - Calibration: reference/cbss.md
       - Adaptation: reference/adaptation.md
       - Optimisation: reference/optimisation.md
       - Preprocessing: reference/preprocessing.md

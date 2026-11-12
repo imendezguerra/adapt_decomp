@@ -57,20 +57,20 @@ The [API reference](../reference/optimisation.md) describes every argument.
 ## The pool
 
 The pool is a dict from a recording's name to its data: the EMG, its calibration and the
-calibration's config, plus its ground truth when there is one. `load_pooled_cbss_memory`
+calibration's config, plus its ground truth when there is one. `load_pooled_calib_memory`
 builds it from a list of files:
 
 ```python
-from adapt_decomp.utils import load_pooled_cbss_memory
+from adapt_decomp.utils import load_pooled_calib_memory
 
-pool = load_pooled_cbss_memory(
+pool = load_pooled_calib_memory(
     {
         "root": ".",
         "datasets": [
             {
                 "name": "recording-1",
                 "path_emg": "data/.../recording-1_emg.npz",
-                "path_calib": "outputs/recording-1_cbss.h5",  # CBSSResult.save()
+                "path_calib": "outputs/recording-1_calib.h5",  # DecompositionResult.save()
                 "path_gt": "data/.../recording-1_spikes.npz",  # optional
                 "start": 10240,  # optional: adapt and score from this sample, e.g. the calibration's end
             },
@@ -88,8 +88,12 @@ start at the recording's first sample, and only the matched units are kept; see
 [adapting from the calibration end](../how-to/adapt-from-calibration-end.md).
 
 A single recording is a one-entry pool. A pool too large for memory can use
-`load_pooled_cbss_disk` instead, with the same list: each recording is then loaded for each
+`load_pooled_calib_disk` instead, with the same list: each recording is then loaded for each
 trial and released after it.
+
+Each recording carries its own calibration config, so a pool can mix CBSS and SCD
+calibrations. `unit_selection_kwargs={"native_roa_th": 0.9}` then filters the SCD units and
+keeps every CBSS unit, which has no `native_roa`.
 
 ## What is searched
 

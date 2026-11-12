@@ -8,7 +8,7 @@ from typing import Dict, Literal, Optional, Tuple
 import numpy as np
 from loguru import logger
 
-from adapt_decomp.cbss.data_structure import CBSSResult
+from adapt_decomp.decomposition.result import DecompositionResult
 from adapt_decomp.utils.loaders import PooledDataset, PooledDatasetMemory
 
 UnitSelection = Literal["unsupervised", "supervised", None]
@@ -49,26 +49,26 @@ def has_gt(dataset: PooledDataset) -> bool:
 
 
 def select_units(
-    calibration: CBSSResult,
+    calibration: DecompositionResult,
     gt_paired_bin: Optional[np.ndarray],
     unit_selection: UnitSelection,
     unit_selection_kwargs: dict,
-) -> Optional[Tuple[CBSSResult, Optional[np.ndarray]]]:
+) -> Optional[Tuple[DecompositionResult, Optional[np.ndarray]]]:
     """Drop the calibration units the search should not adapt or score.
 
-    Only "unsupervised" subsets here (CBSSResult.unsupervised_mask, with
+    Only "unsupervised" subsets here (DecompositionResult.unsupervised_mask, with
     gt_paired_bin's columns subset alike so RoA stays paired); "supervised"
     pools are already narrowed to GT-matched units by their loaders.
 
     Args:
-        calibration (CBSSResult): A dataset's calibration.
+        calibration (DecompositionResult): A dataset's calibration.
         gt_paired_bin (Optional[np.ndarray]): Its paired ground truth, with
             shape (samples, M), or None.
         unit_selection (UnitSelection): "unsupervised", "supervised" or None.
         unit_selection_kwargs (dict): Thresholds for unsupervised_mask.
 
     Returns:
-        Optional[Tuple[CBSSResult, Optional[np.ndarray]]]: The (possibly
+        Optional[Tuple[DecompositionResult, Optional[np.ndarray]]]: The (possibly
         subset) calibration and gt_paired_bin, or None if no unit is kept.
     """
     if unit_selection != "unsupervised":

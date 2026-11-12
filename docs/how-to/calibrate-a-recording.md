@@ -33,9 +33,22 @@ With ground truth (simulations), keep the units that match a simulated motor uni
 --8<-- "workflow.py:select-supervised"
 ```
 
-Both return a new `CBSSResult` and leave the original as it is. To have `decompose()` apply
+Both return a new `DecompositionResult` and leave the original as it is. To have `decompose()` apply
 either filter itself, set `CBSSConfig.selection` (see
 [Keeping the reliable units](../guide/calibration.md#keeping-the-reliable-units)).
+
+## Use SCD instead
+
+With the `scd` extra installed (`pip install "adapt_decomp[scd]"`), calibrate with
+Swarm-Contrastive Decomposition by swapping the config; selecting, saving and adapting stay the
+same:
+
+```python
+--8<-- "calibrate_scd.py:calibrate"
+```
+
+See [SCD](../guide/calibration.md#scd) for what it does differently, including
+`native_roa`.
 
 ## Save it
 

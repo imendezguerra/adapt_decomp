@@ -52,10 +52,10 @@ calibration.config.to_yaml(OUT / "calibration_config.yaml")  # optional: to shar
 # --8<-- [end:save]
 
 # --8<-- [start:adapt]
-from adapt_decomp import AdaptDecomp, CBSSResult
+from adapt_decomp import AdaptDecomp, DecompositionResult
 from adapt_decomp.adaptation import AdaptConfig
 
-calibration = CBSSResult.load(OUT / "calibration.h5")
+calibration = DecompositionResult.load(OUT / "calibration.h5")
 adapt_config = AdaptConfig.from_preset("muniverse")  # tuned on the FDSI benchmark
 adapt_config.device = "cpu"
 adapt_config.source_fifo_from_calib = True  # the EMG below starts where calibration ends
@@ -81,7 +81,7 @@ adapted_full, calibration_full = AdaptDecomp.calibrate_and_process(
     emg,
     timestamps=np.arange(emg.shape[0]) / FS,
     calib_indices=slice(0, CAL_END),
-    cbss_config=one_call_cbss_config,
+    calib_config=one_call_cbss_config,
     adapt_config=AdaptConfig.from_preset("muniverse"),
 )
 print(adapted_full.spikes.shape)  # the whole recording: CBSS's output, then the adapted one

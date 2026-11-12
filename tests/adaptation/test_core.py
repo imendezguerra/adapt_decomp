@@ -216,11 +216,11 @@ def test_multibatch_stability_and_rare_safety_clip():
     )
     outputs = adapter.process_data(emg_online, preprocess=False)
 
-    assert torch.isfinite(adapter.decomp.whitening).all()
-    assert torch.isfinite(adapter.decomp.sep_vectors).all()
-    gram = adapter.decomp.sep_vectors @ adapter.decomp.sep_vectors.T
+    assert torch.isfinite(adapter.state.whitening).all()
+    assert torch.isfinite(adapter.state.sep_vectors).all()
+    gram = adapter.state.sep_vectors @ adapter.state.sep_vectors.T
     assert_close(gram, torch.eye(M), atol=1e-3, rtol=0)
-    assert torch.isfinite(torch.linalg.inv(adapter.decomp.whitening)).all()
+    assert torch.isfinite(torch.linalg.inv(adapter.state.whitening)).all()
 
     diagnostics = outputs["diagnostics"]
 
@@ -292,16 +292,16 @@ def test_compute_losses_guards_against_nan_and_divergence(make_decomposition, ma
 
 
 def test_shared_calib_fields_from_cbss_config_round_trips():
-    """from_cbss_config() reads every _SHARED_CBSS_ADAPT_FIELDS entry, and
+    """from_config() reads every _SHARED_CALIB_ADAPT_FIELDS entry, and
     nothing else, off a real CBSSConfig."""
-    from adapt_decomp.adaptation.core import _SHARED_CBSS_ADAPT_FIELDS, SharedCalibFields
+    from adapt_decomp.adaptation.core import _SHARED_CALIB_ADAPT_FIELDS, SharedCalibFields
     from adapt_decomp.cbss.config import CBSSConfig
 
-    cbss_config = CBSSConfig(ext_fact=3, spike_det_exp=1.5, ext_mode="toeplitz")
-    shared = SharedCalibFields.from_cbss_config(cbss_config)
+    calib_config = CBSSConfig(ext_fact=3, spike_det_exp=1.5, ext_mode="toeplitz")
+    shared = SharedCalibFields.from_config(calib_config)
 
-    for field in _SHARED_CBSS_ADAPT_FIELDS:
-        assert getattr(shared, field) == getattr(cbss_config, field)
+    for field in _SHARED_CALIB_ADAPT_FIELDS:
+        assert getattr(shared, field) == getattr(calib_config, field)
 
 
 def test_reconcile_with_calib_config_overwrites_disagreeing_fields_and_warns():
@@ -311,7 +311,7 @@ def test_reconcile_with_calib_config_overwrites_disagreeing_fields_and_warns():
     from adapt_decomp.adaptation.core import SharedCalibFields, reconcile_with_calib_config
     from adapt_decomp.cbss.config import CBSSConfig
 
-    shared = SharedCalibFields.from_cbss_config(CBSSConfig(ext_fact=2, spike_det_exp=1.5))
+    shared = SharedCalibFields.from_config(CBSSConfig(ext_fact=2, spike_det_exp=1.5))
     adapt_config = AdaptConfig(ext_fact=2, spike_det_exp=9.0, device="cpu")
 
     with pytest.warns(UserWarning, match="spike_det_exp"):
@@ -328,8 +328,8 @@ def test_reconcile_with_calib_config_agreeing_fields_stay_silent():
     from adapt_decomp.adaptation.core import SharedCalibFields, reconcile_with_calib_config
     from adapt_decomp.cbss.config import CBSSConfig
 
-    cbss_config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
-    shared = SharedCalibFields.from_cbss_config(cbss_config)
+    calib_config = CBSSConfig(ext_fact=2, spike_det_exp=1.5)
+    shared = SharedCalibFields.from_config(calib_config)
     adapt_config = AdaptConfig(ext_fact=2, spike_det_exp=1.5, device="cpu")
 
     with warnings.catch_warnings(record=True) as caught:
@@ -420,7 +420,7 @@ def test_init_ipts_calib_deprecated_alias_warns():
     sources_calib = kwargs.pop("sources_calib")
     with pytest.warns(FutureWarning, match="ipts_calib"):
         adapter = AdaptDecomp(ipts_calib=sources_calib, **kwargs)
-    assert_close(adapter.decomp.sources_calib, sources_calib)
+    assert_close(adapter.state.sources_calib, sources_calib)
 
 
 def test_run_without_emg_raises_clear_error():
@@ -627,7 +627,7 @@ def test_process_batch_uniform_output_eager_mode_first_batch_zero_padded(
     adapter, cfg = _prep_batch_process_adapter(
         make_decomposition, make_adapter, data_preprocessed=True
     )
-    D = adapter.decomp.n
+    D = adapter.state.n
     N = 12
 
     spikes, sources = adapter.process_batch(torch.randn(N, D), batch_idx=0)
@@ -711,9 +711,9 @@ def test_process_data_streaming_end_to_end_matches_eager_shape():
 
     # Streaming mode's per-batch state (filter zi, EMA mean, extension FIFO)
     # must have been seeded by the run.
-    assert streaming.decomp.zi is not None
-    assert streaming.decomp.ema_mean_online is not None
-    assert streaming.decomp.ext_fifo is not None
+    assert streaming.state.zi is not None
+    assert streaming.state.ema_mean_online is not None
+    assert streaming.state.ext_fifo is not None
 
     # adapter.spikes/sources (read directly off the instance) must match
     # outputs.spikes/sources exactly, since optimize/scoring.py's _run_one_dataset relies on this.
@@ -776,13 +776,13 @@ def test_source_fifo_from_calib_seeds_the_calibration_tail():
     from adapt_decomp.adaptation import AdaptDecomp
 
     kwargs, _ = _make_construction_kwargs()
-    assert AdaptDecomp(**kwargs).decomp.source_fifo is None
+    assert AdaptDecomp(**kwargs).state.source_fifo is None
 
     cfg = copy(kwargs["adapt_config"])
     cfg.source_fifo_from_calib = True
     adapter = AdaptDecomp(**{**kwargs, "adapt_config": cfg})
     n = cfg.source_fifo_batches * cfg.batch_size
-    assert_close(adapter.decomp.source_fifo, kwargs["sources_calib"][-n:])
+    assert_close(adapter.state.source_fifo, kwargs["sources_calib"][-n:])
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +825,7 @@ def test_calibrate_and_process_adapts_from_the_calibration_end_by_default(
                 spikes=np.zeros((len(emg), n_units), dtype=np.int32),
             )
 
-    monkeypatch.setattr(core, "CBSS", FakeCBSS)
+    monkeypatch.setattr(core.Decomposition, "from_config", staticmethod(FakeCBSS))
     rng = np.random.default_rng(5)
 
     def run(emg, calib_indices, **extra):
@@ -833,7 +833,7 @@ def test_calibrate_and_process_adapts_from_the_calibration_end_by_default(
             emg,
             timestamps=np.arange(len(emg)) / cfg.fs,
             calib_indices=calib_indices,
-            cbss_config=kwargs["cbss_config"],
+            calib_config=kwargs["calib_config"],
             adapt_config=copy(cfg),
             preprocess=False,
             **extra,
@@ -841,8 +841,8 @@ def test_calibrate_and_process_adapts_from_the_calibration_end_by_default(
         return out
 
     def adapted_from(emg, b):
-        model = AdaptDecomp.from_calibration(calibration, kwargs["cbss_config"], copy(cfg))
-        model.decomp.seed_source_fifo(model.decomp.sources_calib)
+        model = AdaptDecomp.from_calibration(calibration, kwargs["calib_config"], copy(cfg))
+        model.state.seed_source_fifo(model.state.sources_calib)
         return model.process_data(emg[b:], preprocess=False)
 
     # Calibration window at the first sample: the calibration's own output over it
@@ -869,7 +869,7 @@ def test_calibrate_and_process_adapts_from_the_calibration_end_by_default(
 
     # From the first sample: process_data over the entire recording
     out_start = run(emg, slice(a, b), adapt_from="emg_start")
-    model = AdaptDecomp.from_calibration(calibration, kwargs["cbss_config"], copy(cfg))
+    model = AdaptDecomp.from_calibration(calibration, kwargs["calib_config"], copy(cfg))
     assert_close(out_start.sources, model.process_data(emg, preprocess=False).sources)
 
     with pytest.raises(ValueError, match="contiguous"):
